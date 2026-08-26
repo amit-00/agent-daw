@@ -460,7 +460,7 @@ input:focus-visible {
   display: grid;
   margin-top: auto;
   padding: 0 9px 10px;
-  grid-template-columns: 21px 21px 1fr;
+  grid-template-columns: repeat(2, 21px);
   gap: 4px;
   align-items: center;
 }
@@ -490,20 +490,6 @@ input:focus-visible {
   border-color: rgba(247, 197, 85, 0.45);
   color: #ffe8a9;
   background: rgba(247, 197, 85, 0.16);
-}
-
-.track-level {
-  height: 3px;
-  overflow: hidden;
-  border-radius: 99px;
-  background: #242429;
-}
-
-.track-level span {
-  display: block;
-  height: 100%;
-  border-radius: inherit;
-  background: #77777e;
 }
 
 .lane {

@@ -168,9 +168,6 @@ function TrackControls({
       >
         S
       </button>
-      <span className="track-level" aria-hidden="true">
-        <span style={{ width: `${track.volume}%` }} />
-      </span>
     </div>
   );
 }
