@@ -59,6 +59,14 @@ const projectWithBasicDrums = (): Project => ({
   arrangement: [{ id: id(12), patternId: id(11), startBar: 0, repeatCount: 1 }],
 });
 
+const projectWithAdjacentOneBarClips = (): Project => ({
+  ...projectWithBasicDrums(),
+  arrangement: [
+    { id: id(12), patternId: id(11), startBar: 0, repeatCount: 1 },
+    { id: id(51), patternId: id(11), startBar: 1, repeatCount: 1 },
+  ],
+});
+
 const projectWithBassAndDrums = (): Project => ({
   ...projectWithBasicDrums(),
   tracks: [
@@ -437,6 +445,122 @@ test("pattern.delete removes referencing clips but preserves the track", () => {
   assert.equal(project.patterns.length, 1);
 });
 
+test("arrangement.place allows adjacent clips and overlaps on different tracks", () => {
+  const adjacent = reduceOperation(
+    projectWithBasicDrums(),
+    {
+      type: "arrangement.place",
+      clip: { id: id(50), patternId: id(11), startBar: 1, repeatCount: 1 },
+    },
+    catalog,
+  );
+  const overlappingTracks = reduceOperation(
+    { ...projectWithBassAndDrums(), arrangement: projectWithBasicDrums().arrangement },
+    {
+      type: "arrangement.place",
+      clip: { id: id(52), patternId: id(21), startBar: 0, repeatCount: 1 },
+    },
+    catalog,
+  );
+
+  assert.deepEqual(adjacent.project.arrangement.map(({ id: clipId }) => clipId), [id(12), id(50)]);
+  assert.deepEqual(adjacent.changes.created.arrangementClipIds, [id(50)]);
+  assert.deepEqual(overlappingTracks.project.arrangement.map(({ id: clipId }) => clipId), [id(12), id(52)]);
+});
+
+test("arrangement.update moves, repeats, and changes its pattern", () => {
+  const project: Project = {
+    ...projectWithBasicDrums(),
+    patterns: [
+      ...projectWithBasicDrums().patterns,
+      { id: id(30), trackId: id(10), name: "Fill", kind: "drum", lengthBars: 2, events: [] },
+    ],
+    arrangement: [
+      { id: id(12), patternId: id(11), startBar: 0, repeatCount: 1 },
+      { id: id(50), patternId: id(11), startBar: 2, repeatCount: 1 },
+    ],
+  };
+
+  const result = reduceOperation(
+    project,
+    {
+      type: "arrangement.update",
+      clipId: id(50),
+      changes: { patternId: id(30), startBar: 1, repeatCount: 2 },
+    },
+    catalog,
+  );
+
+  assert.deepEqual(result.project.arrangement[1], {
+    id: id(50), patternId: id(30), startBar: 1, repeatCount: 2,
+  });
+  assert.deepEqual(result.changes.updated.arrangementClipIds, [id(50)]);
+  assert.deepEqual(project.arrangement[1], { id: id(50), patternId: id(11), startBar: 2, repeatCount: 1 });
+});
+
+test("arrangement.delete removes only the clip", () => {
+  const project = projectWithBasicDrums();
+  const result = reduceOperation(project, { type: "arrangement.delete", clipId: id(12) }, catalog);
+
+  assert.deepEqual(result.project.arrangement, []);
+  assert.equal(result.project.patterns.length, 1);
+  assert.equal(result.project.tracks.length, 1);
+  assert.deepEqual(result.changes.deleted.arrangementClipIds, [id(12)]);
+});
+
+test("arrangement rejects a missing pattern", () => {
+  assert.throws(
+    () => reduceOperation(
+      projectWithBasicDrums(),
+      {
+        type: "arrangement.place",
+        clip: { id: id(50), patternId: id(99), startBar: 1, repeatCount: 1 },
+      },
+      catalog,
+    ),
+    NotFoundError,
+  );
+});
+
+test("arrangement rejects overlap on the same track", () => {
+  assert.throws(
+    () => reduceOperation(
+      projectWithBasicDrums(),
+      {
+        type: "arrangement.place",
+        clip: { id: id(50), patternId: id(11), startBar: 0, repeatCount: 1 },
+      },
+      catalog,
+    ),
+    ConflictError,
+  );
+});
+
+test("arrangement rejects clips extending past bar 256", () => {
+  assert.throws(
+    () => reduceOperation(
+      projectWithBasicDrums(),
+      {
+        type: "arrangement.place",
+        clip: { id: id(50), patternId: id(11), startBar: 256, repeatCount: 1 },
+      },
+      catalog,
+    ),
+    InvalidInputError,
+  );
+});
+
+test("pattern length update rejects newly overlapping arrangement clips", () => {
+  assert.throws(
+    () => reduceOperation(
+      projectWithAdjacentOneBarClips(),
+      { type: "pattern.update", patternId: id(11), changes: { lengthBars: 2 } },
+      catalog,
+    ),
+    (error: unknown) => error instanceof ConflictError && error.info.relatedIds?.length === 2,
+  );
+});
+
 test("drum-hits add, update, and delete change only the target pattern", () => {
   const added = reduceOperation(
     projectWithBasicDrums(),
@@ -690,6 +814,15 @@ test("runtime update payloads cannot alter immutable fields", () => {
     } as unknown as Parameters<typeof reduceOperation>[1],
     catalog,
   );
+  const arrangementResult = reduceOperation(
+    project,
+    {
+      type: "arrangement.update",
+      clipId: id(12),
+      changes: { startBar: 1, id: id(94) },
+    } as unknown as Parameters<typeof reduceOperation>[1],
+    catalog,
+  );
 
   assert.deepEqual(
     { id: projectResult.project.id, schemaVersion: projectResult.project.schemaVersion, tracks: projectResult.project.tracks.length },
@@ -705,6 +838,9 @@ test("runtime update payloads cannot alter immutable fields", () => {
   );
   assert.deepEqual(drumResult.project.patterns[0]?.events[0], { id: id(13), soundId: "snare", startStep: 0 });
   assert.deepEqual(synthResult.project.patterns[0]?.events[0], { id: id(42), midiNote: 64, startStep: 0, lengthSteps: 4 });
+  assert.deepEqual(arrangementResult.project.arrangement[0], {
+    id: id(12), patternId: id(11), startBar: 1, repeatCount: 1,
+  });
 });
 
 test("mergeChangeSummaries deduplicates IDs in first-seen order", () => {

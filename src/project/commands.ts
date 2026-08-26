@@ -1,4 +1,4 @@
-import type { DrumHit, Pattern, PatternLengthBars, Project, SynthNote, Track } from "./model.ts";
+import type { ArrangementClip, DrumHit, Pattern, PatternLengthBars, Project, SynthNote, Track } from "./model.ts";
 
 export interface EntityIds {
   readonly projectIds: readonly string[];
@@ -45,6 +45,17 @@ export type Operation =
       readonly changes: { readonly name?: string; readonly lengthBars?: PatternLengthBars };
     }
   | { readonly type: "pattern.delete"; readonly patternId: string }
+  | { readonly type: "arrangement.place"; readonly clip: ArrangementClip }
+  | {
+      readonly type: "arrangement.update";
+      readonly clipId: string;
+      readonly changes: {
+        readonly patternId?: string;
+        readonly startBar?: number;
+        readonly repeatCount?: number;
+      };
+    }
+  | { readonly type: "arrangement.delete"; readonly clipId: string }
   | { readonly type: "drum-hits.add"; readonly patternId: string; readonly hits: readonly DrumHit[] }
   | {
       readonly type: "drum-hits.update";

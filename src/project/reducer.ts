@@ -2,7 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 
 import { emptyChangeSummary, type ChangeSummary, type Operation, type Reduction } from "./commands.ts";
 import { ConflictError, InvalidInputError, NotFoundError } from "./errors.ts";
-import type { DrumHit, DrumPattern, Pattern, Project, SoundCatalog, SynthNote, SynthPattern, Track } from "./model.ts";
+import type { ArrangementClip, DrumHit, DrumPattern, Pattern, Project, SoundCatalog, SynthNote, SynthPattern, Track } from "./model.ts";
 import { validateProject } from "./model.ts";
 
 type Diff = { readonly created: readonly string[]; readonly updated: readonly string[]; readonly deleted: readonly string[] };
@@ -33,6 +33,14 @@ const requirePattern = (project: Project, patternId: string): Pattern => {
     throw new NotFoundError({ path: "operation.patternId", message: "must reference an existing pattern" });
   }
   return pattern;
+};
+
+const requireArrangementClip = (project: Project, clipId: string): ArrangementClip => {
+  const clip = project.arrangement.find((candidate) => candidate.id === clipId);
+  if (clip === undefined) {
+    throw new NotFoundError({ path: "operation.clipId", message: "must reference an existing arrangement clip" });
+  }
+  return clip;
 };
 
 const requireDrumPattern = (project: Project, patternId: string): DrumPattern => {
@@ -279,6 +287,42 @@ export function reduceOperation(project: Project, operation: Operation, catalog:
           arrangementClipIds: deletedClips.map((clip) => clip.id),
         } }),
       };
+    }
+    case "arrangement.place": {
+      const clip: ArrangementClip = {
+        id: operation.clip.id,
+        patternId: operation.clip.patternId,
+        startBar: operation.clip.startBar,
+        repeatCount: operation.clip.repeatCount,
+      };
+      const candidate: Project = { ...project, arrangement: [...project.arrangement, clip] };
+      validateProject(candidate, catalog);
+      return { project: candidate, changes: withChanges({ created: { arrangementClipIds: [clip.id] } }) };
+    }
+    case "arrangement.update": {
+      const clip = requireArrangementClip(project, operation.clipId);
+      const updatedClip: ArrangementClip = {
+        ...clip,
+        ...(operation.changes.patternId === undefined ? {} : { patternId: operation.changes.patternId }),
+        ...(operation.changes.startBar === undefined ? {} : { startBar: operation.changes.startBar }),
+        ...(operation.changes.repeatCount === undefined ? {} : { repeatCount: operation.changes.repeatCount }),
+      };
+      if (isDeepStrictEqual(clip, updatedClip)) return { project, changes: emptyChangeSummary() };
+      const candidate: Project = {
+        ...project,
+        arrangement: project.arrangement.map((candidateClip) => candidateClip.id === clip.id ? updatedClip : candidateClip),
+      };
+      validateProject(candidate, catalog);
+      return { project: candidate, changes: withChanges({ updated: { arrangementClipIds: [clip.id] } }) };
+    }
+    case "arrangement.delete": {
+      const clip = requireArrangementClip(project, operation.clipId);
+      const candidate: Project = {
+        ...project,
+        arrangement: project.arrangement.filter((candidateClip) => candidateClip.id !== clip.id),
+      };
+      validateProject(candidate, catalog);
+      return { project: candidate, changes: withChanges({ deleted: { arrangementClipIds: [clip.id] } }) };
     }
     case "drum-hits.add": {
       const pattern = requireDrumPattern(project, operation.patternId);
