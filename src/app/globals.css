@@ -515,7 +515,7 @@ input:focus-visible {
   background-color: #000;
   background-image:
     linear-gradient(90deg, rgba(255, 255, 255, 0.12) 2px, transparent 2px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+    linear-gradient(90deg, rgba(255, 255, 255, 0.055) 1px, transparent 1px);
   background-size:
     calc((100% - 154px) / 2) 100%,
     calc((100% - 154px) / 16) 100%;
@@ -692,7 +692,7 @@ input:focus-visible {
   border-radius: 3px;
   color: rgba(20, 12, 24, 0.72);
   text-align: left;
-  background: color-mix(in srgb, color-mix(in srgb, var(--clip-color) 88%, white) 70%, transparent);
+  background: color-mix(in srgb, var(--clip-color) 70%, transparent);
   cursor: pointer;
   transition: filter 140ms ease, transform 140ms ease;
 }
