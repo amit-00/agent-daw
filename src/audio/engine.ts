@@ -557,6 +557,10 @@ export function createAudioEngine(platform: AudioEnginePlatform): AudioEngine {
           if (disposal !== undefined) {
             return closedResult();
           }
+          if (runtimeContext.state === "closed") {
+            closeEngine(false);
+            return closedResult();
+          }
           if (!isAutoplayPolicyError(error)) {
             throw error;
           }

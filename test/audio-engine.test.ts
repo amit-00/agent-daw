@@ -146,6 +146,49 @@ test("prepare only converts autoplay-policy rejection into blocked state", async
   });
 });
 
+test("prepare permanently closes when resume rejects after external closure", async () => {
+  const context = new FakeAudioContext();
+  const timers = new FakeTimers();
+  const engine = createAudioEngine({
+    createContext: () => context.asAudioContext(),
+    loadArrayBuffer: async () => new ArrayBuffer(8),
+    setInterval: (callback, milliseconds) => timers.setInterval(callback, milliseconds),
+    clearInterval: (handle) => timers.clearInterval(handle),
+  });
+  engine.replaceProject(audioProject());
+  assert.equal((await engine.prepare()).ok, true);
+  assert.equal(engine.getSnapshot().trackBusCount, 2);
+
+  const resumeError = new DOMException("context already closed", "InvalidStateError");
+  let closeCalls = 0;
+  context.state = "closed";
+  context.resume = async (): Promise<void> => {
+    throw resumeError;
+  };
+  context.close = async (): Promise<void> => {
+    closeCalls += 1;
+    throw resumeError;
+  };
+  const closedFailure = {
+    ok: false,
+    code: "closed",
+    message: "Audio engine is closed; create a new engine",
+  } as const;
+
+  assert.deepEqual(await engine.prepare(), closedFailure);
+  assert.equal(engine.getSnapshot().status, "closed");
+  assert.equal(engine.getSnapshot().trackBusCount, 0);
+  assert.equal(engine.getSnapshot().pendingSources, 0);
+  assert.equal(timers.callbacks.size, 0);
+  assert.deepEqual(engine.pause(), closedFailure);
+  assert.deepEqual(engine.seek(1), closedFailure);
+  assert.deepEqual(engine.stop(), closedFailure);
+  assert.deepEqual(await engine.play(0), closedFailure);
+  await engine.dispose();
+  await engine.dispose();
+  assert.equal(closeCalls, 0);
+});
+
 test("disposing during resume keeps pending and later preparation closed", async () => {
   const context = new FakeAudioContext();
   let resolveResume = (): void => undefined;
