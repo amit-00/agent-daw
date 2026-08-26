@@ -496,8 +496,19 @@ input:focus-visible {
 
 .canvas-wrap {
   position: relative;
+  display: grid;
   min-height: 0;
   flex: 1;
+  overflow: hidden;
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.canvas-wrap.editor-open {
+  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.arrangement-pane {
+  min-height: 0;
   overflow: auto;
   scrollbar-color: #29292e transparent;
   scrollbar-width: thin;
@@ -804,16 +815,16 @@ input:focus-visible {
 }
 
 .editor-drawer {
-  position: absolute;
-  z-index: 5;
-  bottom: 62px;
-  right: 16px;
-  left: 170px;
-  height: 276px;
+  position: relative;
+  z-index: 3;
+  min-height: 0;
   overflow: hidden;
-  border-color: transparent;
-  border-radius: 12px;
+  border: 0;
+  border-top: 1px solid var(--line-strong);
+  border-radius: 0;
+  background: var(--panel);
   box-shadow: none;
+  backdrop-filter: none;
 }
 
 .editor-header {
@@ -1268,12 +1279,6 @@ input:focus-visible {
   margin-top: 5px;
   color: #58585f;
   font-size: 8px;
-}
-
-@media (max-height: 760px) {
-  .editor-drawer {
-    height: 246px;
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {

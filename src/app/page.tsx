@@ -343,8 +343,9 @@ export default function StudioPage(): ReactElement {
           </div>
         </header>
 
-        <div className="canvas-wrap">
-          <section className="arrangement" aria-label="Song arrangement">
+        <div className={editorOpen ? "canvas-wrap editor-open" : "canvas-wrap"}>
+          <div className="arrangement-pane">
+            <section className="arrangement" aria-label="Song arrangement">
             <div className="arrangement-corner">
               <span>TRACKS</span>
               <button type="button" aria-label="Add track">＋</button>
@@ -406,7 +407,8 @@ export default function StudioPage(): ReactElement {
                 onChange={(event) => setPlayhead(Number(event.target.value))}
               />
             </label>
-          </section>
+            </section>
+          </div>
 
           {editorOpen ? (
             <aside className="editor-drawer glass-card" aria-label="Track editor">
