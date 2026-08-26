@@ -174,3 +174,111 @@ test("mixer replacement holds the current value before its five millisecond ramp
     { method: "linear", value: 10 ** (-3 / 20), time: 2.005 },
   ]);
 });
+
+test("play schedules once across overlapping ticks and stops at arrangement end", async () => {
+  const context = new FakeAudioContext();
+  const timers = new FakeTimers();
+  const engine = createAudioEngine({
+    createContext: () => context.asAudioContext(),
+    loadArrayBuffer: async () => new ArrayBuffer(8),
+    setInterval: (callback, milliseconds) => timers.setInterval(callback, milliseconds),
+    clearInterval: (handle) => timers.clearInterval(handle),
+  });
+  engine.replaceProject(audioProject());
+  assert.equal((await engine.play(0)).ok, true);
+  assert.deepEqual(timers.intervals, [25]);
+  assert.equal(context.bufferSources.length, 1);
+  timers.tick();
+  assert.equal(context.bufferSources.length, 1);
+  context.currentTime = 6.1;
+  timers.tick();
+  assert.equal(engine.getSnapshot().status, "stopped");
+});
+
+test("pause, seek, and BPM replacement preserve musical position", async () => {
+  const context = new FakeAudioContext();
+  const timers = new FakeTimers();
+  const engine = createAudioEngine({
+    createContext: () => context.asAudioContext(),
+    loadArrayBuffer: async () => new ArrayBuffer(8),
+    setInterval: (callback, milliseconds) => timers.setInterval(callback, milliseconds),
+    clearInterval: (handle) => timers.clearInterval(handle),
+  });
+  const value = audioProject();
+  engine.replaceProject(value);
+  await engine.play(0);
+  context.currentTime = 1.05;
+  engine.replaceProject({ ...value, bpm: 60 });
+  assert.equal(engine.getSnapshot().positionStep, 8);
+  engine.pause();
+  assert.equal(engine.getSnapshot().status, "paused");
+  engine.seek(40);
+  assert.equal(engine.getSnapshot().positionStep, 40);
+  assert.equal(context.oscillators.at(-1)?.startTimes.at(-1), undefined);
+});
+
+test("mixer-only replacement does not create a new transport generation", async () => {
+  const context = new FakeAudioContext();
+  const timers = new FakeTimers();
+  const engine = createAudioEngine({
+    createContext: () => context.asAudioContext(),
+    loadArrayBuffer: async () => new ArrayBuffer(8),
+    setInterval: (callback, milliseconds) => timers.setInterval(callback, milliseconds),
+    clearInterval: (handle) => timers.clearInterval(handle),
+  });
+  const before = audioProject();
+  engine.replaceProject(before);
+  await engine.play(0);
+  const sourceCount = context.bufferSources.length;
+  engine.replaceProject({
+    ...before,
+    masterVolumeDb: -6,
+    tracks: before.tracks.map((track) => ({ ...track, pan: 0.5 })),
+  });
+  timers.tick();
+  assert.equal(context.bufferSources.length, sourceCount);
+});
+
+test("late wakeup drops missed drums and resumes an overlapping synth note", async () => {
+  const context = new FakeAudioContext();
+  const timers = new FakeTimers();
+  const engine = createAudioEngine({
+    createContext: () => context.asAudioContext(),
+    loadArrayBuffer: async () => new ArrayBuffer(8),
+    setInterval: (callback, milliseconds) => timers.setInterval(callback, milliseconds),
+    clearInterval: (handle) => timers.clearInterval(handle),
+  });
+  engine.replaceProject(audioProject());
+  await engine.play(32);
+  context.currentTime = 1;
+  timers.tick();
+  assert.equal(engine.getSnapshot().lateWakeups, 1);
+  assert.equal(engine.getSnapshot().lastIssue?.code, "late_scheduler");
+  assert.equal(context.bufferSources.length, 0);
+  assert.equal(context.oscillators.length, 1);
+});
+
+test("empty, closed, and repeated controls return specific outcomes", async () => {
+  const context = new FakeAudioContext();
+  const timers = new FakeTimers();
+  const engine = createAudioEngine({
+    createContext: () => context.asAudioContext(),
+    loadArrayBuffer: async () => new ArrayBuffer(8),
+    setInterval: (callback, milliseconds) => timers.setInterval(callback, milliseconds),
+    clearInterval: (handle) => timers.clearInterval(handle),
+  });
+  engine.replaceProject({ ...audioProject(), arrangement: [] });
+  assert.deepEqual(await engine.play(0), {
+    ok: false,
+    code: "nothing_to_play",
+    message: "Project arrangement is empty",
+  });
+  assert.equal(engine.pause().ok, true);
+  assert.equal(engine.stop().ok, true);
+  await engine.dispose();
+  assert.deepEqual(engine.stop(), {
+    ok: false,
+    code: "closed",
+    message: "Audio engine is closed; create a new engine",
+  });
+});
