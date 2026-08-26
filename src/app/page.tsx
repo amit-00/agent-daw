@@ -8,12 +8,9 @@ type EditorTab = "mixer" | "sequence";
 type IconName =
   | "activity"
   | "chevron"
-  | "compose"
   | "download"
   | "draw"
-  | "history"
-  | "mixer"
-  | "sounds";
+  | "mixer";
 
 interface Track {
   readonly id: TrackId;
@@ -90,12 +87,9 @@ const CLIPS: readonly Clip[] = [
 const ICONS: Readonly<Record<IconName, string>> = {
   activity: "⌁",
   chevron: "›",
-  compose: "✦",
   download: "⇩",
   draw: "✎",
-  history: "↶",
   mixer: "≡",
-  sounds: "♬",
 };
 
 const DRUM_LEVELS = [33, 58, 41, 75, 51, 86, 42, 67, 47, 80, 57, 91, 49, 70, 38, 76, 53, 88, 44, 72, 35, 61, 46, 82] as const;
@@ -225,34 +219,6 @@ export default function StudioPage(): ReactElement {
   const selectedTrack = TRACKS.find((track) => track.id === selectedClip.trackId) ?? TRACKS[0];
   return (
     <main className="studio-shell">
-      <nav className="sidebar" aria-label="Primary navigation">
-        <div className="sidebar-heading">
-          <a className="brand" href="#studio" aria-label="AgentDAW studio">
-            <span className="brand-mark" aria-hidden="true">A</span>
-            <span>Agent<span>DAW</span></span>
-          </a>
-        </div>
-
-        <div className="nav-items">
-          <button className="nav-item active" type="button"><Icon name="compose" />Compose</button>
-          <button className="nav-item" type="button"><Icon name="sounds" />Sounds</button>
-          <button className="nav-item" type="button"><Icon name="history" />History</button>
-        </div>
-
-        <div className="sidebar-footer">
-          <div className="agent-status">
-            <span className="agent-orb"><Icon name="activity" /></span>
-            <span><strong>Agent online</strong><small>WebMCP ready</small></span>
-            <span className="status-dot" aria-label="Connected" />
-          </div>
-          <button className="profile" type="button" aria-label="Open profile menu">
-            <span className="avatar">AM</span>
-            <span><strong>Amit&apos;s Studio</strong><small>Local project</small></span>
-            <Icon name="chevron" />
-          </button>
-        </div>
-      </nav>
-
       <section className="workspace" id="studio">
         <header className="transport">
           <div className="transport-leading">
