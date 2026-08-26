@@ -397,8 +397,8 @@ export default function StudioPage(): ReactElement {
                     <div className="channel-strip" key={`${track.id}-mixer`}>
                       <span className="channel-name">{track.name.split(" ")[0]}</span>
                       <span className="meter"><i style={{ height: `${track.volume}%` }} /><i style={{ height: `${track.volume - 8}%` }} /></span>
-                      <input aria-label={`${track.name} volume`} type="range" min="0" max="100" defaultValue={track.volume} />
-                      <input aria-label={`${track.name} pan`} type="range" min="0" max="100" defaultValue="50" />
+                      <label className="channel-control volume-control"><span>Volume</span><input aria-label={`${track.name} volume`} type="range" min="0" max="100" defaultValue={track.volume} /></label>
+                      <label className="channel-control pan-control"><span>Pan</span><input aria-label={`${track.name} pan`} type="range" min="0" max="100" defaultValue="50" /></label>
                       <div className="channel-buttons">
                         <button className={mutedTracks.has(track.id) ? "active" : ""} type="button" aria-label={`Mute ${track.name}`} aria-pressed={mutedTracks.has(track.id)} onClick={() => setMutedTracks((current) => toggleSet(current, track.id))}>M</button>
                         <button className={soloTracks.has(track.id) ? "active solo" : ""} type="button" aria-label={`Solo ${track.name}`} aria-pressed={soloTracks.has(track.id)} onClick={() => setSoloTracks((current) => toggleSet(current, track.id))}>S</button>
@@ -408,8 +408,8 @@ export default function StudioPage(): ReactElement {
                   <div className="channel-strip master-strip">
                     <span className="channel-name">Master</span>
                     <span className="meter"><i style={{ height: "82%" }} /><i style={{ height: "76%" }} /></span>
-                    <input aria-label="Master volume" type="range" min="0" max="100" defaultValue="78" />
-                    <input aria-label="Master pan" type="range" min="0" max="100" defaultValue="50" />
+                    <label className="channel-control volume-control"><span>Volume</span><input aria-label="Master volume" type="range" min="0" max="100" defaultValue="78" /></label>
+                    <label className="channel-control pan-control"><span>Pan</span><input aria-label="Master pan" type="range" min="0" max="100" defaultValue="50" /></label>
                     <span className="master-label">−3.2</span>
                   </div>
                 </div>
