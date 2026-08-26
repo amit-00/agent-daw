@@ -13,6 +13,7 @@ type IconName =
   | "draw"
   | "focus"
   | "history"
+  | "loop"
   | "mixer"
   | "pause"
   | "play"
@@ -116,6 +117,7 @@ const ICONS: Readonly<Record<IconName, string>> = {
   draw: "✎",
   focus: "⌖",
   history: "↶",
+  loop: "↻",
   mixer: "≡",
   pause: "Ⅱ",
   play: "▶",
@@ -290,8 +292,6 @@ export default function StudioPage(): ReactElement {
           </div>
 
           <div className="transport-controls">
-            <button className="icon-button" type="button" aria-label="Undo"><Icon name="undo" /></button>
-            <button className="icon-button" type="button" aria-label="Redo"><Icon name="redo" /></button>
             <button
               className="play-button"
               type="button"
@@ -305,6 +305,14 @@ export default function StudioPage(): ReactElement {
               <Icon name="stop" size={9} />
             </button>
             <span className={isPlaying ? "record-dot pulsing" : "record-dot"} aria-hidden="true" />
+            <button className="icon-button loop" type="button" aria-label="Loop playback">
+              <Icon name="loop" size={12} />
+            </button>
+          </div>
+
+          <div className="history-controls" aria-label="Edit history">
+            <button className="icon-button" type="button" aria-label="Undo"><Icon name="undo" /></button>
+            <button className="icon-button" type="button" aria-label="Redo"><Icon name="redo" /></button>
           </div>
 
           <div className="master-output" aria-label="Master output level">
