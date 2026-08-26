@@ -831,7 +831,8 @@ input:focus-visible {
 
 .sequence-workspace {
   display: grid;
-  height: calc(100% - 44px);
+  height: calc(100% - 56px);
+  margin-top: 12px;
   grid-template-columns: 38px 1fr;
   grid-template-rows: 20px 1fr;
   overflow: hidden;
