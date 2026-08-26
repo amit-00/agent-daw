@@ -58,6 +58,8 @@ interface TrackBus {
 
 const MIXER_RAMP_SECONDS = 0.005;
 const dbToGain = (decibels: number): number => 10 ** (decibels / 20);
+const isAutoplayPolicyError = (error: unknown): boolean =>
+  error instanceof DOMException && error.name === "NotAllowedError";
 
 export function createAudioEngine(platform: AudioEnginePlatform): AudioEngine {
   let context: AudioContext | undefined;
@@ -79,7 +81,7 @@ export function createAudioEngine(platform: AudioEnginePlatform): AudioEngine {
     if (currentTime === undefined) {
       return;
     }
-    parameter.cancelScheduledValues(currentTime);
+    parameter.cancelAndHoldAtTime(currentTime);
     parameter.linearRampToValueAtTime(value, currentTime + MIXER_RAMP_SECONDS);
   };
 
@@ -171,9 +173,18 @@ export function createAudioEngine(platform: AudioEnginePlatform): AudioEngine {
       pending = (async (): Promise<PrepareResult> => {
         try {
           await runtimeContext.resume();
-        } catch {
+        } catch (error) {
+          if (disposal !== undefined) {
+            return closedResult();
+          }
+          if (!isAutoplayPolicyError(error)) {
+            throw error;
+          }
           status = "blocked";
           return blockedResult();
+        }
+        if (disposal !== undefined) {
+          return closedResult();
         }
         if (runtimeContext.state !== "running") {
           status = "blocked";

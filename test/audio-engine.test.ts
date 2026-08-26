@@ -95,3 +95,82 @@ test("blocked preparation and disposal return actionable state", async () => {
   assert.equal(engine.getSnapshot().status, "closed");
   assert.equal(context.state, "closed");
 });
+
+test("prepare only converts autoplay-policy rejection into blocked state", async () => {
+  const unexpectedContext = new FakeAudioContext();
+  const unexpected = new TypeError("invalid audio context");
+  unexpectedContext.resume = async () => {
+    throw unexpected;
+  };
+  const unexpectedEngine = createAudioEngine({
+    createContext: () => unexpectedContext.asAudioContext(),
+    loadArrayBuffer: async () => new ArrayBuffer(8),
+    setInterval: () => 0,
+    clearInterval: () => undefined,
+  });
+  await assert.rejects(unexpectedEngine.prepare(), unexpected);
+
+  const blockedContext = new FakeAudioContext();
+  blockedContext.resume = async () => {
+    throw new DOMException("autoplay denied", "NotAllowedError");
+  };
+  const blockedEngine = createAudioEngine({
+    createContext: () => blockedContext.asAudioContext(),
+    loadArrayBuffer: async () => new ArrayBuffer(8),
+    setInterval: () => 0,
+    clearInterval: () => undefined,
+  });
+  assert.deepEqual(await blockedEngine.prepare(), {
+    ok: false,
+    code: "blocked",
+    message: "Audio context is suspended; retry from a user gesture",
+  });
+});
+
+test("disposing during resume keeps pending and later preparation closed", async () => {
+  const context = new FakeAudioContext();
+  let resolveResume = (): void => undefined;
+  context.resume = () => new Promise<void>((resolve) => {
+    resolveResume = resolve;
+  });
+  const engine = createAudioEngine({
+    createContext: () => context.asAudioContext(),
+    loadArrayBuffer: async () => new ArrayBuffer(8),
+    setInterval: () => 0,
+    clearInterval: () => undefined,
+  });
+  const preparation = engine.prepare();
+  await engine.dispose();
+  resolveResume();
+  assert.deepEqual(await preparation, {
+    ok: false,
+    code: "closed",
+    message: "Audio engine is closed; create a new engine",
+  });
+  assert.equal(engine.getSnapshot().status, "closed");
+  context.resume = async () => undefined;
+  assert.deepEqual(await engine.prepare(), {
+    ok: false,
+    code: "closed",
+    message: "Audio engine is closed; create a new engine",
+  });
+});
+
+test("mixer replacement holds the current value before its five millisecond ramp", async () => {
+  const context = new FakeAudioContext();
+  const engine = createAudioEngine({
+    createContext: () => context.asAudioContext(),
+    loadArrayBuffer: async () => new ArrayBuffer(8),
+    setInterval: () => 0,
+    clearInterval: () => undefined,
+  });
+  const before = audioProject();
+  engine.replaceProject(before);
+  await engine.prepare();
+  context.currentTime = 2;
+  engine.replaceProject({ ...before, masterVolumeDb: -3 });
+  assert.deepEqual(context.gains[0]?.gain.events.slice(-2), [
+    { method: "hold", time: 2 },
+    { method: "linear", value: 10 ** (-3 / 20), time: 2.005 },
+  ]);
+});
