@@ -9,7 +9,7 @@ import {
   LimitExceededError,
   NotFoundError,
   type Project,
-  type ProjectService,
+  ProjectService,
   type SoundCatalog,
   type Track,
   type Operation,
@@ -234,6 +234,28 @@ test("createProjectService detaches its initial project from caller mutation", (
 
   assert.deepEqual(service.getState().project, expectedProject);
   assert.equal(service.getState().history.length, 0);
+});
+
+test("createProjectService returns a ProjectService instance", () => {
+  assert.equal(createTestService(blankProject()) instanceof ProjectService, true);
+});
+
+test("ProjectService methods remain callable as callbacks", () => {
+  const service = createTestService(blankProject());
+  const { dispatch, getState, undo, redo, restore } = service;
+  const result = dispatch(createBassTrackCommand(id(100)));
+
+  assert.equal(result.ok, true);
+  if (!result.ok || result.historyEntry === undefined) return;
+  assert.equal(getState().project.tracks.length, 1);
+  assert.equal(undo().ok, true);
+  assert.equal(redo().ok, true);
+  assert.equal(restore({
+    id: id(101),
+    source: "manual",
+    label: "Restore bass",
+    targetEntryId: result.historyEntry.id,
+  }).ok, true);
 });
 
 test("createProjectService rejects non-serializable initial data", () => {
