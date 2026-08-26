@@ -357,6 +357,46 @@ test("pattern.duplicate rejects an ID count that differs from copied events", ()
   );
 });
 
+test("pattern.duplicate rejects duplicate or source event destination IDs", () => {
+  const project: Project = {
+    ...projectWithBasicDrums(),
+    patterns: [{
+      id: id(11),
+      trackId: id(10),
+      name: "Beat",
+      kind: "drum",
+      lengthBars: 1,
+      events: [
+        { id: id(13), soundId: "kick", startStep: 0 },
+        { id: id(14), soundId: "snare", startStep: 4 },
+      ],
+    }],
+  };
+
+  assert.throws(
+    () => reduceOperation(
+      project,
+      {
+        type: "pattern.duplicate",
+        patternId: id(11), duplicatePatternId: id(30), duplicateName: "Copy", duplicateEventIds: [id(31), id(31)],
+      },
+      catalog,
+    ),
+    InvalidInputError,
+  );
+  assert.throws(
+    () => reduceOperation(
+      projectWithBasicDrums(),
+      {
+        type: "pattern.duplicate",
+        patternId: id(11), duplicatePatternId: id(30), duplicateName: "Copy", duplicateEventIds: [id(13)],
+      },
+      catalog,
+    ),
+    InvalidInputError,
+  );
+});
+
 test("pattern.update changes only its name and length", () => {
   const project = projectWithBasicDrums();
   const result = reduceOperation(
@@ -602,6 +642,69 @@ test("event commands do not mutate their project or operation input", () => {
 
   assert.deepEqual(project, originalProject);
   assert.deepEqual(operation, originalOperation);
+});
+
+test("runtime update payloads cannot alter immutable fields", () => {
+  const project = projectWithBasicDrums();
+  const projectResult = reduceOperation(
+    project,
+    {
+      type: "project.update",
+      changes: { name: "Retitled", id: id(90), schemaVersion: 2, tracks: [] },
+    } as unknown as Parameters<typeof reduceOperation>[1],
+    catalog,
+  );
+  const trackResult = reduceOperation(
+    project,
+    {
+      type: "track.update",
+      trackId: id(10),
+      changes: { name: "Renamed", id: id(91), kind: "synth" },
+    } as unknown as Parameters<typeof reduceOperation>[1],
+    catalog,
+  );
+  const patternResult = reduceOperation(
+    project,
+    {
+      type: "pattern.update",
+      patternId: id(11),
+      changes: { name: "Renamed beat", trackId: id(40), kind: "synth", events: [] },
+    } as unknown as Parameters<typeof reduceOperation>[1],
+    catalog,
+  );
+  const drumResult = reduceOperation(
+    project,
+    {
+      type: "drum-hits.update",
+      patternId: id(11),
+      updates: [{ hitId: id(13), changes: { soundId: "snare", id: id(92) } }],
+    } as unknown as Parameters<typeof reduceOperation>[1],
+    catalog,
+  );
+  const synthResult = reduceOperation(
+    projectWithLead(),
+    {
+      type: "synth-notes.update",
+      patternId: id(41),
+      updates: [{ noteId: id(42), changes: { midiNote: 64, id: id(93) } }],
+    } as unknown as Parameters<typeof reduceOperation>[1],
+    catalog,
+  );
+
+  assert.deepEqual(
+    { id: projectResult.project.id, schemaVersion: projectResult.project.schemaVersion, tracks: projectResult.project.tracks.length },
+    { id: id(1), schemaVersion: 1, tracks: 1 },
+  );
+  assert.deepEqual(
+    { id: trackResult.project.tracks[0]?.id, kind: trackResult.project.tracks[0]?.kind, name: trackResult.project.tracks[0]?.name },
+    { id: id(10), kind: "drum", name: "Renamed" },
+  );
+  assert.deepEqual(
+    { trackId: patternResult.project.patterns[0]?.trackId, kind: patternResult.project.patterns[0]?.kind, name: patternResult.project.patterns[0]?.name },
+    { trackId: id(10), kind: "drum", name: "Renamed beat" },
+  );
+  assert.deepEqual(drumResult.project.patterns[0]?.events[0], { id: id(13), soundId: "snare", startStep: 0 });
+  assert.deepEqual(synthResult.project.patterns[0]?.events[0], { id: id(42), midiNote: 64, startStep: 0, lengthSteps: 4 });
 });
 
 test("mergeChangeSummaries deduplicates IDs in first-seen order", () => {

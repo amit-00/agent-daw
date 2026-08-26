@@ -154,7 +154,12 @@ export function summarizeProjectDiff(before: Project, after: Project): ChangeSum
 export function reduceOperation(project: Project, operation: Operation, catalog: SoundCatalog): Reduction {
   switch (operation.type) {
     case "project.update": {
-      const candidate: Project = { ...project, ...operation.changes };
+      const candidate: Project = {
+        ...project,
+        ...(operation.changes.name === undefined ? {} : { name: operation.changes.name }),
+        ...(operation.changes.bpm === undefined ? {} : { bpm: operation.changes.bpm }),
+        ...(operation.changes.masterVolumeDb === undefined ? {} : { masterVolumeDb: operation.changes.masterVolumeDb }),
+      };
       if (isDeepStrictEqual(project, candidate)) return { project, changes: emptyChangeSummary() };
       validateProject(candidate, catalog);
       return { project: candidate, changes: withChanges({ updated: { projectIds: [project.id] } }) };
@@ -166,7 +171,15 @@ export function reduceOperation(project: Project, operation: Operation, catalog:
     }
     case "track.update": {
       const track = requireTrack(project, operation.trackId);
-      const updatedTrack: Track = { ...track, ...operation.changes };
+      const updatedTrack: Track = {
+        ...track,
+        ...(operation.changes.name === undefined ? {} : { name: operation.changes.name }),
+        ...(operation.changes.instrumentId === undefined ? {} : { instrumentId: operation.changes.instrumentId }),
+        ...(operation.changes.volumeDb === undefined ? {} : { volumeDb: operation.changes.volumeDb }),
+        ...(operation.changes.pan === undefined ? {} : { pan: operation.changes.pan }),
+        ...(operation.changes.muted === undefined ? {} : { muted: operation.changes.muted }),
+        ...(operation.changes.soloed === undefined ? {} : { soloed: operation.changes.soloed }),
+      };
       if (isDeepStrictEqual(track, updatedTrack)) return { project, changes: emptyChangeSummary() };
       assertDrumInstrumentCompatibility(project, updatedTrack, catalog);
       const candidate: Project = {
@@ -208,10 +221,15 @@ export function reduceOperation(project: Project, operation: Operation, catalog:
     }
     case "pattern.duplicate": {
       const pattern = requirePattern(project, operation.patternId);
-      if (operation.duplicateEventIds.length !== pattern.events.length) {
+      const sourceEventIds = new Set(pattern.events.map((event) => event.id));
+      if (
+        operation.duplicateEventIds.length !== pattern.events.length
+        || new Set(operation.duplicateEventIds).size !== operation.duplicateEventIds.length
+        || operation.duplicateEventIds.some((eventId) => sourceEventIds.has(eventId))
+      ) {
         throw new InvalidInputError({
           path: "operation.duplicateEventIds",
-          message: "must contain one ID for each copied event",
+          message: "must contain one fresh ID for each copied event",
         });
       }
       const duplicate = copyPattern(
@@ -233,7 +251,11 @@ export function reduceOperation(project: Project, operation: Operation, catalog:
     }
     case "pattern.update": {
       const pattern = requirePattern(project, operation.patternId);
-      const updatedPattern: Pattern = { ...pattern, ...operation.changes };
+      const updatedPattern: Pattern = {
+        ...pattern,
+        ...(operation.changes.name === undefined ? {} : { name: operation.changes.name }),
+        ...(operation.changes.lengthBars === undefined ? {} : { lengthBars: operation.changes.lengthBars }),
+      };
       if (isDeepStrictEqual(pattern, updatedPattern)) return { project, changes: emptyChangeSummary() };
       const candidate = replacePattern(project, updatedPattern);
       validateProject(candidate, catalog);
@@ -273,7 +295,14 @@ export function reduceOperation(project: Project, operation: Operation, catalog:
       const changesById = new Map(operation.updates.map((update) => [update.hitId, update.changes]));
       const updatedPattern: DrumPattern = {
         ...pattern,
-        events: pattern.events.map((hit) => ({ ...hit, ...changesById.get(hit.id) })),
+        events: pattern.events.map((hit) => {
+          const changes = changesById.get(hit.id);
+          return changes === undefined ? hit : {
+            ...hit,
+            ...(changes.soundId === undefined ? {} : { soundId: changes.soundId }),
+            ...(changes.startStep === undefined ? {} : { startStep: changes.startStep }),
+          };
+        }),
       };
       if (isDeepStrictEqual(pattern, updatedPattern)) return { project, changes: emptyChangeSummary() };
       const candidate = replacePattern(project, updatedPattern);
@@ -305,7 +334,15 @@ export function reduceOperation(project: Project, operation: Operation, catalog:
       const changesById = new Map(operation.updates.map((update) => [update.noteId, update.changes]));
       const updatedPattern: SynthPattern = {
         ...pattern,
-        events: pattern.events.map((note) => ({ ...note, ...changesById.get(note.id) })),
+        events: pattern.events.map((note) => {
+          const changes = changesById.get(note.id);
+          return changes === undefined ? note : {
+            ...note,
+            ...(changes.midiNote === undefined ? {} : { midiNote: changes.midiNote }),
+            ...(changes.startStep === undefined ? {} : { startStep: changes.startStep }),
+            ...(changes.lengthSteps === undefined ? {} : { lengthSteps: changes.lengthSteps }),
+          };
+        }),
       };
       if (isDeepStrictEqual(pattern, updatedPattern)) return { project, changes: emptyChangeSummary() };
       const candidate = replacePattern(project, updatedPattern);
