@@ -110,6 +110,7 @@ export function createAudioEngine(platform: AudioEnginePlatform): AudioEngine {
   let anchorStep = 0;
   let anchorAudioTime = 0;
   let generation = 0;
+  let playIntentRevision = 0;
   let scheduledHorizonAudioTime: number | undefined;
   let schedulerTimer: { readonly handle: unknown } | undefined;
   let lateWakeups = 0;
@@ -281,7 +282,10 @@ export function createAudioEngine(platform: AudioEnginePlatform): AudioEngine {
             event.durationSteps * secondsPerStep(project.bpm),
             bus.gain,
           );
-      } catch {
+      } catch (error) {
+        if (!(error instanceof DOMException)) {
+          throw error;
+        }
         lastIssue = {
           code: "source_failed",
           message: "Audio source could not be scheduled",
@@ -326,8 +330,18 @@ export function createAudioEngine(platform: AudioEnginePlatform): AudioEngine {
     status = "stopped";
   };
 
+  const enterBlockedState = (): void => {
+    positionStep = currentPositionStep();
+    cancelPlayback();
+    status = "blocked";
+  };
+
   const schedulerTick = (): void => {
     if (status !== "playing" || context === undefined || project === undefined) {
+      return;
+    }
+    if (context.state !== "running") {
+      enterBlockedState();
       return;
     }
 
@@ -415,6 +429,16 @@ export function createAudioEngine(platform: AudioEnginePlatform): AudioEngine {
     positionStep: currentPositionStep(),
   });
 
+  const currentControlResult = (): AudioControlResult => {
+    if (status === "closed") {
+      return closedResult();
+    }
+    if (status === "blocked") {
+      return blockedResult();
+    }
+    return controlSuccess(status);
+  };
+
   const engine: AudioEngine = {
     prepare(): Promise<PrepareResult> {
       if (status === "closed") {
@@ -442,22 +466,24 @@ export function createAudioEngine(platform: AudioEnginePlatform): AudioEngine {
           if (!isAutoplayPolicyError(error)) {
             throw error;
           }
-          cancelPlayback();
-          status = "blocked";
+          enterBlockedState();
           return blockedResult();
         }
         if (disposal !== undefined) {
           return closedResult();
         }
         if (runtimeContext.state !== "running") {
-          cancelPlayback();
-          status = "blocked";
+          enterBlockedState();
           return blockedResult();
         }
 
         const samplePreparation = await runtimeSampler.prepare();
         if (disposal !== undefined) {
           return closedResult();
+        }
+        if (runtimeContext.state !== "running") {
+          enterBlockedState();
+          return blockedResult();
         }
         unavailableSoundIds = [...samplePreparation.unavailableSoundIds];
         lastIssue = unavailableSoundIds[0] === undefined
@@ -513,6 +539,7 @@ export function createAudioEngine(platform: AudioEnginePlatform): AudioEngine {
     },
 
     async play(startStep: number): Promise<AudioControlResult> {
+      const intentRevision = ++playIntentRevision;
       if (status === "closed") {
         return closedResult();
       }
@@ -532,6 +559,9 @@ export function createAudioEngine(platform: AudioEnginePlatform): AudioEngine {
       }
 
       const prepared = await engine.prepare();
+      if (intentRevision !== playIntentRevision) {
+        return currentControlResult();
+      }
       if (!prepared.ok) {
         return prepared;
       }
@@ -547,6 +577,7 @@ export function createAudioEngine(platform: AudioEnginePlatform): AudioEngine {
     },
 
     pause(): AudioControlResult {
+      playIntentRevision += 1;
       if (status === "closed") {
         return closedResult();
       }
@@ -563,6 +594,7 @@ export function createAudioEngine(platform: AudioEnginePlatform): AudioEngine {
     },
 
     seek(step: number): AudioControlResult {
+      playIntentRevision += 1;
       if (status === "closed") {
         return closedResult();
       }
@@ -578,6 +610,7 @@ export function createAudioEngine(platform: AudioEnginePlatform): AudioEngine {
     },
 
     stop(): AudioControlResult {
+      playIntentRevision += 1;
       if (status === "closed") {
         return closedResult();
       }
@@ -606,6 +639,7 @@ export function createAudioEngine(platform: AudioEnginePlatform): AudioEngine {
     },
 
     dispose(): Promise<void> {
+      playIntentRevision += 1;
       if (disposal !== undefined) {
         return disposal;
       }

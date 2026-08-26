@@ -1,9 +1,24 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import type { AudioControlResult, AudioEngine } from "../src/audio/index.ts";
 import { createAudioEngine } from "../src/audio/index.ts";
 import { audioProject } from "./audio-fixtures.ts";
 import { FakeAudioContext, FakeTimers } from "./audio-fakes.ts";
+
+const deferredBuffer = (): {
+  readonly promise: Promise<ArrayBuffer>;
+  readonly resolve: () => void;
+} => {
+  let resolveBuffer = (_: ArrayBuffer): void => undefined;
+  const promise = new Promise<ArrayBuffer>((resolve) => {
+    resolveBuffer = resolve;
+  });
+  return {
+    promise,
+    resolve: () => resolveBuffer(new ArrayBuffer(8)),
+  };
+};
 
 test("prepare resumes context, loads samples, and creates project mixer buses", async () => {
   const context = new FakeAudioContext();
@@ -281,4 +296,171 @@ test("empty, closed, and repeated controls return specific outcomes", async () =
     code: "closed",
     message: "Audio engine is closed; create a new engine",
   });
+});
+
+test("pending play respects later pause, seek, and stop intents", async () => {
+  const cases = [
+    {
+      name: "pause",
+      control: (engine: AudioEngine): AudioControlResult => engine.pause(),
+      expected: { ok: true, status: "stopped", positionStep: 0 },
+    },
+    {
+      name: "seek",
+      control: (engine: AudioEngine): AudioControlResult => engine.seek(12),
+      expected: { ok: true, status: "stopped", positionStep: 12 },
+    },
+    {
+      name: "stop",
+      control: (engine: AudioEngine): AudioControlResult => engine.stop(),
+      expected: { ok: true, status: "stopped", positionStep: 0 },
+    },
+  ] as const;
+
+  for (const { name, control, expected } of cases) {
+    const context = new FakeAudioContext();
+    const timers = new FakeTimers();
+    const loading = deferredBuffer();
+    const engine = createAudioEngine({
+      createContext: () => context.asAudioContext(),
+      loadArrayBuffer: async () => loading.promise,
+      setInterval: (callback, milliseconds) => timers.setInterval(callback, milliseconds),
+      clearInterval: (handle) => timers.clearInterval(handle),
+    });
+    engine.replaceProject(audioProject());
+    const playback = engine.play(0);
+    await Promise.resolve();
+    assert.deepEqual(control(engine), expected, name);
+    loading.resolve();
+    assert.deepEqual(await playback, expected, name);
+    assert.equal(timers.callbacks.size, 0, name);
+    assert.equal(context.bufferSources.length, 0, name);
+  }
+});
+
+test("a newer pending play supersedes the earlier play intent", async () => {
+  const context = new FakeAudioContext();
+  const timers = new FakeTimers();
+  const loading = deferredBuffer();
+  const engine = createAudioEngine({
+    createContext: () => context.asAudioContext(),
+    loadArrayBuffer: async () => loading.promise,
+    setInterval: (callback, milliseconds) => timers.setInterval(callback, milliseconds),
+    clearInterval: (handle) => timers.clearInterval(handle),
+  });
+  engine.replaceProject(audioProject());
+  const earlier = engine.play(0);
+  await Promise.resolve();
+  const later = engine.play(16);
+  loading.resolve();
+  assert.deepEqual(await earlier, {
+    ok: true,
+    status: "stopped",
+    positionStep: 0,
+  });
+  assert.deepEqual(await later, {
+    ok: true,
+    status: "playing",
+    positionStep: 16,
+  });
+  assert.equal(context.bufferSources.length, 1);
+  assert.deepEqual(timers.intervals, [25]);
+});
+
+test("play blocks if the context suspends during sample preparation", async () => {
+  const context = new FakeAudioContext();
+  const timers = new FakeTimers();
+  const loading = deferredBuffer();
+  const engine = createAudioEngine({
+    createContext: () => context.asAudioContext(),
+    loadArrayBuffer: async () => loading.promise,
+    setInterval: (callback, milliseconds) => timers.setInterval(callback, milliseconds),
+    clearInterval: (handle) => timers.clearInterval(handle),
+  });
+  engine.replaceProject(audioProject());
+  const playback = engine.play(0);
+  await Promise.resolve();
+  context.state = "suspended";
+  loading.resolve();
+  assert.deepEqual(await playback, {
+    ok: false,
+    code: "blocked",
+    message: "Audio context is suspended; retry from a user gesture",
+  });
+  assert.equal(timers.callbacks.size, 0);
+  assert.equal(context.bufferSources.length, 0);
+});
+
+test("a scheduler tick blocks and cancels playback when the context suspends", async () => {
+  const context = new FakeAudioContext();
+  const timers = new FakeTimers();
+  const engine = createAudioEngine({
+    createContext: () => context.asAudioContext(),
+    loadArrayBuffer: async () => new ArrayBuffer(8),
+    setInterval: (callback, milliseconds) => timers.setInterval(callback, milliseconds),
+    clearInterval: (handle) => timers.clearInterval(handle),
+  });
+  engine.replaceProject(audioProject());
+  await engine.play(0);
+  context.state = "suspended";
+  timers.tick();
+  assert.equal(engine.getSnapshot().status, "blocked");
+  assert.equal(engine.getSnapshot().pendingSources, 0);
+  assert.equal(timers.callbacks.size, 0);
+  assert.deepEqual(context.bufferSources[0]?.stopTimes, [0]);
+});
+
+test("play propagates programmer errors from source creation", async () => {
+  const context = new FakeAudioContext();
+  const sourceError = new TypeError("invalid buffer source factory");
+  context.createBufferSource = (): AudioBufferSourceNode => {
+    throw sourceError;
+  };
+  const timers = new FakeTimers();
+  const engine = createAudioEngine({
+    createContext: () => context.asAudioContext(),
+    loadArrayBuffer: async () => new ArrayBuffer(8),
+    setInterval: (callback, milliseconds) => timers.setInterval(callback, milliseconds),
+    clearInterval: (handle) => timers.clearInterval(handle),
+  });
+  engine.replaceProject(audioProject());
+  await assert.rejects(engine.play(0), sourceError);
+});
+
+test("Web Audio source errors are diagnosed while sibling events continue", async () => {
+  const context = new FakeAudioContext();
+  const createBufferSource = context.createBufferSource.bind(context);
+  let sourceFailures = 1;
+  context.createBufferSource = (): AudioBufferSourceNode => {
+    if (sourceFailures > 0) {
+      sourceFailures -= 1;
+      throw new DOMException("source unavailable", "InvalidStateError");
+    }
+    return createBufferSource();
+  };
+  const timers = new FakeTimers();
+  const engine = createAudioEngine({
+    createContext: () => context.asAudioContext(),
+    loadArrayBuffer: async () => new ArrayBuffer(8),
+    setInterval: (callback, milliseconds) => timers.setInterval(callback, milliseconds),
+    clearInterval: (handle) => timers.clearInterval(handle),
+  });
+  const project = audioProject();
+  engine.replaceProject({
+    ...project,
+    patterns: project.patterns.map((pattern) => pattern.kind === "drum"
+      ? {
+        ...pattern,
+        events: pattern.events.map((event) => ({ ...event, startStep: 0 })),
+      }
+      : pattern),
+  });
+  assert.deepEqual(await engine.play(0), {
+    ok: true,
+    status: "playing",
+    positionStep: 0,
+  });
+  assert.equal(context.bufferSources.length, 1);
+  assert.equal(timers.callbacks.size, 1);
+  assert.equal(engine.getSnapshot().lastIssue?.code, "source_failed");
 });
