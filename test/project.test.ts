@@ -1286,6 +1286,76 @@ test("dispatch rejects a non-serializable operation before committing", () => {
   assert.equal(service.getState().history.length, 0);
 });
 
+test("dispatch detaches caller-owned created tracks and patterns", () => {
+  const service = createTestService(blankProject());
+  const callerBass = {
+    id: id(20), name: "Bass", kind: "synth" as const, instrumentId: "synth.bass", volumeDb: 0,
+    pan: 0, muted: false, soloed: false,
+  };
+  const callerDrums = {
+    id: id(10), name: "Drums", kind: "drum" as const, instrumentId: "kit.basic", volumeDb: 0,
+    pan: 0, muted: false, soloed: false,
+  };
+  const callerBassPattern = {
+    id: id(21), trackId: id(20), name: "Bass line", kind: "synth" as const, lengthBars: 1 as const, events: [],
+  };
+  const callerDrumPattern = {
+    id: id(30), trackId: id(10), name: "Beat", kind: "drum" as const, lengthBars: 1 as const, events: [],
+  };
+  const result = service.dispatch({
+    kind: "batch",
+    id: id(145),
+    source: "agent",
+    label: "Create tracks and patterns",
+    operations: [
+      { type: "track.create", track: callerBass },
+      { type: "track.create", track: callerDrums },
+      { type: "pattern.create", pattern: callerBassPattern },
+      { type: "pattern.create", pattern: callerDrumPattern },
+    ],
+  });
+  const state = service.getState();
+  const expectedAfter = structuredClone(state.project);
+
+  callerBass.name = "Mutated bass";
+  callerDrums.name = "Mutated drums";
+  callerBassPattern.name = "Mutated bass pattern";
+  callerDrumPattern.name = "Mutated drum pattern";
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(service.getState().project, expectedAfter);
+  assert.deepEqual(state.history[0]?.after, expectedAfter);
+});
+
+test("dispatch detaches caller-owned added events and JSON-round-trips history", () => {
+  const service = createTestService(projectWithBassAndDrums());
+  const callerHit = { id: id(60), soundId: "snare", startStep: 4 };
+  const callerNote = { id: id(61), midiNote: 40, startStep: 4, lengthSteps: 4 };
+  const result = service.dispatch({
+    kind: "batch",
+    id: id(146),
+    source: "agent",
+    label: "Add bass and drum events",
+    operations: [
+      { type: "drum-hits.add", patternId: id(11), hits: [callerHit] },
+      { type: "synth-notes.add", patternId: id(21), notes: [callerNote] },
+    ],
+  });
+  const state = service.getState();
+  const expectedAfter = structuredClone(state.project);
+  const entry = state.history[0];
+
+  callerHit.soundId = "hat";
+  callerHit.startStep = 8;
+  callerNote.midiNote = 48;
+  callerNote.startStep = 8;
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(service.getState().project, expectedAfter);
+  assert.deepEqual(entry?.after, expectedAfter);
+  assert.deepEqual(entry, JSON.parse(JSON.stringify(entry)));
+});
+
 test("direct dispatch retains only the 100 newest history entries", () => {
   const service = createTestService(blankProject());
 

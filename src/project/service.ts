@@ -228,7 +228,7 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
             const path = command.kind === "batch" ? `command.operations[${batchIndex}]` : "command.operation";
             validateOperation(operation, path);
             const historyOperation = cloneOperation(operation, path);
-            const reduction = reduceOperation(nextProject, operation, options.catalog);
+            const reduction = reduceOperation(nextProject, historyOperation, options.catalog);
             nextProject = reduction.project;
             changeSummaries.push(reduction.changes);
             historyOperations.push(historyOperation);
