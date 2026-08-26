@@ -103,6 +103,12 @@ const assertString = (value: string, path: string): void => {
   }
 };
 
+const assertRecord = (value: unknown, path: string): void => {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    invalid(path, "must be an object");
+  }
+};
+
 const assertTrimmedLength = (
   value: string,
   path: string,
@@ -116,7 +122,7 @@ const assertTrimmedLength = (
   }
 };
 
-const assertUuid = (value: EntityId, path: string): void => {
+export const assertUuid = (value: EntityId, path: string): void => {
   assertString(value, path);
   if (!UUID_PATTERN.test(value)) {
     invalid(path, "must be a UUID");
@@ -302,6 +308,7 @@ const validatePattern = (
 };
 
 export function validateProject(project: Project, catalog: SoundCatalog): void {
+  assertRecord(project, "project");
   if (project.schemaVersion !== 1) {
     invalid("project.schemaVersion", "must equal 1");
   }
@@ -309,32 +316,41 @@ export function validateProject(project: Project, catalog: SoundCatalog): void {
   assertTrimmedLength(project.name, "project.name", 1, 80);
   assertFiniteRange(project.bpm, "project.bpm", 40, 240);
   assertFiniteRange(project.masterVolumeDb, "project.masterVolumeDb", -60, 0);
-  assertMaximum(project.tracks.length, PROJECT_CAPS.maxTracks, "project.tracks");
-  assertMaximum(project.patterns.length, PROJECT_CAPS.maxPatterns, "project.patterns");
+  const projectTracks = assertArray(project.tracks, "project.tracks") as readonly Track[];
+  const projectPatterns = assertArray(project.patterns, "project.patterns") as readonly Pattern[];
+  const projectArrangement = assertArray(
+    project.arrangement,
+    "project.arrangement",
+  ) as readonly ArrangementClip[];
+  assertMaximum(projectTracks.length, PROJECT_CAPS.maxTracks, "project.tracks");
+  assertMaximum(projectPatterns.length, PROJECT_CAPS.maxPatterns, "project.patterns");
   assertMaximum(
-    project.arrangement.length,
+    projectArrangement.length,
     PROJECT_CAPS.maxArrangementClips,
     "project.arrangement",
   );
 
   const trackIds = new Set<EntityId>();
   const tracks = new Map<EntityId, Track>();
-  for (const [index, track] of project.tracks.entries()) {
+  for (const [index, track] of projectTracks.entries()) {
+    assertRecord(track, `project.tracks[${index}]`);
     validateTrack(track, index, catalog, trackIds);
     tracks.set(track.id, track);
   }
 
   const patternIds = new Set<EntityId>();
   const patterns = new Map<EntityId, Pattern>();
-  for (const [index, pattern] of project.patterns.entries()) {
+  for (const [index, pattern] of projectPatterns.entries()) {
+    assertRecord(pattern, `project.patterns[${index}]`);
     validatePattern(pattern, index, tracks, catalog, patternIds);
     patterns.set(pattern.id, pattern);
   }
 
   const clipIds = new Set<EntityId>();
   const clipsByTrack = new Map<EntityId, ArrangementClip[]>();
-  for (const [index, clip] of project.arrangement.entries()) {
+  for (const [index, clip] of projectArrangement.entries()) {
     const path = `project.arrangement[${index}]`;
+    assertRecord(clip, path);
     assertUniqueId(clip.id, `${path}.id`, clipIds);
     assertUuid(clip.patternId, `${path}.patternId`);
     assertIntegerRange(clip.startBar, `${path}.startBar`, 0, PROJECT_CAPS.maxArrangementBars);

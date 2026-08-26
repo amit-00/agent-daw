@@ -206,6 +206,54 @@ for (const [name, project, path] of invalidProjects) {
   });
 }
 
+const malformedProjectContainers: readonly [string, unknown, string][] = [
+  ["project root", null, "project"],
+  ["tracks container", { ...blankProject(), tracks: null }, "project.tracks"],
+  ["patterns container", { ...blankProject(), patterns: {} }, "project.patterns"],
+  ["arrangement container", { ...blankProject(), arrangement: "clips" }, "project.arrangement"],
+];
+
+for (const [name, project, path] of malformedProjectContainers) {
+  test(`validateProject rejects malformed ${name} with a domain error`, () => {
+    assert.throws(
+      () => validateProject(project as Project, catalog),
+      (error: unknown) =>
+        error instanceof InvalidInputError && error.info.path === path,
+    );
+  });
+}
+
+test("createProjectService detaches its initial project from caller mutation", () => {
+  const initialProject = projectWithBasicDrums();
+  const expectedProject = structuredClone(initialProject);
+  const service = createTestService(initialProject);
+
+  (initialProject as { name: string }).name = "Mutated outside the service";
+  (initialProject.tracks[0] as { name: string }).name = "Mutated track";
+  (initialProject.patterns[0]!.events[0] as { soundId: string }).soundId = "snare";
+
+  assert.deepEqual(service.getState().project, expectedProject);
+  assert.equal(service.getState().history.length, 0);
+});
+
+test("createProjectService rejects non-serializable initial data", () => {
+  const initialProject = {
+    ...blankProject(),
+    unsupported: () => undefined,
+  } as unknown as Project;
+
+  assert.throws(
+    () => createProjectService({
+      initialProject,
+      catalog,
+      createHistoryId: () => id(700),
+      now: () => 1_700_000_000_000,
+    }),
+    (error: unknown) =>
+      error instanceof InvalidInputError && error.info.path === "initialProject",
+  );
+});
+
 test("project.update changes project fields and summarizes the project", () => {
   const project = blankProject();
 
@@ -1662,3 +1710,308 @@ test("a successful command ID is retried after its 100-outcome cache entry expir
   if (retried.ok) assert.equal(retried.deduplicated, false);
   assert.equal(service.getState().project.name, "First");
 });
+
+const malformedOperationIds: readonly [string, Project, Operation, string][] = [
+  [
+    "track target",
+    projectWithBasicDrums(),
+    { type: "track.delete", trackId: "track" },
+    "operation.trackId",
+  ],
+  [
+    "pattern target",
+    projectWithBasicDrums(),
+    { type: "pattern.delete", patternId: "pattern" },
+    "operation.patternId",
+  ],
+  [
+    "duplicate pattern ID",
+    projectWithBasicDrums(),
+    {
+      type: "pattern.duplicate",
+      patternId: id(11),
+      duplicatePatternId: "duplicate",
+      duplicateName: "Copy",
+      duplicateEventIds: [id(31)],
+    },
+    "operation.duplicatePatternId",
+  ],
+  [
+    "duplicate event ID list",
+    projectWithBasicDrums(),
+    {
+      type: "pattern.duplicate",
+      patternId: id(11),
+      duplicatePatternId: id(30),
+      duplicateName: "Copy",
+      duplicateEventIds: ["event"],
+    },
+    "operation.duplicateEventIds[0]",
+  ],
+  [
+    "arrangement clip target",
+    projectWithBasicDrums(),
+    { type: "arrangement.delete", clipId: "clip" },
+    "operation.clipId",
+  ],
+  [
+    "drum-hit update target",
+    projectWithBasicDrums(),
+    {
+      type: "drum-hits.update",
+      patternId: id(11),
+      updates: [{ hitId: "hit", changes: { startStep: 1 } }],
+    },
+    "operation.updates[0].hitId",
+  ],
+  [
+    "drum-hit ID list before duplicate processing",
+    projectWithBasicDrums(),
+    { type: "drum-hits.delete", patternId: id(11), hitIds: ["hit", "hit"] },
+    "operation.hitIds[0]",
+  ],
+  [
+    "synth-note update target",
+    projectWithLead(),
+    {
+      type: "synth-notes.update",
+      patternId: id(41),
+      updates: [{ noteId: "note", changes: { midiNote: 61 } }],
+    },
+    "operation.updates[0].noteId",
+  ],
+  [
+    "synth-note ID list before duplicate processing",
+    projectWithLead(),
+    { type: "synth-notes.delete", patternId: id(41), noteIds: ["note", "note"] },
+    "operation.noteIds[0]",
+  ],
+];
+
+for (const [name, project, operation, path] of malformedOperationIds) {
+  test(`operation UUID validation rejects malformed ${name}`, () => {
+    assert.throws(
+      () => reduceOperation(project, operation, catalog),
+      (error: unknown) =>
+        error instanceof InvalidInputError && error.info.path === path,
+    );
+  });
+}
+
+test("dispatch rejects a non-UUID command ID without mutation", () => {
+  const service = createTestService(blankProject());
+
+  const result = service.dispatch(createBassTrackCommand("command"));
+
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.equal(result.error.code, "invalid_input");
+    assert.equal(result.error.path, "command.id");
+  }
+  assert.deepEqual(service.getState().project, blankProject());
+  assert.equal(service.getState().history.length, 0);
+});
+
+test("restore rejects non-UUID command and target IDs without mutation", () => {
+  const service = createTestService(blankProject());
+
+  const invalidCommandId = service.restore({
+    id: "command", source: "manual", label: "Restore", targetEntryId: id(700),
+  });
+  const invalidTargetId = service.restore({
+    id: id(650), source: "manual", label: "Restore", targetEntryId: "history",
+  });
+
+  assert.equal(invalidCommandId.ok, false);
+  if (!invalidCommandId.ok) {
+    assert.equal(invalidCommandId.error.code, "invalid_input");
+    assert.equal(invalidCommandId.error.path, "command.id");
+  }
+  assert.equal(invalidTargetId.ok, false);
+  if (!invalidTargetId.ok) {
+    assert.equal(invalidTargetId.error.code, "invalid_input");
+    assert.equal(invalidTargetId.error.path, "command.targetEntryId");
+  }
+  assert.deepEqual(service.getState().project, blankProject());
+  assert.equal(service.getState().history.length, 0);
+});
+
+test("pattern.create reports IDs for its embedded events in source order", () => {
+  const project = projectWithBassAndDrums();
+  const drumResult = reduceOperation(project, {
+    type: "pattern.create",
+    pattern: {
+      id: id(60),
+      trackId: id(10),
+      name: "Drum fill",
+      kind: "drum",
+      lengthBars: 1,
+      events: [
+        { id: id(61), soundId: "snare", startStep: 4 },
+        { id: id(62), soundId: "hat", startStep: 8 },
+      ],
+    },
+  }, catalog);
+  const synthResult = reduceOperation(project, {
+    type: "pattern.create",
+    pattern: {
+      id: id(63),
+      trackId: id(20),
+      name: "Bass variation",
+      kind: "synth",
+      lengthBars: 1,
+      events: [
+        { id: id(64), midiNote: 40, startStep: 0, lengthSteps: 4 },
+        { id: id(65), midiNote: 43, startStep: 4, lengthSteps: 4 },
+      ],
+    },
+  }, catalog);
+
+  assert.deepEqual(drumResult.changes.created.drumHitIds, [id(61), id(62)]);
+  assert.deepEqual(synthResult.changes.created.synthNoteIds, [id(64), id(65)]);
+});
+
+test("mixed event updates report only changed IDs in source order", () => {
+  const drumProject: Project = {
+    ...projectWithBasicDrums(),
+    patterns: [{
+      id: id(11),
+      trackId: id(10),
+      name: "Beat",
+      kind: "drum",
+      lengthBars: 1,
+      events: [
+        { id: id(13), soundId: "kick", startStep: 0 },
+        { id: id(14), soundId: "snare", startStep: 4 },
+        { id: id(15), soundId: "hat", startStep: 8 },
+      ],
+    }],
+  };
+  const synthProject: Project = {
+    ...projectWithLead(),
+    patterns: [{
+      id: id(41),
+      trackId: id(40),
+      name: "Lead phrase",
+      kind: "synth",
+      lengthBars: 1,
+      events: [
+        { id: id(42), midiNote: 60, startStep: 0, lengthSteps: 4 },
+        { id: id(43), midiNote: 64, startStep: 4, lengthSteps: 4 },
+        { id: id(44), midiNote: 67, startStep: 8, lengthSteps: 4 },
+      ],
+    }],
+  };
+
+  const drumResult = reduceOperation(drumProject, {
+    type: "drum-hits.update",
+    patternId: id(11),
+    updates: [
+      { hitId: id(15), changes: { startStep: 12 } },
+      { hitId: id(14), changes: { soundId: "snare", startStep: 4 } },
+      { hitId: id(13), changes: { soundId: "hat" } },
+    ],
+  }, catalog);
+  const synthResult = reduceOperation(synthProject, {
+    type: "synth-notes.update",
+    patternId: id(41),
+    updates: [
+      { noteId: id(44), changes: { lengthSteps: 2 } },
+      { noteId: id(43), changes: { midiNote: 64, startStep: 4, lengthSteps: 4 } },
+      { noteId: id(42), changes: { midiNote: 61 } },
+    ],
+  }, catalog);
+
+  assert.deepEqual(drumResult.changes.updated.drumHitIds, [id(13), id(15)]);
+  assert.deepEqual(synthResult.changes.updated.synthNoteIds, [id(42), id(44)]);
+});
+
+test("invalid generated history IDs leave state and command cache unchanged", () => {
+  let historyId = "history";
+  const service = createProjectService({
+    initialProject: blankProject(),
+    catalog,
+    createHistoryId: () => historyId,
+    now: () => 1_700_000_000_000,
+  });
+  const command = updateProjectNameCommand(id(660), "Changed");
+  const before = structuredClone(service.getState());
+
+  const rejected = service.dispatch(command);
+
+  assert.equal(rejected.ok, false);
+  if (!rejected.ok) {
+    assert.equal(rejected.error.code, "invalid_input");
+    assert.equal(rejected.error.path, "historyEntry.id");
+  }
+  assert.deepEqual(service.getState(), before);
+
+  historyId = id(700);
+  const retried = service.dispatch(command);
+  assert.equal(retried.ok, true);
+  if (retried.ok) assert.equal(retried.deduplicated, false);
+  assert.equal(service.getState().project.name, "Changed");
+});
+
+test("duplicate retained history IDs leave state and command cache unchanged", () => {
+  let historyId = id(700);
+  const service = createProjectService({
+    initialProject: blankProject(),
+    catalog,
+    createHistoryId: () => historyId,
+    now: () => 1_700_000_000_000,
+  });
+  assert.equal(service.dispatch(updateProjectNameCommand(id(661), "First")).ok, true);
+  const command = updateProjectNameCommand(id(662), "Second");
+  const before = structuredClone(service.getState());
+
+  const rejected = service.dispatch(command);
+
+  assert.equal(rejected.ok, false);
+  if (!rejected.ok) {
+    assert.equal(rejected.error.code, "conflict");
+    assert.equal(rejected.error.path, "historyEntry.id");
+  }
+  assert.deepEqual(service.getState(), before);
+
+  historyId = id(701);
+  const retried = service.dispatch(command);
+  assert.equal(retried.ok, true);
+  if (retried.ok) assert.equal(retried.deduplicated, false);
+  assert.equal(service.getState().project.name, "Second");
+});
+
+const invalidHistoryTimestamps: readonly [string, number][] = [
+  ["NaN", Number.NaN],
+  ["infinite", Number.POSITIVE_INFINITY],
+  ["negative", -1],
+  ["fractional", 1.5],
+];
+
+for (const [name, invalidTimestamp] of invalidHistoryTimestamps) {
+  test(`invalid generated ${name} history timestamp leaves service state unchanged`, () => {
+    let timestamp = invalidTimestamp;
+    const service = createProjectService({
+      initialProject: blankProject(),
+      catalog,
+      createHistoryId: () => id(700),
+      now: () => timestamp,
+    });
+    const command = updateProjectNameCommand(id(670), "Changed");
+    const before = structuredClone(service.getState());
+
+    const rejected = service.dispatch(command);
+
+    assert.equal(rejected.ok, false);
+    if (!rejected.ok) {
+      assert.equal(rejected.error.code, "invalid_input");
+      assert.equal(rejected.error.path, "historyEntry.createdAt");
+    }
+    assert.deepEqual(service.getState(), before);
+
+    timestamp = 1_700_000_000_000;
+    const retried = service.dispatch(command);
+    assert.equal(retried.ok, true);
+    if (retried.ok) assert.equal(retried.deduplicated, false);
+  });
+}

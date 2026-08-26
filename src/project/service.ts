@@ -11,8 +11,8 @@ import {
   type Operation,
   type RestoreCommand,
 } from "./commands.ts";
-import { DomainError, InvalidInputError, LimitExceededError, NotFoundError } from "./errors.ts";
-import { PROJECT_CAPS, type Project, type SoundCatalog, validateProject } from "./model.ts";
+import { ConflictError, DomainError, InvalidInputError, LimitExceededError, NotFoundError } from "./errors.ts";
+import { assertUuid, PROJECT_CAPS, type Project, type SoundCatalog, validateProject } from "./model.ts";
 import { reduceOperation, summarizeProjectDiff } from "./reducer.ts";
 
 export interface ProjectServiceState {
@@ -173,17 +173,20 @@ const operationsFor = (command: Command): readonly Operation[] => {
   return command.operations;
 };
 
-const cloneOperation = (operation: unknown, path: string): Operation => {
+const cloneJson = <T>(value: unknown, path: string): T => {
+  let serialized: string | undefined;
   try {
-    const clone = structuredClone(operation);
-    const serialized = JSON.stringify(clone);
-    return serialized === undefined
-      ? invalidCommand(path, "must be JSON-serializable")
-      : JSON.parse(serialized) as Operation;
+    serialized = JSON.stringify(structuredClone(value));
   } catch {
     return invalidCommand(path, "must be structured-cloneable and JSON-serializable");
   }
+  return serialized === undefined
+    ? invalidCommand(path, "must be JSON-serializable")
+    : JSON.parse(serialized) as T;
 };
+
+const cloneOperation = (operation: unknown, path: string): Operation =>
+  cloneJson<Operation>(operation, path);
 
 const actionFor = (kind: Command["kind"], operations: readonly Operation[]): HistoryAction => kind === "operation"
   ? { kind: "operation", operation: operations[0]! }
@@ -202,7 +205,9 @@ const failureAtBatchIndex = (project: Project, error: DomainError, batchIndex: n
 });
 
 export function createProjectService(options: ProjectServiceOptions): ProjectService {
-  let project = options.initialProject;
+  const initialProject = cloneJson<Project>(options.initialProject, "initialProject");
+  validateProject(initialProject, options.catalog);
+  let project = initialProject;
   let history: readonly HistoryEntry[] = [];
   let historyCursor = -1;
   const successfulOutcomes = new Map<string, SuccessfulOutcome>();
@@ -222,12 +227,25 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
     nextProject: Project,
     changes: ChangeSummary,
   ): HistoryEntry => {
+    const historyId = options.createHistoryId();
+    assertUuid(historyId, "historyEntry.id");
+    if (history.some((entry) => entry.id === historyId)) {
+      throw new ConflictError({
+        path: "historyEntry.id",
+        message: "must be unique among retained history entries",
+        relatedIds: [historyId],
+      });
+    }
+    const createdAt = options.now();
+    if (!Number.isInteger(createdAt) || createdAt < 0) {
+      invalidCommand("historyEntry.createdAt", "must be a finite non-negative integer");
+    }
     const historyEntry: HistoryEntry = {
-      id: options.createHistoryId(),
+      id: historyId,
       commandId,
       source,
       label,
-      createdAt: options.now(),
+      createdAt,
       action,
       before: project,
       after: nextProject,
@@ -255,6 +273,7 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
           };
         }
 
+        assertUuid(commandId, "command.id");
         validateCommand(command);
         const operations = operationsFor(command);
         let nextProject = project;
@@ -327,11 +346,14 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
           return { ok: true, deduplicated: true, project, ...existing };
         }
 
+        assertUuid(commandId, "command.id");
         const record = validateCommandMetadata(command);
-        if (typeof record.targetEntryId !== "string" || record.targetEntryId.length === 0) {
-          invalidCommand("command.targetEntryId", "must be a non-empty string");
-        }
-        const target = history.find((entry) => entry.id === record.targetEntryId);
+        const targetEntryId = typeof record.targetEntryId === "string"
+          && record.targetEntryId.length > 0
+          ? record.targetEntryId
+          : invalidCommand("command.targetEntryId", "must be a non-empty string");
+        assertUuid(targetEntryId, "command.targetEntryId");
+        const target = history.find((entry) => entry.id === targetEntryId);
         if (target === undefined) {
           throw new NotFoundError({
             path: "command.targetEntryId",

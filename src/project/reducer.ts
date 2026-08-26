@@ -1,12 +1,13 @@
-import { isDeepStrictEqual } from "node:util";
-
 import { emptyChangeSummary, type ChangeSummary, type Operation, type Reduction } from "./commands.ts";
 import { ConflictError, InvalidInputError, NotFoundError } from "./errors.ts";
 import type { ArrangementClip, DrumHit, DrumPattern, Pattern, Project, SoundCatalog, SynthNote, SynthPattern, Track } from "./model.ts";
-import { validateProject } from "./model.ts";
+import { assertUuid, validateProject } from "./model.ts";
 
 type Diff = { readonly created: readonly string[]; readonly updated: readonly string[]; readonly deleted: readonly string[] };
 type Event = { readonly key: string; readonly id: string; readonly value: unknown };
+
+const isJsonEqual = (left: unknown, right: unknown): boolean =>
+  JSON.stringify(left) === JSON.stringify(right);
 
 const withChanges = (
   changes: Partial<{ readonly created: Partial<ChangeSummary["created"]>; readonly updated: Partial<ChangeSummary["updated"]>; readonly deleted: Partial<ChangeSummary["deleted"]> }>,
@@ -20,6 +21,7 @@ const withChanges = (
 };
 
 const requireTrack = (project: Project, trackId: string): Track => {
+  assertUuid(trackId, "operation.trackId");
   const track = project.tracks.find((candidate) => candidate.id === trackId);
   if (track === undefined) {
     throw new NotFoundError({ path: "operation.trackId", message: "must reference an existing track" });
@@ -28,6 +30,7 @@ const requireTrack = (project: Project, trackId: string): Track => {
 };
 
 const requirePattern = (project: Project, patternId: string): Pattern => {
+  assertUuid(patternId, "operation.patternId");
   const pattern = project.patterns.find((candidate) => candidate.id === patternId);
   if (pattern === undefined) {
     throw new NotFoundError({ path: "operation.patternId", message: "must reference an existing pattern" });
@@ -36,6 +39,7 @@ const requirePattern = (project: Project, patternId: string): Pattern => {
 };
 
 const requireArrangementClip = (project: Project, clipId: string): ArrangementClip => {
+  assertUuid(clipId, "operation.clipId");
   const clip = project.arrangement.find((candidate) => candidate.id === clipId);
   if (clip === undefined) {
     throw new NotFoundError({ path: "operation.clipId", message: "must reference an existing arrangement clip" });
@@ -59,7 +63,8 @@ const requireSynthPattern = (project: Project, patternId: string): SynthPattern 
   return pattern;
 };
 
-const requireDrumHit = (pattern: DrumPattern, hitId: string): DrumHit => {
+const requireDrumHit = (pattern: DrumPattern, hitId: string, path: string): DrumHit => {
+  assertUuid(hitId, path);
   const hit = pattern.events.find((candidate) => candidate.id === hitId);
   if (hit === undefined) {
     throw new NotFoundError({ path: "operation.hitId", message: "must reference an existing drum hit" });
@@ -67,7 +72,8 @@ const requireDrumHit = (pattern: DrumPattern, hitId: string): DrumHit => {
   return hit;
 };
 
-const requireSynthNote = (pattern: SynthPattern, noteId: string): SynthNote => {
+const requireSynthNote = (pattern: SynthPattern, noteId: string, path: string): SynthNote => {
+  assertUuid(noteId, path);
   const note = pattern.events.find((candidate) => candidate.id === noteId);
   if (note === undefined) {
     throw new NotFoundError({ path: "operation.noteId", message: "must reference an existing synth note" });
@@ -79,6 +85,13 @@ const assertUniqueOperationIds = (ids: readonly string[], path: string): void =>
   if (new Set(ids).size !== ids.length) {
     throw new ConflictError({ path, message: "must not contain duplicate IDs" });
   }
+};
+
+const assertOperationIds = (
+  ids: readonly string[],
+  pathForIndex: (index: number) => string,
+): void => {
+  ids.forEach((id, index) => assertUuid(id, pathForIndex(index)));
 };
 
 const replacePattern = (project: Project, updatedPattern: Pattern): Project => ({
@@ -123,7 +136,7 @@ const diff = <T extends { readonly id: string }>(before: readonly T[], after: re
   const afterById = new Map(after.map((entity) => [entity.id, entity]));
   return {
     created: after.filter((entity) => !beforeById.has(entity.id)).map((entity) => entity.id),
-    updated: after.filter((entity) => beforeById.has(entity.id) && !isDeepStrictEqual(beforeById.get(entity.id), entity)).map((entity) => entity.id),
+    updated: after.filter((entity) => beforeById.has(entity.id) && !isJsonEqual(beforeById.get(entity.id), entity)).map((entity) => entity.id),
     deleted: before.filter((entity) => !afterById.has(entity.id)).map((entity) => entity.id),
   };
 };
@@ -140,7 +153,7 @@ const eventDiff = (before: readonly Event[], after: readonly Event[]): Diff => {
   const afterByKey = new Map(after.map((event) => [event.key, event.value]));
   return {
     created: after.filter((event) => !beforeByKey.has(event.key)).map((event) => event.id),
-    updated: after.filter((event) => beforeByKey.has(event.key) && !isDeepStrictEqual(beforeByKey.get(event.key), event.value)).map((event) => event.id),
+    updated: after.filter((event) => beforeByKey.has(event.key) && !isJsonEqual(beforeByKey.get(event.key), event.value)).map((event) => event.id),
     deleted: before.filter((event) => !afterByKey.has(event.key)).map((event) => event.id),
   };
 };
@@ -168,7 +181,7 @@ export function reduceOperation(project: Project, operation: Operation, catalog:
         ...(operation.changes.bpm === undefined ? {} : { bpm: operation.changes.bpm }),
         ...(operation.changes.masterVolumeDb === undefined ? {} : { masterVolumeDb: operation.changes.masterVolumeDb }),
       };
-      if (isDeepStrictEqual(project, candidate)) return { project, changes: emptyChangeSummary() };
+      if (isJsonEqual(project, candidate)) return { project, changes: emptyChangeSummary() };
       validateProject(candidate, catalog);
       return { project: candidate, changes: withChanges({ updated: { projectIds: [project.id] } }) };
     }
@@ -188,7 +201,7 @@ export function reduceOperation(project: Project, operation: Operation, catalog:
         ...(operation.changes.muted === undefined ? {} : { muted: operation.changes.muted }),
         ...(operation.changes.soloed === undefined ? {} : { soloed: operation.changes.soloed }),
       };
-      if (isDeepStrictEqual(track, updatedTrack)) return { project, changes: emptyChangeSummary() };
+      if (isJsonEqual(track, updatedTrack)) return { project, changes: emptyChangeSummary() };
       assertDrumInstrumentCompatibility(project, updatedTrack, catalog);
       const candidate: Project = {
         ...project,
@@ -225,10 +238,26 @@ export function reduceOperation(project: Project, operation: Operation, catalog:
     case "pattern.create": {
       const candidate: Project = { ...project, patterns: [...project.patterns, operation.pattern] };
       validateProject(candidate, catalog);
-      return { project: candidate, changes: withChanges({ created: { patternIds: [operation.pattern.id] } }) };
+      return {
+        project: candidate,
+        changes: withChanges({ created: {
+          patternIds: [operation.pattern.id],
+          drumHitIds: operation.pattern.kind === "drum"
+            ? operation.pattern.events.map((event) => event.id)
+            : [],
+          synthNoteIds: operation.pattern.kind === "synth"
+            ? operation.pattern.events.map((event) => event.id)
+            : [],
+        } }),
+      };
     }
     case "pattern.duplicate": {
       const pattern = requirePattern(project, operation.patternId);
+      assertUuid(operation.duplicatePatternId, "operation.duplicatePatternId");
+      assertOperationIds(
+        operation.duplicateEventIds,
+        (index) => `operation.duplicateEventIds[${index}]`,
+      );
       const sourceEventIds = new Set(pattern.events.map((event) => event.id));
       if (
         operation.duplicateEventIds.length !== pattern.events.length
@@ -264,7 +293,7 @@ export function reduceOperation(project: Project, operation: Operation, catalog:
         ...(operation.changes.name === undefined ? {} : { name: operation.changes.name }),
         ...(operation.changes.lengthBars === undefined ? {} : { lengthBars: operation.changes.lengthBars }),
       };
-      if (isDeepStrictEqual(pattern, updatedPattern)) return { project, changes: emptyChangeSummary() };
+      if (isJsonEqual(pattern, updatedPattern)) return { project, changes: emptyChangeSummary() };
       const candidate = replacePattern(project, updatedPattern);
       validateProject(candidate, catalog);
       return { project: candidate, changes: withChanges({ updated: { patternIds: [pattern.id] } }) };
@@ -307,7 +336,7 @@ export function reduceOperation(project: Project, operation: Operation, catalog:
         ...(operation.changes.startBar === undefined ? {} : { startBar: operation.changes.startBar }),
         ...(operation.changes.repeatCount === undefined ? {} : { repeatCount: operation.changes.repeatCount }),
       };
-      if (isDeepStrictEqual(clip, updatedClip)) return { project, changes: emptyChangeSummary() };
+      if (isJsonEqual(clip, updatedClip)) return { project, changes: emptyChangeSummary() };
       const candidate: Project = {
         ...project,
         arrangement: project.arrangement.map((candidateClip) => candidateClip.id === clip.id ? updatedClip : candidateClip),
@@ -334,8 +363,11 @@ export function reduceOperation(project: Project, operation: Operation, catalog:
     case "drum-hits.update": {
       const pattern = requireDrumPattern(project, operation.patternId);
       const hitIds = operation.updates.map((update) => update.hitId);
+      assertOperationIds(hitIds, (index) => `operation.updates[${index}].hitId`);
       assertUniqueOperationIds(hitIds, "operation.updates");
-      for (const hitId of hitIds) requireDrumHit(pattern, hitId);
+      for (const [index, hitId] of hitIds.entries()) {
+        requireDrumHit(pattern, hitId, `operation.updates[${index}].hitId`);
+      }
       const changesById = new Map(operation.updates.map((update) => [update.hitId, update.changes]));
       const updatedPattern: DrumPattern = {
         ...pattern,
@@ -348,15 +380,21 @@ export function reduceOperation(project: Project, operation: Operation, catalog:
           };
         }),
       };
-      if (isDeepStrictEqual(pattern, updatedPattern)) return { project, changes: emptyChangeSummary() };
+      const changedHitIds = updatedPattern.events
+        .filter((hit, index) => !isJsonEqual(pattern.events[index], hit))
+        .map((hit) => hit.id);
+      if (changedHitIds.length === 0) return { project, changes: emptyChangeSummary() };
       const candidate = replacePattern(project, updatedPattern);
       validateProject(candidate, catalog);
-      return { project: candidate, changes: withChanges({ updated: { drumHitIds: hitIds } }) };
+      return { project: candidate, changes: withChanges({ updated: { drumHitIds: changedHitIds } }) };
     }
     case "drum-hits.delete": {
       const pattern = requireDrumPattern(project, operation.patternId);
+      assertOperationIds(operation.hitIds, (index) => `operation.hitIds[${index}]`);
       assertUniqueOperationIds(operation.hitIds, "operation.hitIds");
-      for (const hitId of operation.hitIds) requireDrumHit(pattern, hitId);
+      for (const [index, hitId] of operation.hitIds.entries()) {
+        requireDrumHit(pattern, hitId, `operation.hitIds[${index}]`);
+      }
       if (operation.hitIds.length === 0) return { project, changes: emptyChangeSummary() };
       const hitIds = new Set(operation.hitIds);
       const candidate = replacePattern(project, { ...pattern, events: pattern.events.filter((hit) => !hitIds.has(hit.id)) });
@@ -373,8 +411,11 @@ export function reduceOperation(project: Project, operation: Operation, catalog:
     case "synth-notes.update": {
       const pattern = requireSynthPattern(project, operation.patternId);
       const noteIds = operation.updates.map((update) => update.noteId);
+      assertOperationIds(noteIds, (index) => `operation.updates[${index}].noteId`);
       assertUniqueOperationIds(noteIds, "operation.updates");
-      for (const noteId of noteIds) requireSynthNote(pattern, noteId);
+      for (const [index, noteId] of noteIds.entries()) {
+        requireSynthNote(pattern, noteId, `operation.updates[${index}].noteId`);
+      }
       const changesById = new Map(operation.updates.map((update) => [update.noteId, update.changes]));
       const updatedPattern: SynthPattern = {
         ...pattern,
@@ -388,15 +429,21 @@ export function reduceOperation(project: Project, operation: Operation, catalog:
           };
         }),
       };
-      if (isDeepStrictEqual(pattern, updatedPattern)) return { project, changes: emptyChangeSummary() };
+      const changedNoteIds = updatedPattern.events
+        .filter((note, index) => !isJsonEqual(pattern.events[index], note))
+        .map((note) => note.id);
+      if (changedNoteIds.length === 0) return { project, changes: emptyChangeSummary() };
       const candidate = replacePattern(project, updatedPattern);
       validateProject(candidate, catalog);
-      return { project: candidate, changes: withChanges({ updated: { synthNoteIds: noteIds } }) };
+      return { project: candidate, changes: withChanges({ updated: { synthNoteIds: changedNoteIds } }) };
     }
     case "synth-notes.delete": {
       const pattern = requireSynthPattern(project, operation.patternId);
+      assertOperationIds(operation.noteIds, (index) => `operation.noteIds[${index}]`);
       assertUniqueOperationIds(operation.noteIds, "operation.noteIds");
-      for (const noteId of operation.noteIds) requireSynthNote(pattern, noteId);
+      for (const [index, noteId] of operation.noteIds.entries()) {
+        requireSynthNote(pattern, noteId, `operation.noteIds[${index}]`);
+      }
       if (operation.noteIds.length === 0) return { project, changes: emptyChangeSummary() };
       const noteIds = new Set(operation.noteIds);
       const candidate = replacePattern(project, { ...pattern, events: pattern.events.filter((note) => !noteIds.has(note.id)) });
