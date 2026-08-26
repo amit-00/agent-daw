@@ -13,16 +13,10 @@ type IconName =
   | "draw"
   | "focus"
   | "history"
-  | "loop"
   | "mixer"
-  | "pause"
-  | "play"
-  | "redo"
   | "select"
   | "sounds"
-  | "split"
-  | "stop"
-  | "undo";
+  | "split";
 
 interface Track {
   readonly id: TrackId;
@@ -117,16 +111,10 @@ const ICONS: Readonly<Record<IconName, string>> = {
   draw: "✎",
   focus: "⌖",
   history: "↶",
-  loop: "↻",
   mixer: "≡",
-  pause: "Ⅱ",
-  play: "▶",
-  redo: "↷",
   select: "↖",
   sounds: "♬",
   split: "✂",
-  stop: "■",
-  undo: "↶",
 };
 
 const DRUM_LEVELS = [33, 58, 41, 75, 51, 86, 42, 67, 47, 80, 57, 91, 49, 70, 38, 76, 53, 88, 44, 72, 35, 61, 46, 82] as const;
@@ -140,6 +128,23 @@ function Icon({ name, size = 16 }: Readonly<{ name: IconName; size?: number }>):
     <span className="icon" style={{ fontSize: size }} aria-hidden="true">
       {ICONS[name]}
     </span>
+  );
+}
+
+type TransportIconName = "loop" | "pause" | "play" | "record" | "redo" | "speaker" | "stop" | "undo";
+
+function TransportIcon({ name }: Readonly<{ name: TransportIconName }>): ReactElement {
+  return (
+    <svg className="transport-icon" viewBox="0 0 24 24" aria-hidden="true">
+      {name === "play" ? <path d="m8 5 11 7-11 7V5Z" fill="currentColor" /> : null}
+      {name === "pause" ? <path d="M7 5h3v14H7zm7 0h3v14h-3z" fill="currentColor" /> : null}
+      {name === "stop" ? <rect x="8" y="8" width="8" height="8" rx="1" fill="currentColor" /> : null}
+      {name === "record" ? <circle cx="12" cy="12" r="4" fill="currentColor" /> : null}
+      {name === "loop" ? <path d="M17.5 7H8a5 5 0 0 0-5 5m3.5 5H16a5 5 0 0 0 5-5M17 3.5 20.5 7 17 10.5M7 13.5 3.5 17 7 20.5" /> : null}
+      {name === "undo" ? <path d="M9 8H4m0 0 3-3M4 8l3 3m-3-3h9a5 5 0 0 1 5 5v1" /> : null}
+      {name === "redo" ? <path d="M15 8h5m0 0-3-3m3 3-3 3m3-3h-9a5 5 0 0 0-5 5v1" /> : null}
+      {name === "speaker" ? <path d="M5 10v4h3l4 3V7L8 10H5Zm10-1.5a5 5 0 0 1 0 7m2-9a8 8 0 0 1 0 11" /> : null}
+    </svg>
   );
 }
 
@@ -270,71 +275,79 @@ export default function StudioPage(): ReactElement {
 
       <section className="workspace" id="studio">
         <header className="transport">
-          <button
-            className={sidebarOpen ? "icon-button panel-toggle active" : "icon-button panel-toggle"}
-            type="button"
-            aria-label={sidebarOpen ? "Close menu" : "Open menu"}
-            aria-pressed={sidebarOpen}
-            onClick={() => setSidebarOpen((open) => !open)}
-          >
-            <Icon name="mixer" />
-          </button>
-          <button className="project-switcher" type="button">
-            <span className="project-icon">◫</span>
-            <span>Midnight Polaroid</span>
-            <span className="version">v1</span>
-            <Icon name="chevron" />
-          </button>
-
-          <div className="transport-meta" aria-label="Project tempo">
-            <span><small>BPM</small><strong>118</strong></span>
-            <span className="time-readout">{formatTime(playhead)}</span>
-          </div>
-
-          <div className="transport-controls">
+          <div className="transport-leading">
             <button
-              className="play-button"
+              className={sidebarOpen ? "icon-button panel-toggle active" : "icon-button panel-toggle"}
               type="button"
-              aria-label={isPlaying ? "Pause" : "Play"}
-              aria-pressed={isPlaying}
-              onClick={() => setIsPlaying((playing) => !playing)}
+              aria-label={sidebarOpen ? "Close menu" : "Open menu"}
+              aria-pressed={sidebarOpen}
+              onClick={() => setSidebarOpen((open) => !open)}
             >
-              <Icon name={isPlaying ? "pause" : "play"} size={13} />
+              <Icon name="mixer" />
             </button>
-            <button className="icon-button stop" type="button" aria-label="Stop" onClick={() => setIsPlaying(false)}>
-              <Icon name="stop" size={9} />
-            </button>
-            <span className={isPlaying ? "record-dot pulsing" : "record-dot"} aria-hidden="true" />
-            <button className="icon-button loop" type="button" aria-label="Loop playback">
-              <Icon name="loop" size={12} />
+            <button className="project-switcher" type="button">
+              <span className="project-icon">◫</span>
+              <span>Midnight Polaroid</span>
+              <span className="version">v1</span>
+              <Icon name="chevron" />
             </button>
           </div>
 
-          <div className="history-controls" aria-label="Edit history">
-            <button className="icon-button" type="button" aria-label="Undo"><Icon name="undo" /></button>
-            <button className="icon-button" type="button" aria-label="Redo"><Icon name="redo" /></button>
+          <div className="transport-console">
+            <div className="transport-meta" aria-label="Project tempo">
+              <span><small>BPM</small><strong>118</strong></span>
+              <span className="time-readout">{formatTime(playhead)}</span>
+            </div>
+
+            <div className="transport-controls" aria-label="Playback controls">
+              <button
+                className="play-button"
+                type="button"
+                aria-label={isPlaying ? "Pause" : "Play"}
+                aria-pressed={isPlaying}
+                onClick={() => setIsPlaying((playing) => !playing)}
+              >
+                <TransportIcon name={isPlaying ? "pause" : "play"} />
+              </button>
+              <button className="transport-button" type="button" aria-label="Stop" onClick={() => setIsPlaying(false)}>
+                <TransportIcon name="stop" />
+              </button>
+              <button className="transport-button record-button" type="button" aria-label="Record">
+                <TransportIcon name="record" />
+              </button>
+              <button className="transport-button" type="button" aria-label="Loop playback">
+                <TransportIcon name="loop" />
+              </button>
+            </div>
+
+            <div className="history-controls" aria-label="Edit history">
+              <button className="transport-button" type="button" aria-label="Undo"><TransportIcon name="undo" /></button>
+              <button className="transport-button" type="button" aria-label="Redo"><TransportIcon name="redo" /></button>
+            </div>
+
+            <div className="master-output" aria-label="Master output level">
+              <TransportIcon name="speaker" />
+              <span className="output-line"><span /></span>
+            </div>
           </div>
 
-          <div className="master-output" aria-label="Master output level">
-            <span className="speaker">◖</span>
-            <span className="output-line"><span /></span>
+          <div className="transport-actions">
+            <button
+              className={activityOpen ? "activity-button active" : "activity-button"}
+              type="button"
+              aria-label={activityOpen ? "Hide activity" : "Show activity"}
+              aria-pressed={activityOpen}
+              onClick={() => setActivityOpen((open) => !open)}
+            >
+              <Icon name="activity" />
+              Activity
+            </button>
+
+            <button className="export-button" type="button">
+              <Icon name="download" />
+              Export
+            </button>
           </div>
-
-          <button
-            className={activityOpen ? "activity-button active" : "activity-button"}
-            type="button"
-            aria-label={activityOpen ? "Hide activity" : "Show activity"}
-            aria-pressed={activityOpen}
-            onClick={() => setActivityOpen((open) => !open)}
-          >
-            <Icon name="activity" />
-            Activity
-          </button>
-
-          <button className="export-button" type="button">
-            <Icon name="download" />
-            Export
-          </button>
         </header>
 
         <div className="canvas-wrap">
