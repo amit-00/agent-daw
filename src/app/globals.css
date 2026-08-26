@@ -703,8 +703,74 @@ input:focus-visible {
   justify-content: center;
 }
 
-.sequence-editor {
+.pattern-editor {
+  display: grid;
   height: calc(100% - 42px);
+  grid-template-columns: 214px minmax(0, 1fr);
+}
+
+.pattern-sidebar {
+  min-width: 0;
+  padding: 16px 10px;
+  overflow-y: auto;
+  border-right: 1px solid var(--line);
+  background: rgba(0, 0, 0, 0.22);
+}
+
+.pattern-list {
+  display: grid;
+  margin-top: 12px;
+  gap: 4px;
+}
+
+.pattern-item {
+  min-width: 0;
+  padding: 8px 9px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: #77777e;
+  text-align: left;
+  background: transparent;
+  cursor: pointer;
+}
+
+.pattern-item:hover {
+  color: #d4d4d9;
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.pattern-item.active {
+  border-color: rgba(169, 119, 255, 0.38);
+  color: #f1e9ff;
+  background: rgba(169, 119, 255, 0.13);
+}
+
+.pattern-item strong,
+.pattern-item small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pattern-item strong {
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.pattern-item small {
+  margin-top: 3px;
+  color: #66666d;
+  font-size: 9px;
+}
+
+.pattern-item.active small {
+  color: #b7a7d4;
+}
+
+.sequence-editor {
+  min-width: 0;
+  height: 100%;
   padding: 14px 16px 16px;
 }
 

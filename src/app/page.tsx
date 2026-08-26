@@ -4,7 +4,7 @@ import type { CSSProperties, Dispatch, ReactElement, SetStateAction } from "reac
 import { useState } from "react";
 
 type TrackId = "drums" | "bass" | "chords" | "melody" | "pad";
-type EditorTab = "mixer" | "sequence";
+type EditorTab = "mixer" | "pattern";
 type IconName =
   | "activity"
   | "chevron"
@@ -28,6 +28,12 @@ interface Clip {
   readonly start: number;
   readonly width: number;
   readonly detail: string;
+}
+
+interface Pattern {
+  readonly id: string;
+  readonly clipId: string;
+  readonly steps: readonly number[];
 }
 
 const TRACKS: readonly Track[] = [
@@ -98,7 +104,16 @@ const NOTE_MARKS = [
   [58, 18, 13], [67, 43, 21], [82, 29, 12], [91, 56, 7],
 ] as const;
 const SEQUENCE_NOTES = ["C5", "A4", "F4", "C4"] as const;
-const INITIAL_SEQUENCE_STEPS = [1, 6, 12, 17, 23, 29, 36, 42, 49, 55, 60] as const;
+const PROJECT_PATTERNS: readonly Pattern[] = [
+  { id: "neon-main", clipId: "drums-a", steps: [1, 6, 12, 17, 23, 29, 36, 42, 49, 55, 60] },
+  { id: "neon-lift", clipId: "drums-b", steps: [0, 4, 8, 13, 16, 20, 24, 29, 33, 37, 40, 45, 49, 53, 56, 61] },
+  { id: "orbit-a", clipId: "bass-a", steps: [2, 10, 18, 26, 35, 42, 50, 58] },
+  { id: "orbit-b", clipId: "bass-b", steps: [5, 12, 19, 28, 36, 43, 52, 59] },
+  { id: "glasshouse", clipId: "chords-a", steps: [1, 6, 12, 17, 23, 29, 36, 42, 49, 55, 60] },
+  { id: "glasshouse-open", clipId: "chords-b", steps: [3, 10, 18, 25, 34, 41, 50, 57] },
+  { id: "afterglow", clipId: "melody-a", steps: [2, 9, 14, 22, 30, 39, 45, 54, 61] },
+  { id: "night-air", clipId: "pad-a", steps: [0, 8, 16, 24, 32, 40, 48, 56] },
+] as const;
 
 function Icon({ name, size = 16 }: Readonly<{ name: IconName; size?: number }>): ReactElement {
   return (
@@ -205,15 +220,22 @@ function formatTime(playhead: number): string {
 export default function StudioPage(): ReactElement {
   const [isPlaying, setIsPlaying] = useState(false);
   const [selectedClipId, setSelectedClipId] = useState(CLIPS[4].id);
-  const [editorTab, setEditorTab] = useState<EditorTab>("sequence");
+  const [selectedPatternId, setSelectedPatternId] = useState("glasshouse");
+  const [editorTab, setEditorTab] = useState<EditorTab>("pattern");
   const [activityOpen, setActivityOpen] = useState(true);
   const [playhead, setPlayhead] = useState(27);
   const [mutedTracks, setMutedTracks] = useState<ReadonlySet<TrackId>>(new Set());
   const [soloTracks, setSoloTracks] = useState<ReadonlySet<TrackId>>(new Set());
-  const [sequenceSteps, setSequenceSteps] = useState<ReadonlySet<number>>(new Set(INITIAL_SEQUENCE_STEPS));
+  const [sequenceSteps, setSequenceSteps] = useState<ReadonlySet<number>>(new Set(PROJECT_PATTERNS[4].steps));
 
   const selectedClip = CLIPS.find((clip) => clip.id === selectedClipId) ?? CLIPS[0];
   const selectedTrack = TRACKS.find((track) => track.id === selectedClip.trackId) ?? TRACKS[0];
+  const selectedPattern = PROJECT_PATTERNS.find((pattern) => pattern.id === selectedPatternId) ?? PROJECT_PATTERNS[0];
+  const selectPattern = (pattern: Pattern): void => {
+    setSelectedPatternId(pattern.id);
+    setSelectedClipId(pattern.clipId);
+    setSequenceSteps(new Set(pattern.steps));
+  };
   return (
     <main className="studio-shell">
       <section className="workspace" id="studio">
@@ -321,7 +343,14 @@ export default function StudioPage(): ReactElement {
                     type="button"
                     aria-label={`Select ${clip.name}`}
                     aria-pressed={selectedClip.id === clip.id}
-                    onClick={() => setSelectedClipId(clip.id)}
+                    onClick={() => {
+                      const pattern = PROJECT_PATTERNS.find((item) => item.clipId === clip.id);
+                      if (pattern) {
+                        selectPattern(pattern);
+                      } else {
+                        setSelectedClipId(clip.id);
+                      }
+                    }}
                     style={{
                       "--clip-color": track.color,
                       "--clip-start": `${clip.start}%`,
@@ -353,22 +382,43 @@ export default function StudioPage(): ReactElement {
 
           <aside className="editor-drawer glass-card" aria-label="Track editor">
               <div className="editor-header">
-                <span><Icon name={editorTab === "sequence" ? "draw" : "mixer"} /> Track editor</span>
+                <span><Icon name={editorTab === "pattern" ? "draw" : "mixer"} /> Track editor</span>
                 <div className="editor-tabs">
-                  <button className={editorTab === "sequence" ? "active" : ""} type="button" onClick={() => setEditorTab("sequence")}>Sequence</button>
+                  <button className={editorTab === "pattern" ? "active" : ""} type="button" onClick={() => setEditorTab("pattern")}>Pattern</button>
                   <button className={editorTab === "mixer" ? "active" : ""} type="button" onClick={() => setEditorTab("mixer")}>Mixer</button>
                 </div>
               </div>
 
-              {editorTab === "sequence" ? (
-                <section
-                  className="sequence-editor"
-                  aria-label={`Sequence editor for ${selectedTrack.name}`}
-                  style={{ "--sequence-color": selectedTrack.color } as CSSProperties}
-                >
+              {editorTab === "pattern" ? (
+                <div className="pattern-editor">
+                  <aside className="pattern-sidebar" aria-label="Project patterns">
+                    <span className="eyebrow">PROJECT PATTERNS</span>
+                    <div className="pattern-list">
+                      {PROJECT_PATTERNS.map((pattern) => {
+                        const clip = CLIPS.find((item) => item.id === pattern.clipId) ?? CLIPS[0];
+                        const track = TRACKS.find((item) => item.id === clip.trackId) ?? TRACKS[0];
+                        return (
+                          <button
+                            className={selectedPattern.id === pattern.id ? "pattern-item active" : "pattern-item"}
+                            key={pattern.id}
+                            type="button"
+                            aria-pressed={selectedPattern.id === pattern.id}
+                            onClick={() => selectPattern(pattern)}
+                          >
+                            <strong>{clip.name}</strong><small>{track.name} · {clip.detail}</small>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </aside>
+                  <section
+                    className="sequence-editor"
+                    aria-label={`Pattern editor for ${selectedTrack.name}`}
+                    style={{ "--sequence-color": selectedTrack.color } as CSSProperties}
+                  >
                   <div className="sequence-toolbar">
                     <span><small>SELECTED TRACK</small><strong>{selectedTrack.name}</strong><em>{selectedClip.name} · {selectedClip.detail}</em></span>
-                    <div className="sequence-options"><button type="button">Pattern A</button><button type="button">1 / 16</button><button type="button">100%</button></div>
+                    <div className="sequence-options"><button type="button">{selectedClip.name}</button><button type="button">1 / 16</button><button type="button">100%</button></div>
                   </div>
                   <div className="sequence-workspace">
                     <div className="sequence-ruler">
@@ -391,6 +441,7 @@ export default function StudioPage(): ReactElement {
                     </div>
                   </div>
                 </section>
+                </div>
               ) : (
                 <div className="mixer-strips">
                   {TRACKS.map((track) => (
