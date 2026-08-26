@@ -1,3 +1,4 @@
+import type { DomainErrorInfo } from "./errors.ts";
 import type { ArrangementClip, DrumHit, Pattern, PatternLengthBars, Project, SynthNote, Track } from "./model.ts";
 
 export interface EntityIds {
@@ -85,6 +86,53 @@ export interface Reduction {
   readonly project: Project;
   readonly changes: ChangeSummary;
 }
+
+export type CommandSource = "manual" | "agent";
+
+interface CommandMetadata {
+  readonly id: string;
+  readonly source: CommandSource;
+  readonly label: string;
+}
+
+export type Command = CommandMetadata & (
+  | { readonly kind: "operation"; readonly operation: Operation }
+  | { readonly kind: "batch"; readonly operations: readonly Operation[] }
+);
+
+export type HistoryAction =
+  | { readonly kind: "operation"; readonly operation: Operation }
+  | { readonly kind: "batch"; readonly operations: readonly Operation[] }
+  | { readonly kind: "restore"; readonly targetEntryId: string };
+
+export interface HistoryEntry {
+  readonly id: string;
+  readonly commandId: string;
+  readonly source: CommandSource;
+  readonly label: string;
+  readonly createdAt: number;
+  readonly action: HistoryAction;
+  readonly before: Project;
+  readonly after: Project;
+  readonly changes: ChangeSummary;
+}
+
+export interface DispatchSuccess {
+  readonly ok: true;
+  readonly changed: boolean;
+  readonly deduplicated: boolean;
+  readonly project: Project;
+  readonly historyEntry?: HistoryEntry;
+  readonly changes: ChangeSummary;
+}
+
+export interface DispatchFailure {
+  readonly ok: false;
+  readonly project: Project;
+  readonly error: DomainErrorInfo;
+}
+
+export type DispatchResult = DispatchSuccess | DispatchFailure;
 
 const emptyEntityIds = (): EntityIds => ({
   projectIds: [], trackIds: [], patternIds: [], drumHitIds: [], synthNoteIds: [], arrangementClipIds: [],

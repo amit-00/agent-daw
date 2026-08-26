@@ -3,12 +3,16 @@ import test from "node:test";
 
 import {
   ConflictError,
+  type Command,
+  createProjectService,
   InvalidInputError,
   LimitExceededError,
   NotFoundError,
   type Project,
+  type ProjectService,
   type SoundCatalog,
   type Track,
+  type Operation,
   mergeChangeSummaries,
   reduceOperation,
   summarizeProjectDiff,
@@ -44,6 +48,45 @@ const basicDrumTrack = (): Track => ({
   muted: false,
   soloed: false,
 });
+
+const bassTrack = (): Track => ({
+  id: id(20),
+  name: "Bass",
+  kind: "synth",
+  instrumentId: "synth.bass",
+  volumeDb: 0,
+  pan: 0,
+  muted: false,
+  soloed: false,
+});
+
+const patternForMissingTrack = () => ({
+  id: id(31),
+  trackId: id(999),
+  name: "Orphan",
+  kind: "synth" as const,
+  lengthBars: 1 as const,
+  events: [],
+});
+
+const createBassTrackCommand = (commandId: string): Command => ({
+  kind: "operation",
+  id: commandId,
+  source: "manual",
+  label: "Create bass",
+  operation: { type: "track.create", track: bassTrack() },
+});
+
+const createTestService = (initialProject: Project): ProjectService => {
+  let nextHistoryId = 700;
+  let timestamp = 1_700_000_000_000;
+  return createProjectService({
+    initialProject,
+    catalog,
+    createHistoryId: () => id(nextHistoryId++),
+    now: () => timestamp++,
+  });
+};
 
 const projectWithBasicDrums = (): Project => ({
   ...blankProject(),
@@ -931,4 +974,261 @@ test("summarizeProjectDiff distinguishes same event IDs in separate patterns", (
   const result = summarizeProjectDiff(before, after);
 
   assert.deepEqual(result.updated.synthNoteIds, [sharedEventId]);
+});
+
+test("direct dispatch commits one changed operation", () => {
+  const service = createTestService(blankProject());
+
+  const result = service.dispatch(createBassTrackCommand(id(100)));
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.changed, true);
+  assert.equal(result.deduplicated, false);
+  assert.deepEqual(result.changes.created.trackIds, [id(20)]);
+  assert.equal(result.historyEntry?.id, id(700));
+  assert.equal(service.getState().project.tracks.length, 1);
+  assert.equal(service.getState().history.length, 1);
+  assert.equal(service.getState().historyCursor, 0);
+});
+
+test("a successful batch dispatch commits merged changes once", () => {
+  const service = createTestService(blankProject());
+  const result = service.dispatch({
+    kind: "batch",
+    id: id(101),
+    source: "agent",
+    label: "Build bass line",
+    operations: [
+      { type: "track.create", track: bassTrack() },
+      {
+        type: "pattern.create",
+        pattern: {
+          id: id(21), trackId: id(20), name: "Bass line", kind: "synth", lengthBars: 1, events: [],
+        },
+      },
+      {
+        type: "synth-notes.add",
+        patternId: id(21),
+        notes: [{ id: id(22), midiNote: 36, startStep: 0, lengthSteps: 4 }],
+      },
+      {
+        type: "arrangement.place",
+        clip: { id: id(23), patternId: id(21), startBar: 0, repeatCount: 1 },
+      },
+    ],
+  });
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.changed, true);
+  assert.deepEqual(result.changes.created.trackIds, [id(20)]);
+  assert.deepEqual(result.changes.created.patternIds, [id(21)]);
+  assert.deepEqual(result.changes.created.synthNoteIds, [id(22)]);
+  assert.deepEqual(result.changes.created.arrangementClipIds, [id(23)]);
+  assert.equal(service.getState().history.length, 1);
+  assert.deepEqual(service.getState().history[0]?.changes, result.changes);
+});
+
+test("a failing batch leaves project and history unchanged", () => {
+  const service = createTestService(blankProject());
+  const result = service.dispatch({
+    kind: "batch",
+    id: id(102),
+    source: "agent",
+    label: "Build rhythm section",
+    operations: [
+      { type: "track.create", track: bassTrack() },
+      { type: "pattern.create", pattern: patternForMissingTrack() },
+    ],
+  });
+
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.equal(result.error.batchIndex, 1);
+  assert.deepEqual(service.getState().project, blankProject());
+  assert.equal(service.getState().history.length, 0);
+});
+
+test("repeating a successful command ID returns its outcome without another commit", () => {
+  const service = createTestService(blankProject());
+  const command = createBassTrackCommand(id(103));
+
+  const first = service.dispatch(command);
+  const second = service.dispatch(command);
+
+  assert.equal(first.ok, true);
+  assert.equal(second.ok, true);
+  if (second.ok) assert.equal(second.deduplicated, true);
+  assert.equal(service.getState().project.tracks.length, 1);
+  assert.equal(service.getState().history.length, 1);
+});
+
+test("a no-op dispatch is deduplicated without creating history", () => {
+  const service = createTestService(blankProject());
+  const command: Command = {
+    kind: "operation",
+    id: id(104),
+    source: "manual",
+    label: "Keep project",
+    operation: { type: "project.update", changes: {} },
+  };
+
+  const first = service.dispatch(command);
+  const second = service.dispatch(command);
+
+  assert.equal(first.ok, true);
+  assert.equal(second.ok, true);
+  if (first.ok) assert.equal(first.changed, false);
+  if (second.ok) assert.equal(second.deduplicated, true);
+  assert.equal(service.getState().history.length, 0);
+});
+
+test("a rejected command ID can be retried", () => {
+  const service = createTestService(blankProject());
+  const commandId = id(105);
+  const rejected = service.dispatch({
+    kind: "operation",
+    id: commandId,
+    source: "manual",
+    label: "Create missing pattern",
+    operation: { type: "pattern.create", pattern: patternForMissingTrack() },
+  });
+  const retried = service.dispatch(createBassTrackCommand(commandId));
+
+  assert.equal(rejected.ok, false);
+  assert.equal(retried.ok, true);
+  assert.equal(service.getState().project.tracks.length, 1);
+  assert.equal(service.getState().history.length, 1);
+});
+
+test("a batch dispatch rejects more than 100 operations", () => {
+  const service = createTestService(blankProject());
+  const result = service.dispatch({
+    kind: "batch",
+    id: id(106),
+    source: "agent",
+    label: "Too many operations",
+    operations: Array.from({ length: 101 }, () => ({ type: "project.update" as const, changes: {} })),
+  });
+
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.equal(result.error.code, "limit_exceeded");
+  assert.equal(service.getState().history.length, 0);
+});
+
+test("dispatch rejects malformed runtime command metadata and payload shapes", () => {
+  const service = createTestService(blankProject());
+  const commands: readonly Command[] = [
+    null as unknown as Command,
+    {
+      kind: "operation",
+      id: id(107),
+      source: "manual",
+      label: "Missing operation",
+    } as unknown as Command,
+    {
+      kind: "operation",
+      id: id(108),
+      source: "manual",
+      label: "Unknown operation",
+      operation: { type: "unknown" },
+    } as unknown as Command,
+    {
+      kind: "batch",
+      id: id(109),
+      source: "agent",
+      label: "Missing operations",
+      operations: null,
+    } as unknown as Command,
+  ];
+
+  for (const command of commands) {
+    const result = service.dispatch(command);
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.equal(result.error.code, "invalid_input");
+  }
+  assert.deepEqual(service.getState().project, blankProject());
+  assert.equal(service.getState().history.length, 0);
+});
+
+test("dispatch rejects malformed nested operation payloads", () => {
+  const service = createTestService(blankProject());
+  const payloads: readonly unknown[] = [
+    { type: "project.update" },
+    { type: "track.create", track: null },
+    { type: "track.update", trackId: id(20), changes: null },
+    { type: "pattern.create", pattern: null },
+    { type: "pattern.duplicate", duplicateEventIds: null },
+    { type: "pattern.update", patternId: id(21), changes: null },
+    { type: "arrangement.place", clip: null },
+    { type: "arrangement.update", clipId: id(23), changes: null },
+    { type: "drum-hits.add", patternId: id(21), hits: [null] },
+    { type: "drum-hits.update", patternId: id(21), updates: [{ hitId: id(22), changes: null }] },
+    { type: "drum-hits.delete", patternId: id(21), hitIds: null },
+    { type: "synth-notes.add", patternId: id(21), notes: [null] },
+    { type: "synth-notes.update", patternId: id(21), updates: [{ noteId: id(22), changes: null }] },
+    { type: "synth-notes.delete", patternId: id(21), noteIds: null },
+  ];
+
+  for (const [index, operation] of payloads.entries()) {
+    const result = service.dispatch({
+      kind: "operation",
+      id: id(120 + index),
+      source: "agent",
+      label: "Malformed payload",
+      operation: operation as Operation,
+    });
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.equal(result.error.code, "invalid_input");
+  }
+  assert.deepEqual(service.getState().project, blankProject());
+  assert.equal(service.getState().history.length, 0);
+});
+
+test("direct dispatch retains only the 100 newest history entries", () => {
+  const service = createTestService(blankProject());
+
+  for (let index = 0; index <= 100; index += 1) {
+    const result = service.dispatch({
+      kind: "operation",
+      id: id(200 + index),
+      source: "manual",
+      label: "Rename project",
+      operation: { type: "project.update", changes: { name: `Project ${index}` } },
+    });
+    assert.equal(result.ok, true);
+  }
+
+  const state = service.getState();
+  assert.equal(state.history.length, 100);
+  assert.equal(state.historyCursor, 99);
+  assert.equal(state.history[0]?.commandId, id(201));
+  assert.equal(state.project.name, "Project 100");
+});
+
+test("a successful command ID is retried after its 100-outcome cache entry expires", () => {
+  const service = createTestService(blankProject());
+  const firstCommand: Command = {
+    kind: "operation",
+    id: id(400),
+    source: "manual",
+    label: "Name first",
+    operation: { type: "project.update", changes: { name: "First" } },
+  };
+  assert.equal(service.dispatch(firstCommand).ok, true);
+
+  for (let index = 1; index <= 100; index += 1) {
+    assert.equal(service.dispatch({
+      kind: "operation",
+      id: id(400 + index),
+      source: "manual",
+      label: "Rename project",
+      operation: { type: "project.update", changes: { name: `Project ${index}` } },
+    }).ok, true);
+  }
+
+  const retried = service.dispatch(firstCommand);
+  assert.equal(retried.ok, true);
+  if (retried.ok) assert.equal(retried.deduplicated, false);
+  assert.equal(service.getState().project.name, "First");
 });
