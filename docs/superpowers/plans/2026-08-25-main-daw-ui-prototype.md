@@ -65,7 +65,7 @@
 
 - [ ] **Step 2: Configure strict TypeScript, Next.js, and ESLint**
 
-Use the App Router defaults with `strict: true`, `noEmit: true`, `jsx: preserve`,
+Use the App Router defaults with `strict: true`, `noEmit: true`, `jsx: react-jsx`,
 and the `@/*` path alias. Extend `.gitignore` with these exact generated paths:
 
 ```text
