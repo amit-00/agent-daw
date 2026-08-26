@@ -698,7 +698,9 @@ input:focus-visible {
   z-index: 1;
   display: grid;
   height: calc(100% - 42px);
-  grid-template-columns: repeat(6, 1fr);
+  overflow-x: auto;
+  grid-template-columns: repeat(6, 168px);
+  justify-content: center;
 }
 
 .sequence-editor {
@@ -843,10 +845,9 @@ input:focus-visible {
 .channel-strip {
   position: relative;
   display: grid;
-  min-width: 0;
-  padding: 11px 9px 9px;
-  grid-template-columns: 1fr 15px;
-  grid-template-rows: 23px 1fr 29px 20px;
+  width: 168px;
+  padding: 11px 20px 9px;
+  grid-template-rows: 23px 1fr 13px 13px 20px;
   border-right: 1px solid rgba(255, 255, 255, 0.055);
 }
 
@@ -865,14 +866,20 @@ input:focus-visible {
 }
 
 .channel-strip > input[type="range"] {
-  width: 112px;
   height: 3px;
-  margin: 56px 0 0 -6px;
-  grid-column: 1;
-  grid-row: 2;
+  width: 100%;
+  margin: 0;
+  grid-column: 1 / -1;
   accent-color: #d4d4d8;
-  transform: rotate(-90deg);
-  transform-origin: center;
+}
+
+.channel-strip > input[type="range"]:nth-of-type(1) {
+  grid-row: 3;
+}
+
+.channel-strip > input[type="range"]:nth-of-type(2) {
+  grid-row: 4;
+  accent-color: #87878f;
 }
 
 .meter {
@@ -882,7 +889,7 @@ input:focus-visible {
   gap: 2px;
   align-self: center;
   justify-self: center;
-  grid-column: 2;
+  grid-column: 1 / -1;
   grid-row: 2;
   align-items: flex-end;
 }
@@ -894,31 +901,10 @@ input:focus-visible {
   opacity: 0.72;
 }
 
-.pan-knob {
-  position: relative;
-  display: grid;
-  width: 20px;
-  height: 20px;
-  grid-column: 1 / -1;
-  grid-row: 3;
-  place-self: center;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 50%;
-  background: radial-gradient(circle at 40% 35%, #323237, #161619 68%);
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.4);
-}
-
-.pan-knob i {
-  width: 1px;
-  height: 7px;
-  place-self: 2px center;
-  background: #c3c3c8;
-}
-
 .channel-buttons {
   display: grid;
   grid-column: 1 / -1;
-  grid-row: 4;
+  grid-row: 5;
   grid-template-columns: 1fr 1fr;
   gap: 3px;
 }
@@ -948,7 +934,7 @@ input:focus-visible {
 
 .master-label {
   grid-column: 1 / -1;
-  grid-row: 4;
+  grid-row: 5;
   color: #6c6c73;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 7px;

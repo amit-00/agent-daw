@@ -398,7 +398,7 @@ export default function StudioPage(): ReactElement {
                       <span className="channel-name">{track.name.split(" ")[0]}</span>
                       <span className="meter"><i style={{ height: `${track.volume}%` }} /><i style={{ height: `${track.volume - 8}%` }} /></span>
                       <input aria-label={`${track.name} volume`} type="range" min="0" max="100" defaultValue={track.volume} />
-                      <span className="pan-knob" aria-hidden="true"><i /></span>
+                      <input aria-label={`${track.name} pan`} type="range" min="0" max="100" defaultValue="50" />
                       <div className="channel-buttons">
                         <button className={mutedTracks.has(track.id) ? "active" : ""} type="button" aria-label={`Mute ${track.name}`} aria-pressed={mutedTracks.has(track.id)} onClick={() => setMutedTracks((current) => toggleSet(current, track.id))}>M</button>
                         <button className={soloTracks.has(track.id) ? "active solo" : ""} type="button" aria-label={`Solo ${track.name}`} aria-pressed={soloTracks.has(track.id)} onClick={() => setSoloTracks((current) => toggleSet(current, track.id))}>S</button>
@@ -409,7 +409,7 @@ export default function StudioPage(): ReactElement {
                     <span className="channel-name">Master</span>
                     <span className="meter"><i style={{ height: "82%" }} /><i style={{ height: "76%" }} /></span>
                     <input aria-label="Master volume" type="range" min="0" max="100" defaultValue="78" />
-                    <span className="pan-knob" aria-hidden="true"><i /></span>
+                    <input aria-label="Master pan" type="range" min="0" max="100" defaultValue="50" />
                     <span className="master-label">−3.2</span>
                   </div>
                 </div>
