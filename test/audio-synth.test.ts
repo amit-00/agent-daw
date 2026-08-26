@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { SYNTH_PRESETS, createSynth, midiNoteToFrequency } from "../src/audio/index.ts";
-import { FakeAudioContext, FakeAudioNode } from "./audio-fakes.ts";
+import {
+  disableCancelAndHoldAtTime,
+  FakeAudioContext,
+  FakeAudioNode,
+} from "./audio-fakes.ts";
 
 const event = (key: string, trackId: string, instrumentId: string) => ({
   key,
@@ -118,6 +122,40 @@ test("short pad note holds its envelope at note end before release", () => {
   assert.deepEqual(context.gains[0]?.gain.events.slice(-2), [
     { method: "hold", time: 2.1 },
     { method: "linear", value: 0, time: 2.9 },
+  ]);
+});
+
+test("synth fallback computes note-end and forced-stop envelope values", () => {
+  const context = new FakeAudioContext();
+  const createGain = context.createGain.bind(context);
+  context.createGain = (): GainNode => {
+    const node = createGain();
+    disableCancelAndHoldAtTime(node.gain);
+    return node;
+  };
+  const synth = createSynth({
+    context: context.asAudioContext(),
+    presets: SYNTH_PRESETS,
+    voiceCap: 64,
+    stopRampSeconds: 0.005,
+  });
+  const destination = new FakeAudioNode() as unknown as AudioNode;
+  synth.schedule(event("short", "pad", "synth.pad"), 2, 0.1, destination);
+  const shortNoteEvents = context.gains[0]?.gain.events.slice(-3);
+  assert.equal(shortNoteEvents?.[0]?.method, "cancel");
+  assert.equal(shortNoteEvents?.[0]?.time, 2.1);
+  assert.equal(shortNoteEvents?.[1]?.method, "set");
+  assert.ok(Math.abs((shortNoteEvents?.[1]?.value ?? 0) - 0.02857142857142857) < 1e-12);
+  assert.equal(shortNoteEvents?.[1]?.time, 2.1);
+  assert.deepEqual(shortNoteEvents?.[2], { method: "linear", value: 0, time: 2.9 });
+
+  const voice = synth.schedule(event("forced", "bass", "synth.bass"), 0, 1, destination);
+  assert.ok(voice);
+  voice.stop(0.05);
+  assert.deepEqual(context.gains[1]?.gain.events.slice(-3), [
+    { method: "cancel", time: 0.05 },
+    { method: "set", value: 0.116375, time: 0.05 },
+    { method: "linear", value: 0, time: 0.055 },
   ]);
 });
 

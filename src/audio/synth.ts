@@ -36,6 +36,53 @@ const findPreset = (
   instrumentId: string,
 ): SynthPreset | undefined => Object.values(presets).find(({ id }) => id === instrumentId);
 
+const envelopeValueDuringNote = (preset: SynthPreset, elapsedSeconds: number): number => {
+  if (elapsedSeconds <= 0) {
+    return 0;
+  }
+  if (elapsedSeconds < preset.attackSeconds) {
+    return preset.peakGain * elapsedSeconds / preset.attackSeconds;
+  }
+  const sustainGain = preset.peakGain * preset.sustainGain;
+  const decayElapsed = elapsedSeconds - preset.attackSeconds;
+  if (decayElapsed < preset.decaySeconds) {
+    return preset.peakGain +
+      (sustainGain - preset.peakGain) * decayElapsed / preset.decaySeconds;
+  }
+  return sustainGain;
+};
+
+const envelopeValueAtTime = (
+  preset: SynthPreset,
+  audioTime: number,
+  durationSeconds: number,
+  valueTime: number,
+): number => {
+  const noteEnd = audioTime + durationSeconds;
+  if (valueTime <= noteEnd) {
+    return envelopeValueDuringNote(preset, valueTime - audioTime);
+  }
+  const releaseElapsed = valueTime - noteEnd;
+  if (releaseElapsed >= preset.releaseSeconds) {
+    return 0;
+  }
+  return envelopeValueDuringNote(preset, durationSeconds) *
+    (1 - releaseElapsed / preset.releaseSeconds);
+};
+
+const holdEnvelopeAtTime = (
+  parameter: AudioParam,
+  audioTime: number,
+  value: number,
+): void => {
+  if (typeof parameter.cancelAndHoldAtTime === "function") {
+    parameter.cancelAndHoldAtTime(audioTime);
+    return;
+  }
+  parameter.cancelScheduledValues(audioTime);
+  parameter.setValueAtTime(value, audioTime);
+};
+
 export function createSynth(options: SynthOptions): Synth {
   if (!Number.isInteger(options.voiceCap) || options.voiceCap <= 0) {
     throw new RangeError(`Synth voice cap must be a positive integer; received ${options.voiceCap}`);
@@ -118,7 +165,11 @@ export function createSynth(options: SynthOptions): Synth {
         preset.peakGain * preset.sustainGain,
         audioTime + preset.attackSeconds + preset.decaySeconds,
       );
-      gain.gain.cancelAndHoldAtTime(audioTime + durationSeconds);
+      holdEnvelopeAtTime(
+        gain.gain,
+        audioTime + durationSeconds,
+        envelopeValueAtTime(preset, audioTime, durationSeconds, audioTime + durationSeconds),
+      );
       gain.gain.linearRampToValueAtTime(0, releaseEnd);
       oscillator.connect(filter);
       filter.connect(gain);
@@ -135,7 +186,11 @@ export function createSynth(options: SynthOptions): Synth {
           }
           stopped = true;
           activeVoices.delete(voice);
-          gain.gain.cancelAndHoldAtTime(stopAudioTime);
+          holdEnvelopeAtTime(
+            gain.gain,
+            stopAudioTime,
+            envelopeValueAtTime(preset, audioTime, durationSeconds, stopAudioTime),
+          );
           const stopEnd = Math.round((stopAudioTime + options.stopRampSeconds) * 1_000_000_000) / 1_000_000_000;
           gain.gain.linearRampToValueAtTime(0, stopEnd);
           oscillator.stop(stopEnd);

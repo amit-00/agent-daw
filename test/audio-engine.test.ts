@@ -4,7 +4,11 @@ import test from "node:test";
 import type { AudioControlResult, AudioEngine } from "../src/audio/index.ts";
 import { createAudioEngine } from "../src/audio/index.ts";
 import { audioProject } from "./audio-fixtures.ts";
-import { FakeAudioContext, FakeTimers } from "./audio-fakes.ts";
+import {
+  disableCancelAndHoldAtTime,
+  FakeAudioContext,
+  FakeTimers,
+} from "./audio-fakes.ts";
 
 const deferredBuffer = (): {
   readonly promise: Promise<ArrayBuffer>;
@@ -187,6 +191,38 @@ test("mixer replacement holds the current value before its five millisecond ramp
   assert.deepEqual(context.gains[0]?.gain.events.slice(-2), [
     { method: "hold", time: 2 },
     { method: "linear", value: 10 ** (-3 / 20), time: 2.005 },
+  ]);
+});
+
+test("mixer fallback preserves the effective value of an interrupted ramp", async () => {
+  const context = new FakeAudioContext();
+  const createGain = context.createGain.bind(context);
+  const createStereoPanner = context.createStereoPanner.bind(context);
+  context.createGain = (): GainNode => {
+    const node = createGain();
+    disableCancelAndHoldAtTime(node.gain);
+    return node;
+  };
+  context.createStereoPanner = (): StereoPannerNode => {
+    const node = createStereoPanner();
+    disableCancelAndHoldAtTime(node.pan);
+    return node;
+  };
+  const engine = createAudioEngine({
+    createContext: () => context.asAudioContext(),
+    loadArrayBuffer: async () => new ArrayBuffer(8),
+    setInterval: () => 0,
+    clearInterval: () => undefined,
+  });
+  const project = audioProject();
+  engine.replaceProject(project);
+  await engine.prepare();
+  context.currentTime = 0.0025;
+  engine.replaceProject({ ...project, masterVolumeDb: -12.041199826559248 });
+  assert.deepEqual(context.gains[0]?.gain.events.slice(-3), [
+    { method: "cancel", time: 0.0025 },
+    { method: "set", value: 0.5, time: 0.0025 },
+    { method: "linear", value: 0.25, time: 0.0075 },
   ]);
 });
 
@@ -408,6 +444,130 @@ test("a scheduler tick blocks and cancels playback when the context suspends", a
   assert.equal(engine.getSnapshot().pendingSources, 0);
   assert.equal(timers.callbacks.size, 0);
   assert.deepEqual(context.bufferSources[0]?.stopTimes, [0]);
+});
+
+test("an externally closed context permanently closes the engine on a scheduler tick", async () => {
+  const context = new FakeAudioContext();
+  const closeError = new DOMException("context already closed", "InvalidStateError");
+  let closeCalls = 0;
+  context.close = async (): Promise<void> => {
+    closeCalls += 1;
+    throw closeError;
+  };
+  const timers = new FakeTimers();
+  const engine = createAudioEngine({
+    createContext: () => context.asAudioContext(),
+    loadArrayBuffer: async () => new ArrayBuffer(8),
+    setInterval: (callback, milliseconds) => timers.setInterval(callback, milliseconds),
+    clearInterval: (handle) => timers.clearInterval(handle),
+  });
+  engine.replaceProject(audioProject());
+  await engine.play(0);
+  context.state = "closed";
+  timers.tick();
+
+  const closedFailure = {
+    ok: false,
+    code: "closed",
+    message: "Audio engine is closed; create a new engine",
+  } as const;
+  assert.equal(engine.getSnapshot().status, "closed");
+  assert.equal(engine.getSnapshot().pendingSources, 0);
+  assert.equal(engine.getSnapshot().trackBusCount, 0);
+  assert.equal(timers.callbacks.size, 0);
+  assert.deepEqual(engine.stop(), closedFailure);
+  assert.deepEqual(await engine.play(0), closedFailure);
+  await engine.dispose();
+  await engine.dispose();
+  assert.equal(closeCalls, 0);
+});
+
+test("a periodic scheduling fault rolls back playback before rethrowing unchanged", async () => {
+  const context = new FakeAudioContext();
+  const createBufferSource = context.createBufferSource.bind(context);
+  const sourceError = new TypeError("later buffer source failed");
+  let sourceCreations = 0;
+  context.createBufferSource = (): AudioBufferSourceNode => {
+    sourceCreations += 1;
+    if (sourceCreations === 2) {
+      throw sourceError;
+    }
+    return createBufferSource();
+  };
+  const timers = new FakeTimers();
+  const engine = createAudioEngine({
+    createContext: () => context.asAudioContext(),
+    loadArrayBuffer: async () => new ArrayBuffer(8),
+    setInterval: (callback, milliseconds) => timers.setInterval(callback, milliseconds),
+    clearInterval: (handle) => timers.clearInterval(handle),
+  });
+  const project = audioProject();
+  engine.replaceProject({
+    ...project,
+    patterns: project.patterns.map((pattern) => pattern.kind === "drum"
+      ? {
+        ...pattern,
+        events: pattern.events.map((event, index) => ({
+          ...event,
+          startStep: index,
+        })),
+      }
+      : pattern),
+  });
+  await engine.play(0);
+  context.currentTime = 0.1;
+  let thrown: unknown;
+  try {
+    timers.tick();
+  } catch (error) {
+    thrown = error;
+  }
+  assert.equal(thrown, sourceError);
+  assert.equal(engine.getSnapshot().status, "stopped");
+  assert.equal(engine.getSnapshot().positionStep, 0.4);
+  assert.equal(engine.getSnapshot().pendingSources, 0);
+  assert.equal(timers.callbacks.size, 0);
+  assert.deepEqual(context.bufferSources[0]?.stopTimes, [0.1]);
+});
+
+test("an evicted sustained voice stays suppressed until its musical end", async () => {
+  const context = new FakeAudioContext();
+  const timers = new FakeTimers();
+  const engine = createAudioEngine({
+    createContext: () => context.asAudioContext(),
+    loadArrayBuffer: async () => new ArrayBuffer(8),
+    setInterval: (callback, milliseconds) => timers.setInterval(callback, milliseconds),
+    clearInterval: (handle) => timers.clearInterval(handle),
+  });
+  const project = audioProject();
+  const synthTrack = project.tracks[1];
+  const synthPattern = project.patterns[1];
+  const synthClip = project.arrangement[1];
+  assert.ok(synthTrack);
+  assert.ok(synthPattern?.kind === "synth");
+  assert.ok(synthClip);
+  engine.replaceProject({
+    ...project,
+    tracks: [synthTrack],
+    patterns: [{
+      ...synthPattern,
+      events: Array.from({ length: 65 }, (_, index) => ({
+        id: `note-${index}`,
+        midiNote: 48,
+        startStep: 0,
+        lengthSteps: 16,
+      })),
+    }],
+    arrangement: [{ ...synthClip, startBar: 0 }],
+  });
+  await engine.play(0);
+  assert.equal(context.oscillators.length, 65);
+  context.oscillators[0]?.finish();
+  await Promise.resolve();
+  assert.equal(engine.getSnapshot().pendingSources, 64);
+  timers.tick();
+  assert.equal(context.oscillators.length, 65);
+  assert.equal(engine.getSnapshot().pendingSources, 64);
 });
 
 test("play rolls back partial scheduling before propagating programmer errors", async () => {

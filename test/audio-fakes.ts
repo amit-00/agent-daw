@@ -4,6 +4,10 @@ export interface AutomationEvent {
   readonly time: number;
 }
 
+export const disableCancelAndHoldAtTime = (parameter: AudioParam): void => {
+  Object.defineProperty(parameter, "cancelAndHoldAtTime", { value: undefined });
+};
+
 export class FakeAudioParam {
   value = 0;
   readonly events: AutomationEvent[] = [];

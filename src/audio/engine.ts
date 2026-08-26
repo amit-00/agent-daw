@@ -80,9 +80,20 @@ interface TrackBus {
 }
 
 interface RetainedSource {
-  readonly generation: number;
   readonly trackId: string;
   readonly source: DrumSource | SynthVoice;
+}
+
+interface EventTombstone {
+  readonly generation: number;
+  readonly endStep: number;
+}
+
+interface MixerRamp {
+  readonly startTime: number;
+  readonly startValue: number;
+  readonly endTime: number;
+  readonly endValue: number;
 }
 
 const MIXER_RAMP_SECONDS = 0.005;
@@ -116,6 +127,8 @@ export function createAudioEngine(platform: AudioEnginePlatform): AudioEngine {
   let lateWakeups = 0;
   const trackBuses = new Map<string, TrackBus>();
   const pendingSources = new Map<string, RetainedSource>();
+  const eventTombstones = new Map<string, EventTombstone>();
+  const mixerRamps = new WeakMap<AudioParam, MixerRamp>();
 
   const clampStep = (step: number): number => Math.min(
     Math.max(Number.isNaN(step) ? 0 : step, 0),
@@ -142,6 +155,7 @@ export function createAudioEngine(platform: AudioEnginePlatform): AudioEngine {
       source.stop(audioTime);
     }
     pendingSources.clear();
+    eventTombstones.clear();
   };
 
   const cancelPlayback = (): void => {
@@ -151,7 +165,31 @@ export function createAudioEngine(platform: AudioEnginePlatform): AudioEngine {
       stopPendingSources(context.currentTime);
     } else {
       pendingSources.clear();
+      eventTombstones.clear();
     }
+  };
+
+  const closeEngine = (closeContext: boolean): Promise<void> => {
+    if (disposal !== undefined) {
+      return disposal;
+    }
+    playIntentRevision += 1;
+    status = "closed";
+    preparation = undefined;
+    cancelPlayback();
+    positionStep = 0;
+    sampler?.clear();
+    synth?.stopAll(context?.currentTime ?? 0);
+    for (const bus of trackBuses.values()) {
+      bus.gain.disconnect();
+      bus.panner.disconnect();
+    }
+    trackBuses.clear();
+    master?.disconnect();
+    disposal = closeContext && context !== undefined && context.state !== "closed"
+      ? context.close()
+      : Promise.resolve();
+    return disposal;
   };
 
   const stopTrackSources = (trackId: string, audioTime: number): void => {
@@ -169,8 +207,26 @@ export function createAudioEngine(platform: AudioEnginePlatform): AudioEngine {
     if (currentTime === undefined) {
       return;
     }
-    parameter.cancelAndHoldAtTime(currentTime);
-    parameter.linearRampToValueAtTime(value, currentTime + MIXER_RAMP_SECONDS);
+    const previousRamp = mixerRamps.get(parameter);
+    const currentValue = previousRamp === undefined || currentTime >= previousRamp.endTime
+      ? previousRamp?.endValue ?? parameter.value
+      : previousRamp.startValue +
+        (previousRamp.endValue - previousRamp.startValue) *
+        Math.max(0, (currentTime - previousRamp.startTime) / (previousRamp.endTime - previousRamp.startTime));
+    if (typeof parameter.cancelAndHoldAtTime === "function") {
+      parameter.cancelAndHoldAtTime(currentTime);
+    } else {
+      parameter.cancelScheduledValues(currentTime);
+      parameter.setValueAtTime(currentValue, currentTime);
+    }
+    const endTime = currentTime + MIXER_RAMP_SECONDS;
+    parameter.linearRampToValueAtTime(value, endTime);
+    mixerRamps.set(parameter, {
+      startTime: currentTime,
+      startValue: currentValue,
+      endTime,
+      endValue: value,
+    });
   };
 
   const targetGain = (track: Track, hasSolo: boolean): number =>
@@ -253,7 +309,7 @@ export function createAudioEngine(platform: AudioEnginePlatform): AudioEngine {
     }
 
     for (const event of expansion.events) {
-      if (pendingSources.get(event.key)?.generation === generation) {
+      if (eventTombstones.get(event.key)?.generation === generation) {
         continue;
       }
       const bus = trackBuses.get(event.trackId);
@@ -310,11 +366,16 @@ export function createAudioEngine(platform: AudioEnginePlatform): AudioEngine {
       }
 
       const retained: RetainedSource = {
-        generation,
         trackId: event.trackId,
         source,
       };
       pendingSources.set(event.key, retained);
+      eventTombstones.set(event.key, {
+        generation,
+        endStep: event.kind === "synth"
+          ? event.startStep + event.durationSteps
+          : event.startStep,
+      });
       void source.ended.then(() => {
         if (pendingSources.get(event.key)?.source === source) {
           pendingSources.delete(event.key);
@@ -336,49 +397,76 @@ export function createAudioEngine(platform: AudioEnginePlatform): AudioEngine {
     status = "blocked";
   };
 
+  const enterNonRunningContextState = (): "blocked" | "closed" => {
+    if (context?.state === "closed") {
+      closeEngine(false);
+      return "closed";
+    }
+    enterBlockedState();
+    return "blocked";
+  };
+
+  const pruneEventTombstones = (currentStep: number): void => {
+    for (const [eventKey, { endStep }] of eventTombstones) {
+      if (endStep < currentStep) {
+        eventTombstones.delete(eventKey);
+      }
+    }
+  };
+
   const schedulerTick = (): void => {
     if (status !== "playing" || context === undefined || project === undefined) {
       return;
     }
     if (context.state !== "running") {
-      enterBlockedState();
+      enterNonRunningContextState();
       return;
     }
 
-    const currentAudioTime = context.currentTime;
-    positionStep = currentPositionStep();
-    if (positionStep >= projectArrangementEndStep) {
-      finishArrangement();
-      return;
-    }
+    let currentStep = positionStep;
+    try {
+      const currentAudioTime = context.currentTime;
+      currentStep = currentPositionStep();
+      positionStep = currentStep;
+      pruneEventTombstones(currentStep);
+      if (currentStep >= projectArrangementEndStep) {
+        finishArrangement();
+        return;
+      }
 
-    const endStep = positionAtAudioTime(
-      anchorStep,
-      anchorAudioTime,
-      currentAudioTime + SCHEDULER_LOOKAHEAD_SECONDS,
-      project.bpm,
-    );
-    if (
-      scheduledHorizonAudioTime !== undefined &&
-      currentAudioTime > scheduledHorizonAudioTime
-    ) {
-      lateWakeups += 1;
-      lastIssue = {
-        code: "late_scheduler",
-        message: "Scheduler woke after its look-ahead horizon",
-      };
-      stopPendingSources(currentAudioTime);
-      generation += 1;
-      scheduleRange(positionStep, endStep);
-      scheduledHorizonAudioTime = currentAudioTime + SCHEDULER_LOOKAHEAD_SECONDS;
-      return;
-    }
+      const endStep = positionAtAudioTime(
+        anchorStep,
+        anchorAudioTime,
+        currentAudioTime + SCHEDULER_LOOKAHEAD_SECONDS,
+        project.bpm,
+      );
+      if (
+        scheduledHorizonAudioTime !== undefined &&
+        currentAudioTime > scheduledHorizonAudioTime
+      ) {
+        lateWakeups += 1;
+        lastIssue = {
+          code: "late_scheduler",
+          message: "Scheduler woke after its look-ahead horizon",
+        };
+        stopPendingSources(currentAudioTime);
+        generation += 1;
+        scheduleRange(currentStep, endStep);
+        scheduledHorizonAudioTime = currentAudioTime + SCHEDULER_LOOKAHEAD_SECONDS;
+        return;
+      }
 
-    scheduleRange(positionStep, endStep);
-    scheduledHorizonAudioTime = Math.max(
-      scheduledHorizonAudioTime ?? 0,
-      currentAudioTime + SCHEDULER_LOOKAHEAD_SECONDS,
-    );
+      scheduleRange(currentStep, endStep);
+      scheduledHorizonAudioTime = Math.max(
+        scheduledHorizonAudioTime ?? 0,
+        currentAudioTime + SCHEDULER_LOOKAHEAD_SECONDS,
+      );
+    } catch (error) {
+      positionStep = currentStep;
+      cancelPlayback();
+      status = "stopped";
+      throw error;
+    }
   };
 
   const startPlayback = (requestedStep: number): void => {
@@ -479,8 +567,9 @@ export function createAudioEngine(platform: AudioEnginePlatform): AudioEngine {
           return closedResult();
         }
         if (runtimeContext.state !== "running") {
-          enterBlockedState();
-          return blockedResult();
+          return enterNonRunningContextState() === "closed"
+            ? closedResult()
+            : blockedResult();
         }
 
         const samplePreparation = await runtimeSampler.prepare();
@@ -488,8 +577,9 @@ export function createAudioEngine(platform: AudioEnginePlatform): AudioEngine {
           return closedResult();
         }
         if (runtimeContext.state !== "running") {
-          enterBlockedState();
-          return blockedResult();
+          return enterNonRunningContextState() === "closed"
+            ? closedResult()
+            : blockedResult();
         }
         unavailableSoundIds = [...samplePreparation.unavailableSoundIds];
         lastIssue = unavailableSoundIds[0] === undefined
@@ -645,24 +735,10 @@ export function createAudioEngine(platform: AudioEnginePlatform): AudioEngine {
     },
 
     dispose(): Promise<void> {
-      playIntentRevision += 1;
       if (disposal !== undefined) {
         return disposal;
       }
-      status = "closed";
-      preparation = undefined;
-      cancelPlayback();
-      positionStep = 0;
-      sampler?.clear();
-      synth?.stopAll(context?.currentTime ?? 0);
-      for (const bus of trackBuses.values()) {
-        bus.gain.disconnect();
-        bus.panner.disconnect();
-      }
-      trackBuses.clear();
-      master?.disconnect();
-      disposal = context?.close() ?? Promise.resolve();
-      return disposal;
+      return closeEngine(true);
     },
   };
   return engine;

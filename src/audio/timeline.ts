@@ -129,6 +129,9 @@ export const expandTimeline = (
       const repeatStart = clip.startBar * 16 + repeatIndex * patternSteps;
       if (pattern.kind === "drum") {
         for (const [patternEventIndex, event] of pattern.events.entries()) {
+          if (event.startStep < 0 || event.startStep >= patternSteps) {
+            continue;
+          }
           const globalStart = repeatStart + event.startStep;
           if (globalStart >= startStep && globalStart < endStep) {
             events.push({
@@ -149,6 +152,13 @@ export const expandTimeline = (
       }
 
       for (const [patternEventIndex, event] of pattern.events.entries()) {
+        if (
+          event.startStep < 0 ||
+          event.lengthSteps <= 0 ||
+          event.startStep + event.lengthSteps > patternSteps
+        ) {
+          continue;
+        }
         const globalStart = repeatStart + event.startStep;
         const globalEnd = globalStart + event.lengthSteps;
         if (globalEnd > startStep && globalStart < endStep) {

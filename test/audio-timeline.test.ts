@@ -67,3 +67,30 @@ test("stale references are skipped with entity-specific diagnostics", () => {
   assert.equal(result.issues[0]?.code, "missing_pattern");
   assert.equal(result.issues[0]?.relatedId, value.arrangement[0]?.patternId);
 });
+
+test("timeline silently skips events outside their local pattern bounds", () => {
+  const project = audioProject();
+  const result = expandTimeline({
+    ...project,
+    patterns: project.patterns.map((pattern) => pattern.kind === "drum"
+      ? {
+        ...pattern,
+        events: [
+          ...pattern.events,
+          { id: "outside-drum", soundId: "kick", startStep: 16 },
+        ],
+      }
+      : {
+        ...pattern,
+        events: [
+          ...pattern.events,
+          { id: "outside-synth", midiNote: 60, startStep: 15, lengthSteps: 2 },
+        ],
+      }),
+  }, 0, 64);
+  assert.deepEqual(
+    result.events.filter(({ key }) => key.endsWith(":outside-drum") || key.endsWith(":outside-synth")),
+    [],
+  );
+  assert.deepEqual(result.issues, []);
+});

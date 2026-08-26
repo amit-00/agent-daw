@@ -45,9 +45,8 @@ IndexedDB with no application backend.
 
 ## Status
 
-Project-domain foundation implemented: strict model validation, complete command
-surface, atomic batches, attributed snapshot history, undo, redo, and restore.
-Audio and editor implementation are next.
+Project-domain and audio-engine foundations are implemented. Editor and UI
+integration are next.
 
 ## License
 
