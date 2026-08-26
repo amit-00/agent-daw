@@ -91,6 +91,29 @@ const projectWithBassAndDrums = (): Project => ({
   ],
 });
 
+const projectWithLead = (): Project => ({
+  ...blankProject(),
+  tracks: [{
+    id: id(40),
+    name: "Lead",
+    kind: "synth",
+    instrumentId: "synth.lead",
+    volumeDb: 0,
+    pan: 0,
+    muted: false,
+    soloed: false,
+  }],
+  patterns: [{
+    id: id(41),
+    trackId: id(40),
+    name: "Lead phrase",
+    kind: "synth",
+    lengthBars: 1,
+    events: [{ id: id(42), midiNote: 60, startStep: 0, lengthSteps: 4 }],
+  }],
+  arrangement: [],
+});
+
 test("validateProject accepts a blank project", () => {
   assert.doesNotThrow(() => validateProject(blankProject(), catalog));
 });
@@ -262,6 +285,323 @@ test("track.delete rejects a missing target", () => {
     () => reduceOperation(blankProject(), { type: "track.delete", trackId: id(10) }, catalog),
     NotFoundError,
   );
+});
+
+test("pattern.create adds a pattern with a matching track kind", () => {
+  const result = reduceOperation(
+    projectWithBasicDrums(),
+    {
+      type: "pattern.create",
+      pattern: {
+        id: id(30), trackId: id(10), name: "Fill", kind: "drum", lengthBars: 1, events: [],
+      },
+    },
+    catalog,
+  );
+
+  assert.deepEqual(result.project.patterns.map(({ id: patternId }) => patternId), [id(11), id(30)]);
+  assert.deepEqual(result.changes.created.patternIds, [id(30)]);
+});
+
+test("pattern.create rejects a pattern whose kind differs from its track", () => {
+  assert.throws(
+    () => reduceOperation(
+      projectWithBasicDrums(),
+      {
+        type: "pattern.create",
+        pattern: {
+          id: id(30), trackId: id(10), name: "Wrong", kind: "synth", lengthBars: 1, events: [],
+        },
+      },
+      catalog,
+    ),
+    ConflictError,
+  );
+});
+
+test("pattern.duplicate copies content with supplied fresh IDs", () => {
+  const project = projectWithBasicDrums();
+  const result = reduceOperation(
+    project,
+    {
+      type: "pattern.duplicate",
+      patternId: id(11),
+      duplicatePatternId: id(30),
+      duplicateName: "Drums copy",
+      duplicateEventIds: [id(31)],
+    },
+    catalog,
+  );
+
+  const duplicate = result.project.patterns.find(({ id: patternId }) => patternId === id(30));
+  assert.equal(duplicate?.trackId, id(10));
+  assert.equal(duplicate?.events[0]?.id, id(31));
+  assert.equal(duplicate?.events[0]?.startStep, 0);
+  assert.deepEqual(result.changes.created.patternIds, [id(30)]);
+  assert.deepEqual(result.changes.created.drumHitIds, [id(31)]);
+  assert.equal(project.arrangement.length, 1);
+  assert.equal(result.project.arrangement.length, 1);
+});
+
+test("pattern.duplicate rejects an ID count that differs from copied events", () => {
+  assert.throws(
+    () => reduceOperation(
+      projectWithBasicDrums(),
+      {
+        type: "pattern.duplicate",
+        patternId: id(11), duplicatePatternId: id(30), duplicateName: "Copy", duplicateEventIds: [],
+      },
+      catalog,
+    ),
+    InvalidInputError,
+  );
+});
+
+test("pattern.update changes only its name and length", () => {
+  const project = projectWithBasicDrums();
+  const result = reduceOperation(
+    project,
+    { type: "pattern.update", patternId: id(11), changes: { name: "Long beat", lengthBars: 2 } },
+    catalog,
+  );
+
+  assert.deepEqual(result.project.patterns[0], {
+    ...project.patterns[0], name: "Long beat", lengthBars: 2,
+  });
+  assert.deepEqual(result.changes.updated.patternIds, [id(11)]);
+  assert.equal(project.patterns[0]?.name, "Beat");
+});
+
+test("pattern.update returns the original project for no changes", () => {
+  const project = projectWithBasicDrums();
+  const result = reduceOperation(project, { type: "pattern.update", patternId: id(11), changes: {} }, catalog);
+
+  assert.equal(result.project, project);
+  assert.deepEqual(result.changes, {
+    created: { projectIds: [], trackIds: [], patternIds: [], drumHitIds: [], synthNoteIds: [], arrangementClipIds: [] },
+    updated: { projectIds: [], trackIds: [], patternIds: [], drumHitIds: [], synthNoteIds: [], arrangementClipIds: [] },
+    deleted: { projectIds: [], trackIds: [], patternIds: [], drumHitIds: [], synthNoteIds: [], arrangementClipIds: [] },
+  });
+});
+
+test("pattern.delete removes referencing clips but preserves the track", () => {
+  const project = projectWithBasicDrums();
+  const result = reduceOperation(project, { type: "pattern.delete", patternId: id(11) }, catalog);
+
+  assert.equal(result.project.tracks.length, 1);
+  assert.equal(result.project.patterns.length, 0);
+  assert.equal(result.project.arrangement.length, 0);
+  assert.deepEqual(result.changes.deleted.patternIds, [id(11)]);
+  assert.deepEqual(result.changes.deleted.drumHitIds, [id(13)]);
+  assert.deepEqual(result.changes.deleted.arrangementClipIds, [id(12)]);
+  assert.equal(project.patterns.length, 1);
+});
+
+test("drum-hits add, update, and delete change only the target pattern", () => {
+  const added = reduceOperation(
+    projectWithBasicDrums(),
+    { type: "drum-hits.add", patternId: id(11), hits: [{ id: id(30), soundId: "snare", startStep: 4 }] },
+    catalog,
+  );
+  const updated = reduceOperation(
+    added.project,
+    { type: "drum-hits.update", patternId: id(11), updates: [{ hitId: id(30), changes: { soundId: "hat", startStep: 8 } }] },
+    catalog,
+  );
+  const deleted = reduceOperation(
+    updated.project,
+    { type: "drum-hits.delete", patternId: id(11), hitIds: [id(30)] },
+    catalog,
+  );
+
+  assert.deepEqual(added.changes.created.drumHitIds, [id(30)]);
+  assert.deepEqual(updated.changes.updated.drumHitIds, [id(30)]);
+  assert.deepEqual(updated.project.patterns[0]?.events[1], { id: id(30), soundId: "hat", startStep: 8 });
+  assert.deepEqual(deleted.changes.deleted.drumHitIds, [id(30)]);
+  assert.deepEqual(deleted.project.patterns[0]?.events.map(({ id: eventId }) => eventId), [id(13)]);
+});
+
+test("drum-hit commands reject synth patterns and duplicate target IDs", () => {
+  assert.throws(
+    () => reduceOperation(
+      projectWithLead(),
+      { type: "drum-hits.add", patternId: id(41), hits: [] },
+      catalog,
+    ),
+    ConflictError,
+  );
+  assert.throws(
+    () => reduceOperation(
+      projectWithBasicDrums(),
+      {
+        type: "drum-hits.delete", patternId: id(11), hitIds: [id(13), id(13)],
+      },
+      catalog,
+    ),
+    ConflictError,
+  );
+});
+
+test("drum-hit multi-event operations are atomic and no-op arrays preserve identity", () => {
+  const project = projectWithBasicDrums();
+  assert.throws(
+    () => reduceOperation(
+      project,
+      {
+        type: "drum-hits.add",
+        patternId: id(11),
+        hits: [{ id: id(30), soundId: "snare", startStep: 4 }, { id: id(31), soundId: "missing", startStep: 8 }],
+      },
+      catalog,
+    ),
+    NotFoundError,
+  );
+  const result = reduceOperation(project, { type: "drum-hits.add", patternId: id(11), hits: [] }, catalog);
+  assert.equal(result.project, project);
+  assert.equal(project.patterns[0]?.events.length, 1);
+});
+
+test("drum-hits add rejects more than 512 events", () => {
+  const hits = Array.from({ length: 512 }, (_, index) => ({
+    id: id(index + 30), soundId: "kick", startStep: index % 16,
+  }));
+
+  assert.throws(
+    () => reduceOperation(projectWithBasicDrums(), { type: "drum-hits.add", patternId: id(11), hits }, catalog),
+    LimitExceededError,
+  );
+});
+
+test("synth-notes add, update, and delete change only the target pattern", () => {
+  const added = reduceOperation(
+    projectWithLead(),
+    { type: "synth-notes.add", patternId: id(41), notes: [{ id: id(50), midiNote: 64, startStep: 4, lengthSteps: 4 }] },
+    catalog,
+  );
+  const updated = reduceOperation(
+    added.project,
+    { type: "synth-notes.update", patternId: id(41), updates: [{ noteId: id(50), changes: { midiNote: 67, startStep: 8, lengthSteps: 2 } }] },
+    catalog,
+  );
+  const deleted = reduceOperation(
+    updated.project,
+    { type: "synth-notes.delete", patternId: id(41), noteIds: [id(50)] },
+    catalog,
+  );
+
+  assert.deepEqual(added.changes.created.synthNoteIds, [id(50)]);
+  assert.deepEqual(updated.changes.updated.synthNoteIds, [id(50)]);
+  assert.deepEqual(updated.project.patterns[0]?.events[1], { id: id(50), midiNote: 67, startStep: 8, lengthSteps: 2 });
+  assert.deepEqual(deleted.changes.deleted.synthNoteIds, [id(50)]);
+  assert.deepEqual(deleted.project.patterns[0]?.events.map(({ id: eventId }) => eventId), [id(42)]);
+});
+
+test("synth-note update rejects a note ending beyond its pattern", () => {
+  const project = projectWithLead();
+
+  assert.throws(
+    () => reduceOperation(
+      project,
+      {
+        type: "synth-notes.update",
+        patternId: id(41),
+        updates: [{ noteId: id(42), changes: { startStep: 15, lengthSteps: 2 } }],
+      },
+      catalog,
+    ),
+    InvalidInputError,
+  );
+});
+
+test("synth-note commands reject drum patterns and duplicate target IDs", () => {
+  assert.throws(
+    () => reduceOperation(
+      projectWithBasicDrums(),
+      { type: "synth-notes.add", patternId: id(11), notes: [] },
+      catalog,
+    ),
+    ConflictError,
+  );
+  assert.throws(
+    () => reduceOperation(
+      projectWithLead(),
+      {
+        type: "synth-notes.update",
+        patternId: id(41),
+        updates: [{ noteId: id(42), changes: {} }, { noteId: id(42), changes: {} }],
+      },
+      catalog,
+    ),
+    ConflictError,
+  );
+});
+
+test("synth-note multi-event operations are atomic and no-op arrays preserve identity", () => {
+  const project = projectWithLead();
+  assert.throws(
+    () => reduceOperation(
+      project,
+      {
+        type: "synth-notes.add",
+        patternId: id(41),
+        notes: [
+          { id: id(50), midiNote: 64, startStep: 4, lengthSteps: 4 },
+          { id: id(51), midiNote: 70, startStep: 15, lengthSteps: 2 },
+        ],
+      },
+      catalog,
+    ),
+    InvalidInputError,
+  );
+  const result = reduceOperation(project, { type: "synth-notes.delete", patternId: id(41), noteIds: [] }, catalog);
+  assert.equal(result.project, project);
+  assert.equal(project.patterns[0]?.events.length, 1);
+});
+
+test("event updates and deletes preserve identity for empty changes", () => {
+  const drums = projectWithBasicDrums();
+  const lead = projectWithLead();
+
+  assert.equal(
+    reduceOperation(
+      drums,
+      { type: "drum-hits.update", patternId: id(11), updates: [{ hitId: id(13), changes: {} }] },
+      catalog,
+    ).project,
+    drums,
+  );
+  assert.equal(
+    reduceOperation(drums, { type: "drum-hits.delete", patternId: id(11), hitIds: [] }, catalog).project,
+    drums,
+  );
+  assert.equal(
+    reduceOperation(
+      lead,
+      { type: "synth-notes.update", patternId: id(41), updates: [{ noteId: id(42), changes: {} }] },
+      catalog,
+    ).project,
+    lead,
+  );
+  assert.equal(
+    reduceOperation(lead, { type: "synth-notes.delete", patternId: id(41), noteIds: [] }, catalog).project,
+    lead,
+  );
+});
+
+test("event commands do not mutate their project or operation input", () => {
+  const project = projectWithLead();
+  const operation = {
+    type: "synth-notes.add" as const,
+    patternId: id(41),
+    notes: [{ id: id(50), midiNote: 64, startStep: 4, lengthSteps: 4 }],
+  };
+  const originalProject = structuredClone(project);
+  const originalOperation = structuredClone(operation);
+
+  reduceOperation(project, operation, catalog);
+
+  assert.deepEqual(project, originalProject);
+  assert.deepEqual(operation, originalOperation);
 });
 
 test("mergeChangeSummaries deduplicates IDs in first-seen order", () => {

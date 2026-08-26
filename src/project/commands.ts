@@ -1,4 +1,4 @@
-import type { Project, Track } from "./model.ts";
+import type { DrumHit, Pattern, PatternLengthBars, Project, SynthNote, Track } from "./model.ts";
 
 export interface EntityIds {
   readonly projectIds: readonly string[];
@@ -30,7 +30,45 @@ export type Operation =
         readonly soloed?: boolean;
       };
     }
-  | { readonly type: "track.delete"; readonly trackId: string };
+  | { readonly type: "track.delete"; readonly trackId: string }
+  | { readonly type: "pattern.create"; readonly pattern: Pattern }
+  | {
+      readonly type: "pattern.duplicate";
+      readonly patternId: string;
+      readonly duplicatePatternId: string;
+      readonly duplicateName: string;
+      readonly duplicateEventIds: readonly string[];
+    }
+  | {
+      readonly type: "pattern.update";
+      readonly patternId: string;
+      readonly changes: { readonly name?: string; readonly lengthBars?: PatternLengthBars };
+    }
+  | { readonly type: "pattern.delete"; readonly patternId: string }
+  | { readonly type: "drum-hits.add"; readonly patternId: string; readonly hits: readonly DrumHit[] }
+  | {
+      readonly type: "drum-hits.update";
+      readonly patternId: string;
+      readonly updates: readonly {
+        readonly hitId: string;
+        readonly changes: { readonly soundId?: string; readonly startStep?: number };
+      }[];
+    }
+  | { readonly type: "drum-hits.delete"; readonly patternId: string; readonly hitIds: readonly string[] }
+  | { readonly type: "synth-notes.add"; readonly patternId: string; readonly notes: readonly SynthNote[] }
+  | {
+      readonly type: "synth-notes.update";
+      readonly patternId: string;
+      readonly updates: readonly {
+        readonly noteId: string;
+        readonly changes: {
+          readonly midiNote?: number;
+          readonly startStep?: number;
+          readonly lengthSteps?: number;
+        };
+      }[];
+    }
+  | { readonly type: "synth-notes.delete"; readonly patternId: string; readonly noteIds: readonly string[] };
 
 export interface Reduction {
   readonly project: Project;
