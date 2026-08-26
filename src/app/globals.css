@@ -1,5 +1,5 @@
 :root {
-  --bg: #070708;
+  --bg: #000;
   --panel: #0d0d10;
   --panel-raised: #151519;
   --line: rgba(255, 255, 255, 0.08);
@@ -23,7 +23,7 @@ body {
   height: 100%;
   margin: 0;
   overflow: hidden;
-  background: #030304;
+  background: #000;
 }
 
 body,
@@ -83,7 +83,7 @@ input:focus-visible {
   flex-direction: column;
   padding: 18px 12px 12px;
   border-right: 1px solid var(--line);
-  background: #08080a;
+  background: #000;
 }
 
 .sidebar-heading {
@@ -512,7 +512,7 @@ input:focus-visible {
   grid-template-columns: 154px minmax(730px, 1fr);
   grid-template-rows: 39px repeat(5, 112px);
   align-content: start;
-  background-color: #0a0a0c;
+  background-color: #000;
   background-image: linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
   background-size: calc((100% - 154px) / 16) 100%;
   background-position: 154px 0;
@@ -524,7 +524,7 @@ input:focus-visible {
   z-index: 1;
   width: 154px;
   border-right: 1px solid var(--line-strong);
-  background: #0c0c0f;
+  background: #000;
   content: "";
 }
 
@@ -541,7 +541,7 @@ input:focus-visible {
   color: #55555c;
   font-size: 8px;
   letter-spacing: 0.12em;
-  background: #0c0c0f;
+  background: #000;
 }
 
 .arrangement-corner button {
@@ -575,7 +575,7 @@ input:focus-visible {
   flex-direction: column;
   border-right: 1px solid var(--line-strong);
   border-bottom: 1px solid var(--line);
-  background: #0c0c0f;
+  background: #000;
 }
 
 .track-label {
