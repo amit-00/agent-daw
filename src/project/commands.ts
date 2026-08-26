@@ -134,6 +134,28 @@ export interface DispatchFailure {
 
 export type DispatchResult = DispatchSuccess | DispatchFailure;
 
+export interface HistoryControlSuccess {
+  readonly ok: true;
+  readonly project: Project;
+}
+
+export interface HistoryControlUnavailable {
+  readonly ok: false;
+  readonly reason: "nothing_to_undo" | "nothing_to_redo";
+  readonly project: Project;
+}
+
+export type HistoryControlResult =
+  | HistoryControlSuccess
+  | HistoryControlUnavailable;
+
+export interface RestoreCommand {
+  readonly id: string;
+  readonly source: CommandSource;
+  readonly label: string;
+  readonly targetEntryId: string;
+}
+
 const emptyEntityIds = (): EntityIds => ({
   projectIds: [], trackIds: [], patternIds: [], drumHitIds: [], synthNoteIds: [], arrangementClipIds: [],
 });

@@ -3,14 +3,17 @@ import {
   type Command,
   type DispatchFailure,
   type DispatchResult,
+  emptyChangeSummary,
   type HistoryAction,
+  type HistoryControlResult,
   type HistoryEntry,
   mergeChangeSummaries,
   type Operation,
+  type RestoreCommand,
 } from "./commands.ts";
-import { DomainError, InvalidInputError, LimitExceededError } from "./errors.ts";
-import { PROJECT_CAPS, type Project, type SoundCatalog } from "./model.ts";
-import { reduceOperation } from "./reducer.ts";
+import { DomainError, InvalidInputError, LimitExceededError, NotFoundError } from "./errors.ts";
+import { PROJECT_CAPS, type Project, type SoundCatalog, validateProject } from "./model.ts";
+import { reduceOperation, summarizeProjectDiff } from "./reducer.ts";
 
 export interface ProjectServiceState {
   readonly project: Project;
@@ -21,6 +24,9 @@ export interface ProjectServiceState {
 export interface ProjectService {
   getState(): ProjectServiceState;
   dispatch(command: Command): DispatchResult;
+  undo(): HistoryControlResult;
+  redo(): HistoryControlResult;
+  restore(command: RestoreCommand): DispatchResult;
 }
 
 export interface ProjectServiceOptions {
@@ -123,14 +129,14 @@ const validateOperation = (operation: unknown, path: string): void => {
   }
 };
 
-const commandIdFor = (command: Command): string => {
+const commandIdFor = (command: Command | RestoreCommand): string => {
   const record = requireRecord(command, "command");
   return typeof record.id === "string" && record.id.length > 0
     ? record.id
     : invalidCommand("command.id", "must be a non-empty string");
 };
 
-const validateCommand = (command: Command): void => {
+const validateCommandMetadata = (command: unknown): Readonly<Record<string, unknown>> => {
   const record = requireRecord(command, "command");
   if (record.source !== "manual" && record.source !== "agent") {
     invalidCommand("command.source", "must be manual or agent");
@@ -138,6 +144,11 @@ const validateCommand = (command: Command): void => {
   if (typeof record.label !== "string" || record.label.trim().length === 0) {
     invalidCommand("command.label", "must be a non-empty string");
   }
+  return record;
+};
+
+const validateCommand = (command: Command): void => {
+  const record = validateCommandMetadata(command);
   if (record.kind === "operation") {
     return;
   }
@@ -203,6 +214,32 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
     successfulOutcomes.set(commandId, outcome);
   };
 
+  const commit = (
+    commandId: string,
+    source: HistoryEntry["source"],
+    label: string,
+    action: HistoryAction,
+    nextProject: Project,
+    changes: ChangeSummary,
+  ): HistoryEntry => {
+    const historyEntry: HistoryEntry = {
+      id: options.createHistoryId(),
+      commandId,
+      source,
+      label,
+      createdAt: options.now(),
+      action,
+      before: project,
+      after: nextProject,
+      changes,
+    };
+    history = [...history.slice(0, historyCursor + 1), historyEntry]
+      .slice(-PROJECT_CAPS.maxHistoryEntries);
+    historyCursor = history.length - 1;
+    project = nextProject;
+    return historyEntry;
+  };
+
   return {
     getState: (): ProjectServiceState => ({ project, history, historyCursor }),
     dispatch: (command: Command): DispatchResult => {
@@ -246,23 +283,75 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
         const changed = nextProject !== project;
         let historyEntry: HistoryEntry | undefined;
         if (changed) {
-          historyEntry = {
-            id: options.createHistoryId(),
+          historyEntry = commit(
             commandId,
-            source: command.source,
-            label: command.label,
-            createdAt: options.now(),
-            action: actionFor(command.kind, historyOperations),
-            before: project,
-            after: nextProject,
+            command.source,
+            command.label,
+            actionFor(command.kind, historyOperations),
+            nextProject,
             changes,
-          };
-          const nextHistory = [...history.slice(0, historyCursor + 1), historyEntry];
-          history = nextHistory.slice(-PROJECT_CAPS.maxHistoryEntries);
-          historyCursor = history.length - 1;
-          project = nextProject;
+          );
         }
 
+        const outcome: SuccessfulOutcome = {
+          changed,
+          ...(historyEntry === undefined ? {} : { historyEntry }),
+          changes,
+        };
+        remember(commandId, outcome);
+        return { ok: true, deduplicated: false, project, ...outcome };
+      } catch (error: unknown) {
+        if (error instanceof DomainError) return failure(project, error);
+        throw error;
+      }
+    },
+    undo: (): HistoryControlResult => {
+      const entry = history[historyCursor];
+      if (entry === undefined) return { ok: false, reason: "nothing_to_undo", project };
+      project = entry.before;
+      historyCursor -= 1;
+      return { ok: true, project };
+    },
+    redo: (): HistoryControlResult => {
+      const entry = history[historyCursor + 1];
+      if (entry === undefined) return { ok: false, reason: "nothing_to_redo", project };
+      project = entry.after;
+      historyCursor += 1;
+      return { ok: true, project };
+    },
+    restore: (command: RestoreCommand): DispatchResult => {
+      try {
+        const commandId = commandIdFor(command);
+        const existing = successfulOutcomes.get(commandId);
+        if (existing !== undefined) {
+          return { ok: true, deduplicated: true, project, ...existing };
+        }
+
+        const record = validateCommandMetadata(command);
+        if (typeof record.targetEntryId !== "string" || record.targetEntryId.length === 0) {
+          invalidCommand("command.targetEntryId", "must be a non-empty string");
+        }
+        const target = history.find((entry) => entry.id === record.targetEntryId);
+        if (target === undefined) {
+          throw new NotFoundError({
+            path: "command.targetEntryId",
+            message: "must reference a retained history entry",
+          });
+        }
+        validateProject(target.after, options.catalog);
+
+        const changed = JSON.stringify(target.after) !== JSON.stringify(project);
+        const changes = changed ? summarizeProjectDiff(project, target.after) : emptyChangeSummary();
+        const historyEntry = changed
+          ? commit(
+            commandId,
+            command.source,
+            command.label,
+            { kind: "restore", targetEntryId: target.id },
+            target.after,
+            changes,
+          )
+          : undefined;
         const outcome: SuccessfulOutcome = {
           changed,
           ...(historyEntry === undefined ? {} : { historyEntry }),

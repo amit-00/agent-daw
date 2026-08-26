@@ -77,6 +77,14 @@ const createBassTrackCommand = (commandId: string): Command => ({
   operation: { type: "track.create", track: bassTrack() },
 });
 
+const updateProjectNameCommand = (commandId: string, name: string): Command => ({
+  kind: "operation",
+  id: commandId,
+  source: "manual",
+  label: `Rename project to ${name}`,
+  operation: { type: "project.update", changes: { name } },
+});
+
 const createTestService = (initialProject: Project): ProjectService => {
   let nextHistoryId = 700;
   let timestamp = 1_700_000_000_000;
@@ -1356,25 +1364,276 @@ test("dispatch detaches caller-owned added events and JSON-round-trips history",
   assert.deepEqual(entry, JSON.parse(JSON.stringify(entry)));
 });
 
-test("direct dispatch retains only the 100 newest history entries", () => {
+test("undo and redo replace the project from snapshots", () => {
+  const service = createTestService(blankProject());
+  service.dispatch(createBassTrackCommand(id(200)));
+
+  const undone = service.undo();
+  assert.equal(undone.ok, true);
+  assert.equal(service.getState().project.tracks.length, 0);
+  assert.equal(service.getState().historyCursor, -1);
+
+  const redone = service.redo();
+  assert.equal(redone.ok, true);
+  assert.equal(service.getState().project.tracks.length, 1);
+  assert.equal(service.getState().historyCursor, 0);
+});
+
+test("undo and redo boundaries return unavailable without mutation", () => {
+  const service = createTestService(blankProject());
+
+  const unavailableUndo = service.undo();
+  assert.deepEqual(unavailableUndo, {
+    ok: false,
+    reason: "nothing_to_undo",
+    project: blankProject(),
+  });
+
+  service.dispatch(createBassTrackCommand(id(201)));
+  const unavailableRedo = service.redo();
+  assert.equal(unavailableRedo.ok, false);
+  if (!unavailableRedo.ok) assert.equal(unavailableRedo.reason, "nothing_to_redo");
+  assert.equal(service.getState().historyCursor, 0);
+  assert.equal(service.getState().project.tracks.length, 1);
+});
+
+test("a new commit after undo discards the redo branch", () => {
+  const service = createTestService(blankProject());
+  service.dispatch(createBassTrackCommand(id(202)));
+  service.dispatch(updateProjectNameCommand(id(203), "First branch"));
+  service.undo();
+  service.dispatch(updateProjectNameCommand(id(204), "Second branch"));
+
+  assert.equal(service.getState().history.length, 2);
+  assert.equal(service.getState().history[1]?.commandId, id(204));
+  assert.equal(service.redo().ok, false);
+});
+
+test("restore commits a retained after-snapshot as a new action", () => {
+  const service = createTestService(blankProject());
+  const created = service.dispatch(createBassTrackCommand(id(205)));
+  assert.equal(created.ok, true);
+  if (!created.ok || !created.historyEntry) assert.fail("expected history entry");
+  const targetEntryId = created.historyEntry.id;
+  service.dispatch(updateProjectNameCommand(id(206), "Changed"));
+
+  const restored = service.restore({
+    id: id(207),
+    source: "manual",
+    label: "Restore bass version",
+    targetEntryId,
+  });
+
+  assert.equal(restored.ok, true);
+  if (!restored.ok) return;
+  assert.equal(restored.changed, true);
+  assert.equal(service.getState().project.name, "Untitled");
+  assert.deepEqual(restored.changes.updated.projectIds, [id(1)]);
+  assert.deepEqual(service.getState().history.at(-1)?.action, { kind: "restore", targetEntryId });
+});
+
+test("restore resolves a target from the redo branch before truncating it", () => {
+  const service = createTestService(blankProject());
+  service.dispatch(createBassTrackCommand(id(208)));
+  const renamed = service.dispatch(updateProjectNameCommand(id(209), "Redo target"));
+  assert.equal(renamed.ok, true);
+  if (!renamed.ok || !renamed.historyEntry) assert.fail("expected history entry");
+  const targetEntryId = renamed.historyEntry.id;
+  service.undo();
+
+  const restored = service.restore({
+    id: id(210),
+    source: "agent",
+    label: "Restore redo target",
+    targetEntryId,
+  });
+
+  assert.equal(restored.ok, true);
+  assert.equal(service.getState().project.name, "Redo target");
+  assert.equal(service.getState().history.length, 2);
+  assert.deepEqual(service.getState().history[1]?.action, { kind: "restore", targetEntryId });
+  assert.equal(service.getState().historyCursor, 1);
+});
+
+test("restore reports the complete snapshot diff", () => {
+  const service = createTestService(blankProject());
+  const created = service.dispatch({
+    kind: "batch",
+    id: id(211),
+    source: "agent",
+    label: "Build bass phrase",
+    operations: [
+      { type: "track.create", track: bassTrack() },
+      {
+        type: "pattern.create",
+        pattern: {
+          id: id(21), trackId: id(20), name: "Bass line", kind: "synth", lengthBars: 1, events: [],
+        },
+      },
+      {
+        type: "synth-notes.add",
+        patternId: id(21),
+        notes: [{ id: id(22), midiNote: 36, startStep: 0, lengthSteps: 4 }],
+      },
+      {
+        type: "arrangement.place",
+        clip: { id: id(23), patternId: id(21), startBar: 0, repeatCount: 1 },
+      },
+    ],
+  });
+  assert.equal(created.ok, true);
+  if (!created.ok || !created.historyEntry) assert.fail("expected history entry");
+  const targetEntryId = created.historyEntry.id;
+  service.dispatch({
+    kind: "operation",
+    id: id(212),
+    source: "manual",
+    label: "Delete bass",
+    operation: { type: "track.delete", trackId: id(20) },
+  });
+
+  const restored = service.restore({
+    id: id(213), source: "manual", label: "Restore bass phrase", targetEntryId,
+  });
+
+  assert.equal(restored.ok, true);
+  if (!restored.ok) return;
+  assert.deepEqual(restored.changes.created.trackIds, [id(20)]);
+  assert.deepEqual(restored.changes.created.patternIds, [id(21)]);
+  assert.deepEqual(restored.changes.created.synthNoteIds, [id(22)]);
+  assert.deepEqual(restored.changes.created.arrangementClipIds, [id(23)]);
+});
+
+test("restore rejects a missing target without changing state", () => {
+  const service = createTestService(blankProject());
+  service.dispatch(createBassTrackCommand(id(214)));
+  const before = structuredClone(service.getState());
+
+  const restored = service.restore({
+    id: id(215), source: "manual", label: "Restore missing version", targetEntryId: id(999),
+  });
+
+  assert.equal(restored.ok, false);
+  if (!restored.ok) {
+    assert.equal(restored.error.code, "not_found");
+    assert.equal(restored.error.path, "command.targetEntryId");
+  }
+  assert.deepEqual(service.getState(), before);
+});
+
+test("restore validates the target snapshot before committing", () => {
+  const service = createTestService(blankProject());
+  const created = service.dispatch(createBassTrackCommand(id(216)));
+  assert.equal(created.ok, true);
+  if (!created.ok || !created.historyEntry) assert.fail("expected history entry");
+  service.dispatch(updateProjectNameCommand(id(217), "Current"));
+  (created.historyEntry.after as { name: string }).name = "   ";
+  const before = structuredClone(service.getState());
+
+  const restored = service.restore({
+    id: id(218), source: "manual", label: "Restore invalid snapshot", targetEntryId: created.historyEntry.id,
+  });
+
+  assert.equal(restored.ok, false);
+  if (!restored.ok) assert.equal(restored.error.code, "invalid_input");
+  assert.deepEqual(service.getState(), before);
+});
+
+test("a no-op restore is cached without truncating redo history", () => {
+  const service = createTestService(blankProject());
+  const created = service.dispatch(createBassTrackCommand(id(219)));
+  assert.equal(created.ok, true);
+  if (!created.ok || !created.historyEntry) assert.fail("expected history entry");
+  service.dispatch({
+    kind: "operation",
+    id: id(220),
+    source: "manual",
+    label: "Rename bass",
+    operation: { type: "track.update", trackId: id(20), changes: { name: "Changed bass" } },
+  });
+  service.dispatch({
+    kind: "operation",
+    id: id(221),
+    source: "manual",
+    label: "Restore bass name",
+    operation: { type: "track.update", trackId: id(20), changes: { name: "Bass" } },
+  });
+  service.dispatch(updateProjectNameCommand(id(222), "Redo branch"));
+  service.undo();
+  const command = {
+    id: id(223), source: "manual" as const, label: "Keep bass version", targetEntryId: created.historyEntry.id,
+  };
+
+  const first = service.restore(command);
+  const second = service.restore({
+    id: command.id,
+    source: "untrusted",
+    label: "",
+    targetEntryId: id(999),
+  } as unknown as Parameters<ProjectService["restore"]>[0]);
+
+  assert.equal(first.ok, true);
+  assert.equal(second.ok, true);
+  if (first.ok) assert.equal(first.changed, false);
+  if (second.ok) assert.equal(second.deduplicated, true);
+  assert.equal(service.getState().history.length, 4);
+  assert.equal(service.getState().historyCursor, 2);
+});
+
+test("restore rejects malformed runtime metadata without changing state", () => {
+  const service = createTestService(blankProject());
+  const created = service.dispatch(createBassTrackCommand(id(224)));
+  assert.equal(created.ok, true);
+  if (!created.ok || !created.historyEntry) assert.fail("expected history entry");
+  const before = structuredClone(service.getState());
+
+  const restored = service.restore({
+    id: id(225), source: "untrusted", label: "", targetEntryId: created.historyEntry.id,
+  } as unknown as Parameters<ProjectService["restore"]>[0]);
+
+  assert.equal(restored.ok, false);
+  if (!restored.ok) assert.equal(restored.error.code, "invalid_input");
+  assert.deepEqual(service.getState(), before);
+});
+
+test("history retention keeps only the 100 newest entries", () => {
   const service = createTestService(blankProject());
 
   for (let index = 0; index <= 100; index += 1) {
-    const result = service.dispatch({
-      kind: "operation",
-      id: id(200 + index),
-      source: "manual",
-      label: "Rename project",
-      operation: { type: "project.update", changes: { name: `Project ${index}` } },
-    });
+    const result = service.dispatch(updateProjectNameCommand(id(300 + index), `Project ${index}`));
     assert.equal(result.ok, true);
   }
 
   const state = service.getState();
   assert.equal(state.history.length, 100);
   assert.equal(state.historyCursor, 99);
-  assert.equal(state.history[0]?.commandId, id(201));
+  assert.equal(state.history[0]?.commandId, id(301));
   assert.equal(state.project.name, "Project 100");
+});
+
+test("retention evicts only the oldest successful no-op outcome", () => {
+  const service = createTestService(blankProject());
+  const noOp = (commandId: string): Command => ({
+    kind: "operation",
+    id: commandId,
+    source: "manual",
+    label: "Keep project",
+    operation: { type: "project.update", changes: {} },
+  });
+
+  for (let index = 0; index <= 100; index += 1) {
+    assert.equal(service.dispatch(noOp(id(500 + index))).ok, true);
+  }
+
+  const evicted = service.dispatch(noOp(id(500)));
+  const retained = service.dispatch(noOp(id(600)));
+  assert.equal(evicted.ok, true);
+  assert.equal(retained.ok, true);
+  if (evicted.ok) assert.equal(evicted.deduplicated, false);
+  if (retained.ok) assert.equal(retained.deduplicated, true);
+  assert.equal(service.getState().history.length, 0);
+  assert.equal(service.getState().historyCursor, -1);
+  assert.deepEqual(service.getState().project, blankProject());
 });
 
 test("a successful command ID is retried after its 100-outcome cache entry expires", () => {
