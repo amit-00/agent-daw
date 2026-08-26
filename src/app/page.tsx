@@ -4,7 +4,6 @@ import type { CSSProperties, Dispatch, ReactElement, SetStateAction } from "reac
 import { useState } from "react";
 
 type TrackId = "drums" | "bass" | "chords" | "melody" | "pad";
-type ToolId = "select" | "draw" | "split" | "focus";
 type EditorTab = "mixer" | "sequence";
 type IconName =
   | "activity"
@@ -12,12 +11,9 @@ type IconName =
   | "compose"
   | "download"
   | "draw"
-  | "focus"
   | "history"
   | "mixer"
-  | "select"
-  | "sounds"
-  | "split";
+  | "sounds";
 
 interface Track {
   readonly id: TrackId;
@@ -35,12 +31,6 @@ interface Clip {
   readonly start: number;
   readonly width: number;
   readonly detail: string;
-}
-
-interface Tool {
-  readonly id: ToolId;
-  readonly label: string;
-  readonly icon: IconName;
 }
 
 const TRACKS: readonly Track[] = [
@@ -97,25 +87,15 @@ const CLIPS: readonly Clip[] = [
   { id: "pad-a", trackId: "pad", name: "Night Air", start: 0, width: 100, detail: "8 bars · 16 notes" },
 ] as const;
 
-const TOOLS: readonly Tool[] = [
-  { id: "select", label: "Select", icon: "select" },
-  { id: "draw", label: "Draw", icon: "draw" },
-  { id: "split", label: "Split", icon: "split" },
-  { id: "focus", label: "Focus", icon: "focus" },
-] as const;
-
 const ICONS: Readonly<Record<IconName, string>> = {
   activity: "⌁",
   chevron: "›",
   compose: "✦",
   download: "⇩",
   draw: "✎",
-  focus: "⌖",
   history: "↶",
   mixer: "≡",
-  select: "↖",
   sounds: "♬",
-  split: "✂",
 };
 
 const DRUM_LEVELS = [33, 58, 41, 75, 51, 86, 42, 67, 47, 80, 57, 91, 49, 70, 38, 76, 53, 88, 44, 72, 35, 61, 46, 82] as const;
@@ -234,10 +214,8 @@ function formatTime(playhead: number): string {
 export default function StudioPage(): ReactElement {
   const [isPlaying, setIsPlaying] = useState(false);
   const [selectedClipId, setSelectedClipId] = useState(CLIPS[4].id);
-  const [editorOpen, setEditorOpen] = useState(true);
   const [editorTab, setEditorTab] = useState<EditorTab>("sequence");
   const [activityOpen, setActivityOpen] = useState(true);
-  const [activeTool, setActiveTool] = useState<ToolId>("select");
   const [playhead, setPlayhead] = useState(27);
   const [mutedTracks, setMutedTracks] = useState<ReadonlySet<TrackId>>(new Set());
   const [soloTracks, setSoloTracks] = useState<ReadonlySet<TrackId>>(new Set());
@@ -343,7 +321,7 @@ export default function StudioPage(): ReactElement {
           </div>
         </header>
 
-        <div className={editorOpen ? "canvas-wrap editor-open" : "canvas-wrap"}>
+        <div className="canvas-wrap editor-open">
           <div className="arrangement-pane">
             <section className="arrangement" aria-label="Song arrangement">
             <div className="arrangement-corner">
@@ -410,15 +388,13 @@ export default function StudioPage(): ReactElement {
             </section>
           </div>
 
-          {editorOpen ? (
-            <aside className="editor-drawer glass-card" aria-label="Track editor">
+          <aside className="editor-drawer glass-card" aria-label="Track editor">
               <div className="editor-header">
                 <span><Icon name={editorTab === "sequence" ? "draw" : "mixer"} /> Track editor</span>
                 <div className="editor-tabs">
                   <button className={editorTab === "sequence" ? "active" : ""} type="button" onClick={() => setEditorTab("sequence")}>Sequence</button>
                   <button className={editorTab === "mixer" ? "active" : ""} type="button" onClick={() => setEditorTab("mixer")}>Mixer</button>
                 </div>
-                <button className="close-button" type="button" aria-label="Close track editor" onClick={() => setEditorOpen(false)}>×</button>
               </div>
 
               {editorTab === "sequence" ? (
@@ -475,43 +451,8 @@ export default function StudioPage(): ReactElement {
                   </div>
                 </div>
               )}
-            </aside>
-          ) : null}
+          </aside>
 
-          <div className="tool-dock glass-card" role="toolbar" aria-label="Editing tools">
-            {TOOLS.map((tool) => (
-              <button
-                className={activeTool === tool.id ? "active" : ""}
-                key={tool.id}
-                type="button"
-                aria-label={tool.label}
-                aria-pressed={activeTool === tool.id}
-                title={tool.label}
-                onClick={() => setActiveTool(tool.id)}
-              >
-                <Icon name={tool.icon} />
-              </button>
-            ))}
-            <span className="dock-divider" />
-            <button
-              className={editorOpen && editorTab === "sequence" ? "active wide" : "wide"}
-              type="button"
-              aria-label="Show sequence editor"
-              aria-pressed={editorOpen && editorTab === "sequence"}
-              onClick={() => { setEditorTab("sequence"); setEditorOpen(true); }}
-            >
-              <Icon name="draw" /> Sequence
-            </button>
-            <button
-              className={editorOpen && editorTab === "mixer" ? "active wide" : "wide"}
-              type="button"
-              aria-label="Show mixer"
-              aria-pressed={editorOpen && editorTab === "mixer"}
-              onClick={() => { setEditorTab("mixer"); setEditorOpen(true); }}
-            >
-              <Icon name="mixer" /> Mixer
-            </button>
-          </div>
         </div>
       </section>
 
