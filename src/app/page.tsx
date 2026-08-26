@@ -418,7 +418,7 @@ export default function StudioPage(): ReactElement {
                   >
                   <div className="sequence-toolbar">
                     <span><small>SELECTED TRACK</small><strong>{selectedTrack.name}</strong><em>{selectedClip.name} · {selectedClip.detail}</em></span>
-                    <div className="sequence-options"><button type="button">{selectedClip.name}</button><button type="button">1 / 16</button><button type="button">100%</button></div>
+                    <div className="sequence-options"><button type="button">1 / 16</button><button type="button">100%</button></div>
                   </div>
                   <div className="sequence-workspace">
                     <div className="sequence-ruler">

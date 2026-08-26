@@ -327,7 +327,7 @@ input:focus-visible {
 }
 
 .canvas-wrap.editor-open {
-  grid-template-rows: minmax(0, 1fr) 360px;
+  grid-template-rows: minmax(0, 1fr) 410px;
 }
 
 .arrangement-pane {
