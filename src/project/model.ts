@@ -151,6 +151,10 @@ const assertBoolean = (value: boolean, path: string): void => {
   }
 };
 
+const assertArray = (value: unknown, path: string): readonly unknown[] => {
+  return Array.isArray(value) ? value : invalid(path, "must be an array");
+};
+
 const assertMaximum = (length: number, maximum: number, path: string): void => {
   if (length > maximum) {
     throw new LimitExceededError({ path, message: `must contain at most ${maximum} entries` });
@@ -254,7 +258,8 @@ const validatePattern = (
   if (pattern.lengthBars !== 1 && pattern.lengthBars !== 2 && pattern.lengthBars !== 4) {
     invalid(`${path}.lengthBars`, "must be 1, 2, or 4");
   }
-  assertMaximum(pattern.events.length, PROJECT_CAPS.maxEventsPerPattern, `${path}.events`);
+  const patternEvents = assertArray(pattern.events, `${path}.events`);
+  assertMaximum(patternEvents.length, PROJECT_CAPS.maxEventsPerPattern, `${path}.events`);
 
   const track = tracks.get(pattern.trackId);
   if (track === undefined) {
@@ -279,14 +284,20 @@ const validatePattern = (
       });
     }
     const soundIds = new Set(kit.soundIds);
-    for (const [eventIndex, event] of pattern.events.entries()) {
-      validateDrumEvent(event, eventIndex, path, stepCount, soundIds, eventIds);
+    for (const [eventIndex, event] of patternEvents.entries()) {
+      if (typeof event !== "object" || event === null || Array.isArray(event)) {
+        invalid(`${path}.events[${eventIndex}]`, "must be an object");
+      }
+      validateDrumEvent(event as DrumHit, eventIndex, path, stepCount, soundIds, eventIds);
     }
     return;
   }
 
-  for (const [eventIndex, event] of pattern.events.entries()) {
-    validateSynthEvent(event, eventIndex, path, stepCount, eventIds);
+  for (const [eventIndex, event] of patternEvents.entries()) {
+    if (typeof event !== "object" || event === null || Array.isArray(event)) {
+      invalid(`${path}.events[${eventIndex}]`, "must be an object");
+    }
+    validateSynthEvent(event as SynthNote, eventIndex, path, stepCount, eventIds);
   }
 };
 

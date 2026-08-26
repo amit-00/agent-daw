@@ -1185,6 +1185,107 @@ test("dispatch rejects malformed nested operation payloads", () => {
   assert.equal(service.getState().history.length, 0);
 });
 
+test("dispatch rejects a pattern.create payload with non-array events", () => {
+  const service = createTestService(blankProject());
+  const result = service.dispatch({
+    kind: "operation",
+    id: id(140),
+    source: "agent",
+    label: "Malformed pattern",
+    operation: {
+      type: "pattern.create",
+      pattern: {
+        id: id(21), trackId: id(20), name: "Bass line", kind: "synth", lengthBars: 1, events: null,
+      },
+    } as unknown as Operation,
+  });
+
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.equal(result.error.code, "invalid_input");
+  assert.deepEqual(service.getState().project, blankProject());
+});
+
+test("a malformed second batch member returns its batch index", () => {
+  const service = createTestService(blankProject());
+  const result = service.dispatch({
+    kind: "batch",
+    id: id(141),
+    source: "agent",
+    label: "Malformed second operation",
+    operations: [
+      { type: "project.update", changes: { name: "Changed" } },
+      { type: "project.update" } as unknown as Operation,
+    ],
+  });
+
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.equal(result.error.batchIndex, 1);
+  assert.deepEqual(service.getState().project, blankProject());
+  assert.equal(service.getState().history.length, 0);
+});
+
+test("a malformed replay returns the retained successful command outcome", () => {
+  const service = createTestService(blankProject());
+  const first = service.dispatch(createBassTrackCommand(id(142)));
+  const replay = service.dispatch({
+    id: id(142),
+    source: "untrusted",
+    label: "",
+    kind: "batch",
+    operations: null,
+  } as unknown as Command);
+
+  assert.equal(first.ok, true);
+  assert.equal(replay.ok, true);
+  if (replay.ok) assert.equal(replay.deduplicated, true);
+  assert.equal(service.getState().history.length, 1);
+  assert.equal(service.getState().project.tracks[0]?.name, "Bass");
+});
+
+test("committed history actions are detached and serializable", () => {
+  const service = createTestService(blankProject());
+  const command: Command = {
+    kind: "operation",
+    id: id(143),
+    source: "manual",
+    label: "Rename project",
+    operation: {
+      type: "project.update",
+      changes: { name: "Renamed", ignored: undefined },
+    } as unknown as Operation,
+  };
+  const result = service.dispatch(command);
+  (command as unknown as { operation: { changes: { name: string } } }).operation.changes.name = "Mutated after dispatch";
+
+  assert.equal(result.ok, true);
+  const action = service.getState().history[0]?.action;
+  assert.equal(action?.kind, "operation");
+  if (action?.kind === "operation" && action.operation.type === "project.update") {
+    assert.equal(action.operation.changes.name, "Renamed");
+  }
+  assert.doesNotThrow(() => structuredClone(action));
+  assert.deepEqual(action, JSON.parse(JSON.stringify(action)));
+});
+
+test("dispatch rejects a non-serializable operation before committing", () => {
+  const service = createTestService(blankProject());
+  const result = service.dispatch({
+    kind: "operation",
+    id: id(144),
+    source: "agent",
+    label: "Non-serializable operation",
+    operation: {
+      type: "project.update",
+      changes: { name: "Changed", extra: () => undefined },
+    } as unknown as Operation,
+  });
+
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.equal(result.error.code, "invalid_input");
+  assert.deepEqual(service.getState().project, blankProject());
+  assert.equal(service.getState().history.length, 0);
+});
+
 test("direct dispatch retains only the 100 newest history entries", () => {
   const service = createTestService(blankProject());
 

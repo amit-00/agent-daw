@@ -123,12 +123,15 @@ const validateOperation = (operation: unknown, path: string): void => {
   }
 };
 
+const commandIdFor = (command: Command): string => {
+  const record = requireRecord(command, "command");
+  return typeof record.id === "string" && record.id.length > 0
+    ? record.id
+    : invalidCommand("command.id", "must be a non-empty string");
+};
+
 const validateCommand = (command: Command): void => {
-  const value: unknown = command;
-  const record = isRecord(value) ? value : invalidCommand("command", "must be an object");
-  if (typeof record.id !== "string" || record.id.length === 0) {
-    invalidCommand("command.id", "must be a non-empty string");
-  }
+  const record = requireRecord(command, "command");
   if (record.source !== "manual" && record.source !== "agent") {
     invalidCommand("command.source", "must be manual or agent");
   }
@@ -136,12 +139,10 @@ const validateCommand = (command: Command): void => {
     invalidCommand("command.label", "must be a non-empty string");
   }
   if (record.kind === "operation") {
-    validateOperation(record.operation, "command.operation");
     return;
   }
   if (record.kind === "batch") {
-    const operations = requireArray(record.operations, "command.operations");
-    operations.forEach((operation: unknown, index: number) => validateOperation(operation, `command.operations[${index}]`));
+    requireArray(record.operations, "command.operations");
     return;
   }
   invalidCommand("command.kind", "must be operation or batch");
@@ -161,9 +162,21 @@ const operationsFor = (command: Command): readonly Operation[] => {
   return command.operations;
 };
 
-const actionFor = (command: Command): HistoryAction => command.kind === "operation"
-  ? { kind: "operation", operation: command.operation }
-  : { kind: "batch", operations: command.operations };
+const cloneOperation = (operation: unknown, path: string): Operation => {
+  try {
+    const clone = structuredClone(operation);
+    const serialized = JSON.stringify(clone);
+    return serialized === undefined
+      ? invalidCommand(path, "must be JSON-serializable")
+      : JSON.parse(serialized) as Operation;
+  } catch {
+    return invalidCommand(path, "must be structured-cloneable and JSON-serializable");
+  }
+};
+
+const actionFor = (kind: Command["kind"], operations: readonly Operation[]): HistoryAction => kind === "operation"
+  ? { kind: "operation", operation: operations[0]! }
+  : { kind: "batch", operations };
 
 const failure = (project: Project, error: DomainError): DispatchFailure => ({
   ok: false,
@@ -194,8 +207,8 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
     getState: (): ProjectServiceState => ({ project, history, historyCursor }),
     dispatch: (command: Command): DispatchResult => {
       try {
-        validateCommand(command);
-        const existing = successfulOutcomes.get(command.id);
+        const commandId = commandIdFor(command);
+        const existing = successfulOutcomes.get(commandId);
         if (existing !== undefined) {
           return {
             ok: true,
@@ -205,14 +218,20 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
           };
         }
 
+        validateCommand(command);
         const operations = operationsFor(command);
         let nextProject = project;
         const changeSummaries: ChangeSummary[] = [];
+        const historyOperations: Operation[] = [];
         for (const [batchIndex, operation] of operations.entries()) {
           try {
+            const path = command.kind === "batch" ? `command.operations[${batchIndex}]` : "command.operation";
+            validateOperation(operation, path);
+            const historyOperation = cloneOperation(operation, path);
             const reduction = reduceOperation(nextProject, operation, options.catalog);
             nextProject = reduction.project;
             changeSummaries.push(reduction.changes);
+            historyOperations.push(historyOperation);
           } catch (error: unknown) {
             if (error instanceof DomainError) {
               return command.kind === "batch"
@@ -229,11 +248,11 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
         if (changed) {
           historyEntry = {
             id: options.createHistoryId(),
-            commandId: command.id,
+            commandId,
             source: command.source,
             label: command.label,
             createdAt: options.now(),
-            action: actionFor(command),
+            action: actionFor(command.kind, historyOperations),
             before: project,
             after: nextProject,
             changes,
@@ -249,7 +268,7 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
           ...(historyEntry === undefined ? {} : { historyEntry }),
           changes,
         };
-        remember(command.id, outcome);
+        remember(commandId, outcome);
         return { ok: true, deduplicated: false, project, ...outcome };
       } catch (error: unknown) {
         if (error instanceof DomainError) return failure(project, error);
