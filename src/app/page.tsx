@@ -317,9 +317,19 @@ export default function StudioPage(): ReactElement {
             <div className="ruler">
               {[1, 2, 3, 4, 5, 6, 7, 8].map((bar) => <span key={bar}>{String(bar).padStart(2, "0")}</span>)}
             </div>
+            <label className="arrangement-seek">
+              <span>Seek arrangement</span>
+              <input
+                type="range"
+                min="0"
+                max="100"
+                value={playhead}
+                onChange={(event) => setPlayhead(Number(event.target.value))}
+              />
+            </label>
 
             {TRACKS.map((track, trackIndex) => (
-              <div className="track-row" style={{ gridRow: trackIndex + 2 }} key={track.id}>
+              <div className="track-row" style={{ gridRow: trackIndex + 3 }} key={track.id}>
                 <div className="track-label">
                   <span className="track-copy"><strong>{track.name}</strong><small>{track.preset}</small></span>
                   <button className="track-menu" type="button" aria-label={`More options for ${track.name}`}>•••</button>
@@ -335,7 +345,7 @@ export default function StudioPage(): ReactElement {
             ))}
 
             {TRACKS.map((track, trackIndex) => (
-              <div className="lane" style={{ gridRow: trackIndex + 2 }} key={`${track.id}-lane`}>
+              <div className="lane" style={{ gridRow: trackIndex + 3 }} key={`${track.id}-lane`}>
                 {CLIPS.filter((clip) => clip.trackId === track.id).map((clip) => (
                   <button
                     className={selectedClip.id === clip.id ? "clip selected" : "clip"}
@@ -367,16 +377,6 @@ export default function StudioPage(): ReactElement {
             <div className="playhead" style={{ "--playhead": `${playhead}%` } as CSSProperties} aria-hidden="true">
               <span />
             </div>
-            <label className="playhead-control">
-              <span>Playhead position</span>
-              <input
-                type="range"
-                min="0"
-                max="100"
-                value={playhead}
-                onChange={(event) => setPlayhead(Number(event.target.value))}
-              />
-            </label>
             </section>
           </div>
 
