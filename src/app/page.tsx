@@ -236,7 +236,6 @@ export default function StudioPage(): ReactElement {
   const [selectedClipId, setSelectedClipId] = useState(CLIPS[4].id);
   const [editorOpen, setEditorOpen] = useState(true);
   const [editorTab, setEditorTab] = useState<EditorTab>("sequence");
-  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [activityOpen, setActivityOpen] = useState(true);
   const [activeTool, setActiveTool] = useState<ToolId>("select");
   const [playhead, setPlayhead] = useState(27);
@@ -248,49 +247,37 @@ export default function StudioPage(): ReactElement {
   const selectedTrack = TRACKS.find((track) => track.id === selectedClip.trackId) ?? TRACKS[0];
   return (
     <main className="studio-shell">
-      {sidebarOpen ? (
-        <nav className="sidebar glass-card" aria-label="Primary navigation">
-          <div className="sidebar-heading">
-            <a className="brand" href="#studio" aria-label="AgentDAW studio">
-              <span className="brand-mark" aria-hidden="true">A</span>
-              <span>Agent<span>DAW</span></span>
-            </a>
-            <button className="close-button" type="button" aria-label="Close menu" onClick={() => setSidebarOpen(false)}>×</button>
-          </div>
+      <nav className="sidebar" aria-label="Primary navigation">
+        <div className="sidebar-heading">
+          <a className="brand" href="#studio" aria-label="AgentDAW studio">
+            <span className="brand-mark" aria-hidden="true">A</span>
+            <span>Agent<span>DAW</span></span>
+          </a>
+        </div>
 
-          <div className="nav-items">
-            <button className="nav-item active" type="button"><Icon name="compose" />Compose</button>
-            <button className="nav-item" type="button"><Icon name="sounds" />Sounds</button>
-            <button className="nav-item" type="button"><Icon name="history" />History</button>
-          </div>
+        <div className="nav-items">
+          <button className="nav-item active" type="button"><Icon name="compose" />Compose</button>
+          <button className="nav-item" type="button"><Icon name="sounds" />Sounds</button>
+          <button className="nav-item" type="button"><Icon name="history" />History</button>
+        </div>
 
-          <div className="sidebar-footer">
-            <div className="agent-status">
-              <span className="agent-orb"><Icon name="activity" /></span>
-              <span><strong>Agent online</strong><small>WebMCP ready</small></span>
-              <span className="status-dot" aria-label="Connected" />
-            </div>
-            <button className="profile" type="button" aria-label="Open profile menu">
-              <span className="avatar">AM</span>
-              <span><strong>Amit&apos;s Studio</strong><small>Local project</small></span>
-              <Icon name="chevron" />
-            </button>
+        <div className="sidebar-footer">
+          <div className="agent-status">
+            <span className="agent-orb"><Icon name="activity" /></span>
+            <span><strong>Agent online</strong><small>WebMCP ready</small></span>
+            <span className="status-dot" aria-label="Connected" />
           </div>
-        </nav>
-      ) : null}
+          <button className="profile" type="button" aria-label="Open profile menu">
+            <span className="avatar">AM</span>
+            <span><strong>Amit&apos;s Studio</strong><small>Local project</small></span>
+            <Icon name="chevron" />
+          </button>
+        </div>
+      </nav>
 
       <section className="workspace" id="studio">
         <header className="transport">
           <div className="transport-leading">
-            <button
-              className={sidebarOpen ? "icon-button panel-toggle active" : "icon-button panel-toggle"}
-              type="button"
-              aria-label={sidebarOpen ? "Close menu" : "Open menu"}
-              aria-pressed={sidebarOpen}
-              onClick={() => setSidebarOpen((open) => !open)}
-            >
-              <Icon name="mixer" />
-            </button>
             <button className="project-switcher" type="button">
               <span className="project-icon">◫</span>
               <span>Midnight Polaroid</span>
