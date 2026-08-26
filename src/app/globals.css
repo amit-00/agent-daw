@@ -805,7 +805,9 @@ input:focus-visible {
   left: 170px;
   height: 276px;
   overflow: hidden;
+  border-color: transparent;
   border-radius: 12px;
+  box-shadow: none;
 }
 
 .editor-header {
