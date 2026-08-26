@@ -5,7 +5,6 @@ import { useState } from "react";
 
 type TrackId = "drums" | "bass" | "chords" | "melody" | "pad";
 type ToolId = "select" | "draw" | "split" | "focus";
-type InspectorTab = "details" | "activity";
 type IconName =
   | "activity"
   | "chevron"
@@ -53,7 +52,7 @@ const TRACKS: readonly Track[] = [
     id: "drums",
     name: "Neon Kit",
     kind: "drum",
-    color: "#ff6a78",
+    color: "#9a69f5",
     preset: "Polaroid Drums",
     volume: 74,
   },
@@ -61,7 +60,7 @@ const TRACKS: readonly Track[] = [
     id: "bass",
     name: "Low Orbit",
     kind: "synth",
-    color: "#ff934d",
+    color: "#d95fc8",
     preset: "Velvet Sub",
     volume: 68,
   },
@@ -69,7 +68,7 @@ const TRACKS: readonly Track[] = [
     id: "chords",
     name: "Glasshouse",
     kind: "synth",
-    color: "#d26ae2",
+    color: "#ef6070",
     preset: "Warm Glass",
     volume: 61,
   },
@@ -77,7 +76,7 @@ const TRACKS: readonly Track[] = [
     id: "melody",
     name: "Afterglow",
     kind: "synth",
-    color: "#9a69f5",
+    color: "#f18a4c",
     preset: "Soft Signal",
     volume: 72,
   },
@@ -85,7 +84,7 @@ const TRACKS: readonly Track[] = [
     id: "pad",
     name: "Night Air",
     kind: "synth",
-    color: "#f7c555",
+    color: "#efbd52",
     preset: "Cloud Pad",
     volume: 55,
   },
@@ -226,54 +225,58 @@ export default function StudioPage(): ReactElement {
   const [isPlaying, setIsPlaying] = useState(false);
   const [selectedClipId, setSelectedClipId] = useState(CLIPS[4].id);
   const [mixerOpen, setMixerOpen] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [activityOpen, setActivityOpen] = useState(true);
   const [activeTool, setActiveTool] = useState<ToolId>("select");
-  const [inspectorTab, setInspectorTab] = useState<InspectorTab>("details");
   const [playhead, setPlayhead] = useState(27);
   const [mutedTracks, setMutedTracks] = useState<ReadonlySet<TrackId>>(new Set());
   const [soloTracks, setSoloTracks] = useState<ReadonlySet<TrackId>>(new Set());
 
   const selectedClip = CLIPS.find((clip) => clip.id === selectedClipId) ?? CLIPS[0];
-  const selectedTrack = TRACKS.find((track) => track.id === selectedClip.trackId) ?? TRACKS[0];
-
   return (
     <main className="studio-shell">
-      <nav className="sidebar" aria-label="Primary navigation">
-        <a className="brand" href="#studio" aria-label="AgentDAW studio">
-          <span className="brand-mark" aria-hidden="true">A</span>
-          <span>Agent<span>DAW</span></span>
-        </a>
-
-        <div className="nav-items">
-          <button className="nav-item active" type="button">
-            <Icon name="compose" />
-            Compose
-          </button>
-          <button className="nav-item" type="button">
-            <Icon name="sounds" />
-            Sounds
-          </button>
-          <button className="nav-item" type="button">
-            <Icon name="history" />
-            History
-          </button>
-        </div>
-
-        <div className="sidebar-footer">
-          <div className="agent-status">
-            <span className="agent-orb"><Icon name="activity" /></span>
-            <span><strong>Agent online</strong><small>WebMCP ready</small></span>
-            <span className="status-dot" aria-label="Connected" />
+      {sidebarOpen ? (
+        <nav className="sidebar glass-card" aria-label="Primary navigation">
+          <div className="sidebar-heading">
+            <a className="brand" href="#studio" aria-label="AgentDAW studio">
+              <span className="brand-mark" aria-hidden="true">A</span>
+              <span>Agent<span>DAW</span></span>
+            </a>
+            <button className="close-button" type="button" aria-label="Close menu" onClick={() => setSidebarOpen(false)}>×</button>
           </div>
-          <button className="profile" type="button" aria-label="Open profile menu">
-            <span className="avatar">AM</span>
-            <span><strong>Amit&apos;s Studio</strong><small>Local project</small></span>
-            <Icon name="chevron" />
-          </button>
-        </div>
-      </nav>
+
+          <div className="nav-items">
+            <button className="nav-item active" type="button"><Icon name="compose" />Compose</button>
+            <button className="nav-item" type="button"><Icon name="sounds" />Sounds</button>
+            <button className="nav-item" type="button"><Icon name="history" />History</button>
+          </div>
+
+          <div className="sidebar-footer">
+            <div className="agent-status">
+              <span className="agent-orb"><Icon name="activity" /></span>
+              <span><strong>Agent online</strong><small>WebMCP ready</small></span>
+              <span className="status-dot" aria-label="Connected" />
+            </div>
+            <button className="profile" type="button" aria-label="Open profile menu">
+              <span className="avatar">AM</span>
+              <span><strong>Amit&apos;s Studio</strong><small>Local project</small></span>
+              <Icon name="chevron" />
+            </button>
+          </div>
+        </nav>
+      ) : null}
 
       <section className="workspace" id="studio">
         <header className="transport">
+          <button
+            className={sidebarOpen ? "icon-button panel-toggle active" : "icon-button panel-toggle"}
+            type="button"
+            aria-label={sidebarOpen ? "Close menu" : "Open menu"}
+            aria-pressed={sidebarOpen}
+            onClick={() => setSidebarOpen((open) => !open)}
+          >
+            <Icon name="mixer" />
+          </button>
           <button className="project-switcher" type="button">
             <span className="project-icon">◫</span>
             <span>Midnight Polaroid</span>
@@ -309,6 +312,17 @@ export default function StudioPage(): ReactElement {
             <span className="output-line"><span /></span>
           </div>
 
+          <button
+            className={activityOpen ? "activity-button active" : "activity-button"}
+            type="button"
+            aria-label={activityOpen ? "Hide activity" : "Show activity"}
+            aria-pressed={activityOpen}
+            onClick={() => setActivityOpen((open) => !open)}
+          >
+            <Icon name="activity" />
+            Activity
+          </button>
+
           <button className="export-button" type="button">
             <Icon name="download" />
             Export
@@ -329,7 +343,6 @@ export default function StudioPage(): ReactElement {
             {TRACKS.map((track, trackIndex) => (
               <div className="track-row" style={{ gridRow: trackIndex + 2 }} key={track.id}>
                 <div className="track-label">
-                  <span className="track-color" style={{ backgroundColor: track.color }} />
                   <span className="track-copy"><strong>{track.name}</strong><small>{track.preset}</small></span>
                   <button className="track-menu" type="button" aria-label={`More options for ${track.name}`}>•••</button>
                 </div>
@@ -382,7 +395,7 @@ export default function StudioPage(): ReactElement {
           </section>
 
           {mixerOpen ? (
-            <aside className="mixer" aria-label="Mixer">
+            <aside className="mixer glass-card" aria-label="Mixer">
               <div className="mixer-header">
                 <span><Icon name="mixer" /> Mixer</span>
                 <div className="mixer-tabs"><button className="active" type="button">Channels</button><button type="button">Master</button></div>
@@ -412,7 +425,7 @@ export default function StudioPage(): ReactElement {
             </aside>
           ) : null}
 
-          <div className="tool-dock" role="toolbar" aria-label="Editing tools">
+          <div className="tool-dock glass-card" role="toolbar" aria-label="Editing tools">
             {TOOLS.map((tool) => (
               <button
                 className={activeTool === tool.id ? "active" : ""}
@@ -440,49 +453,12 @@ export default function StudioPage(): ReactElement {
         </div>
       </section>
 
-      <aside className="inspector" aria-label="Selected pattern inspector">
-        <div className="inspector-tabs" role="tablist" aria-label="Inspector views">
-          {(["details", "activity"] as const).map((tab) => (
-            <button
-              className={inspectorTab === tab ? "active" : ""}
-              key={tab}
-              type="button"
-              role="tab"
-              aria-selected={inspectorTab === tab}
-              onClick={() => setInspectorTab(tab)}
-            >
-              {tab === "details" ? "Details" : "Activity"}
-            </button>
-          ))}
-          <button className="inspector-menu" type="button" aria-label="Inspector options">•••</button>
-        </div>
-
-        {inspectorTab === "details" ? (
-          <div className="inspector-content">
-            <div className="artwork" style={{ "--art-color": selectedTrack.color } as CSSProperties}>
-              <span className="art-orbit one" /><span className="art-orbit two" /><span className="art-core" />
-              <span className="art-label">AGENTDAW / 001</span>
-            </div>
-            <div className="pattern-heading">
-              <span className="eyebrow">SELECTED PATTERN</span>
-              <h1>{selectedClip.name}</h1>
-              <p><span style={{ backgroundColor: selectedTrack.color }} /> {selectedTrack.name}</p>
-            </div>
-            <div className="pattern-pills">
-              <span>♩ 118</span><span>↔ {selectedClip.detail.split(" · ")[0]}</span><span>{selectedTrack.kind === "drum" ? "DRUM" : "SYNTH"}</span>
-            </div>
-            <dl className="pattern-details">
-              <div><dt>Preset</dt><dd>{selectedTrack.preset}</dd></div>
-              <div><dt>Pattern</dt><dd>{selectedClip.detail}</dd></div>
-              <div><dt>Position</dt><dd>Bar {Math.round(selectedClip.start / 12.5) + 1}</dd></div>
-              <div><dt>Created by</dt><dd><span className="mini-orb">✦</span> Agent</dd></div>
-            </dl>
-            <div className="agent-note">
-              <span className="mini-orb">✦</span>
-              <p><strong>Agent note</strong>Built as a soft counterweight to the bass, leaving space around the downbeat.</p>
-            </div>
+      {activityOpen ? (
+        <aside className="inspector glass-card" aria-label="Activity">
+          <div className="inspector-header">
+            <span><Icon name="activity" /> Activity</span>
+            <button className="close-button" type="button" aria-label="Close activity" onClick={() => setActivityOpen(false)}>×</button>
           </div>
-        ) : (
           <div className="activity-list">
             <span className="eyebrow">LATEST CHANGES</span>
             {[
@@ -497,8 +473,8 @@ export default function StudioPage(): ReactElement {
               </div>
             ))}
           </div>
-        )}
-      </aside>
+        </aside>
+      ) : null}
     </main>
   );
 }
