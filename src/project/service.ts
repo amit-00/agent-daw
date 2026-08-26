@@ -399,7 +399,3 @@ export class ProjectService {
     return historyEntry;
   }
 }
-
-export function createProjectService(options: ProjectServiceOptions): ProjectService {
-  return new ProjectService(options);
-}

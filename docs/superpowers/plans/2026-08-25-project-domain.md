@@ -852,7 +852,7 @@ git commit -m "feat: add arrangement commands"
 
 **Interfaces:**
 - Consumes: `reduceOperation`, `mergeChangeSummaries`, and all operation types.
-- Produces: `Command`, `HistoryEntry`, `DispatchResult`, `ProjectService`, and `createProjectService(options): ProjectService`.
+- Produces: `Command`, `HistoryEntry`, `DispatchResult`, and the `ProjectService` class.
 - Later Task 6 extends the same service with history controls and restore.
 
 - [ ] **Step 1: Write failing service tests**
@@ -891,7 +891,7 @@ const createBassTrackCommand = (commandId: string): Command => ({
 const createTestService = (initialProject: Project): ProjectService => {
   let nextHistoryId = 700;
   let timestamp = 1_700_000_000_000;
-  return createProjectService({
+  return new ProjectService({
     initialProject,
     catalog,
     createHistoryId: () => id(nextHistoryId++),
@@ -1005,7 +1005,8 @@ export interface ProjectServiceState {
   readonly historyCursor: number;
 }
 
-export interface ProjectService {
+export class ProjectService {
+  constructor(options: ProjectServiceOptions);
   getState(): ProjectServiceState;
   dispatch(command: Command): DispatchResult;
 }
@@ -1017,7 +1018,6 @@ export interface ProjectServiceOptions {
   readonly now: () => number;
 }
 
-export function createProjectService(options: ProjectServiceOptions): ProjectService;
 ```
 
 - [ ] **Step 4: Implement service dispatch with bounded deduplication**
@@ -1157,7 +1157,7 @@ export interface RestoreCommand {
   readonly targetEntryId: string;
 }
 
-export interface ProjectService {
+export class ProjectService {
   getState(): ProjectServiceState;
   dispatch(command: Command): DispatchResult;
   undo(): HistoryControlResult;

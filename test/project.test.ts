@@ -4,7 +4,6 @@ import test from "node:test";
 import {
   ConflictError,
   type Command,
-  createProjectService,
   InvalidInputError,
   LimitExceededError,
   NotFoundError,
@@ -88,7 +87,7 @@ const updateProjectNameCommand = (commandId: string, name: string): Command => (
 const createTestService = (initialProject: Project): ProjectService => {
   let nextHistoryId = 700;
   let timestamp = 1_700_000_000_000;
-  return createProjectService({
+  return new ProjectService({
     initialProject,
     catalog,
     createHistoryId: () => id(nextHistoryId++),
@@ -223,7 +222,7 @@ for (const [name, project, path] of malformedProjectContainers) {
   });
 }
 
-test("createProjectService detaches its initial project from caller mutation", () => {
+test("ProjectService detaches its initial project from caller mutation", () => {
   const initialProject = projectWithBasicDrums();
   const expectedProject = structuredClone(initialProject);
   const service = createTestService(initialProject);
@@ -234,10 +233,6 @@ test("createProjectService detaches its initial project from caller mutation", (
 
   assert.deepEqual(service.getState().project, expectedProject);
   assert.equal(service.getState().history.length, 0);
-});
-
-test("createProjectService returns a ProjectService instance", () => {
-  assert.equal(createTestService(blankProject()) instanceof ProjectService, true);
 });
 
 test("ProjectService methods remain callable as callbacks", () => {
@@ -258,14 +253,14 @@ test("ProjectService methods remain callable as callbacks", () => {
   }).ok, true);
 });
 
-test("createProjectService rejects non-serializable initial data", () => {
+test("ProjectService rejects non-serializable initial data", () => {
   const initialProject = {
     ...blankProject(),
     unsupported: () => undefined,
   } as unknown as Project;
 
   assert.throws(
-    () => createProjectService({
+    () => new ProjectService({
       initialProject,
       catalog,
       createHistoryId: () => id(700),
@@ -1950,7 +1945,7 @@ test("mixed event updates report only changed IDs in source order", () => {
 
 test("invalid generated history IDs leave state and command cache unchanged", () => {
   let historyId = "history";
-  const service = createProjectService({
+  const service = new ProjectService({
     initialProject: blankProject(),
     catalog,
     createHistoryId: () => historyId,
@@ -1977,7 +1972,7 @@ test("invalid generated history IDs leave state and command cache unchanged", ()
 
 test("duplicate retained history IDs leave state and command cache unchanged", () => {
   let historyId = id(700);
-  const service = createProjectService({
+  const service = new ProjectService({
     initialProject: blankProject(),
     catalog,
     createHistoryId: () => historyId,
@@ -2013,7 +2008,7 @@ const invalidHistoryTimestamps: readonly [string, number][] = [
 for (const [name, invalidTimestamp] of invalidHistoryTimestamps) {
   test(`invalid generated ${name} history timestamp leaves service state unchanged`, () => {
     let timestamp = invalidTimestamp;
-    const service = createProjectService({
+    const service = new ProjectService({
       initialProject: blankProject(),
       catalog,
       createHistoryId: () => id(700),
