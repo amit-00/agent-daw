@@ -45,8 +45,9 @@ IndexedDB with no application backend.
 
 ## Status
 
-Product design approved; implementation planning is next. The MVP feature freeze
-is September 1, with September 2–3 reserved for submission and bug fixes.
+Project-domain foundation implemented: strict model validation, complete command
+surface, atomic batches, attributed snapshot history, undo, redo, and restore.
+Audio and editor implementation are next.
 
 ## License
 
