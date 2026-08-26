@@ -692,7 +692,7 @@ input:focus-visible {
   border-radius: 3px;
   color: rgba(20, 12, 24, 0.72);
   text-align: left;
-  background: color-mix(in srgb, var(--clip-color) 70%, transparent);
+  background: color-mix(in srgb, color-mix(in srgb, var(--clip-color) 88%, white) 80%, transparent);
   cursor: pointer;
   transition: filter 140ms ease, transform 140ms ease;
 }
@@ -707,10 +707,12 @@ input:focus-visible {
 }
 
 .clip-title {
-  position: relative;
+  position: absolute;
+  top: 7px;
+  right: 8px;
+  left: 8px;
   z-index: 1;
   display: block;
-  padding: 7px 8px 0;
   overflow: hidden;
   font-size: 7px;
   font-weight: 720;
