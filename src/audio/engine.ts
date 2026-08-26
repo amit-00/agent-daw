@@ -391,14 +391,20 @@ export function createAudioEngine(platform: AudioEnginePlatform): AudioEngine {
     anchorAudioTime = context.currentTime + PLAYBACK_START_LEAD_SECONDS;
     generation += 1;
     status = "playing";
-    scheduleRange(
-      positionStep,
-      positionStep + SCHEDULER_LOOKAHEAD_SECONDS / secondsPerStep(project.bpm),
-    );
-    scheduledHorizonAudioTime = anchorAudioTime + SCHEDULER_LOOKAHEAD_SECONDS;
-    schedulerTimer = {
-      handle: platform.setInterval(schedulerTick, SCHEDULER_TICK_MILLISECONDS),
-    };
+    try {
+      scheduleRange(
+        positionStep,
+        positionStep + SCHEDULER_LOOKAHEAD_SECONDS / secondsPerStep(project.bpm),
+      );
+      scheduledHorizonAudioTime = anchorAudioTime + SCHEDULER_LOOKAHEAD_SECONDS;
+      schedulerTimer = {
+        handle: platform.setInterval(schedulerTick, SCHEDULER_TICK_MILLISECONDS),
+      };
+    } catch (error) {
+      cancelPlayback();
+      status = "stopped";
+      throw error;
+    }
   };
 
   const blockedResult = (): {

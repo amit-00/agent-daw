@@ -410,11 +410,17 @@ test("a scheduler tick blocks and cancels playback when the context suspends", a
   assert.deepEqual(context.bufferSources[0]?.stopTimes, [0]);
 });
 
-test("play propagates programmer errors from source creation", async () => {
+test("play rolls back partial scheduling before propagating programmer errors", async () => {
   const context = new FakeAudioContext();
+  const createBufferSource = context.createBufferSource.bind(context);
   const sourceError = new TypeError("invalid buffer source factory");
+  let sourceCreations = 0;
   context.createBufferSource = (): AudioBufferSourceNode => {
-    throw sourceError;
+    sourceCreations += 1;
+    if (sourceCreations === 2) {
+      throw sourceError;
+    }
+    return createBufferSource();
   };
   const timers = new FakeTimers();
   const engine = createAudioEngine({
@@ -423,8 +429,23 @@ test("play propagates programmer errors from source creation", async () => {
     setInterval: (callback, milliseconds) => timers.setInterval(callback, milliseconds),
     clearInterval: (handle) => timers.clearInterval(handle),
   });
-  engine.replaceProject(audioProject());
+  const project = audioProject();
+  engine.replaceProject({
+    ...project,
+    patterns: project.patterns.map((pattern) => pattern.kind === "drum"
+      ? {
+        ...pattern,
+        events: pattern.events.map((event) => ({ ...event, startStep: 0 })),
+      }
+      : pattern),
+  });
   await assert.rejects(engine.play(0), sourceError);
+  assert.equal(engine.getSnapshot().status, "stopped");
+  assert.equal(engine.getSnapshot().positionStep, 0);
+  assert.equal(engine.getSnapshot().pendingSources, 0);
+  assert.equal(timers.callbacks.size, 0);
+  assert.equal(context.bufferSources.length, 1);
+  assert.deepEqual(context.bufferSources[0]?.stopTimes, [0]);
 });
 
 test("Web Audio source errors are diagnosed while sibling events continue", async () => {
