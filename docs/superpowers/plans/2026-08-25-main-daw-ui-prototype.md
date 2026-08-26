@@ -6,7 +6,7 @@
 
 **Architecture:** A single Next.js client page owns seeded presentation data and local-only interaction state. Plain CSS renders the full-screen DAW shell, arrangement, mixer overlay, inspector, and responsive desktop behavior without adding a component or state library.
 
-**Tech Stack:** Next.js 16.3.3, React 19.2.8, strict TypeScript 7.0.2, ESLint 10.9.1, plain CSS
+**Tech Stack:** Next.js 16.3.3, React 19.2.8, strict TypeScript 6.0.3, ESLint 9.39.5, plain CSS
 
 **Spec:** `docs/superpowers/specs/2026-08-25-main-daw-ui-prototype-design.md`
 
@@ -56,9 +56,9 @@
     "@types/node": "26.3.0",
     "@types/react": "19.2.18",
     "@types/react-dom": "19.2.5",
-    "eslint": "10.9.1",
+    "eslint": "9.39.5",
     "eslint-config-next": "16.3.3",
-    "typescript": "7.0.2"
+    "typescript": "6.0.3"
   }
 }
 ```
