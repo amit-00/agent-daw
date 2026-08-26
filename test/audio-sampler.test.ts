@@ -79,6 +79,42 @@ test("sampler reports decode failure without dropping decoded siblings", async (
   assert.equal(result.unavailableSoundIds.length, 1);
 });
 
+test("clear prevents an earlier preparation from restoring decoded buffers", async () => {
+  const context = new FakeAudioContext();
+  const loaded: string[] = [];
+  const pendingLoads: Array<(value: ArrayBuffer) => void> = [];
+  let holdLoads = true;
+  const sampler = createSampler({
+    context: context.asAudioContext(),
+    kit: BASIC_DRUM_KIT,
+    loadArrayBuffer: async (url) => {
+      loaded.push(url);
+      if (!holdLoads) {
+        return new ArrayBuffer(8);
+      }
+      return new Promise<ArrayBuffer>((resolve) => {
+        pendingLoads.push(resolve);
+      });
+    },
+  });
+  const firstPreparation = sampler.prepare();
+  sampler.clear();
+  holdLoads = false;
+  for (const resolve of pendingLoads) {
+    resolve(new ArrayBuffer(8));
+  }
+  await firstPreparation;
+  await sampler.prepare();
+  assert.deepEqual(loaded, [
+    "/demo/drums/kick.wav",
+    "/demo/drums/snare.wav",
+    "/demo/drums/hat.wav",
+    "/demo/drums/kick.wav",
+    "/demo/drums/snare.wav",
+    "/demo/drums/hat.wav",
+  ]);
+});
+
 test("scheduled drum source starts, stops once, and resolves cleanup", async () => {
   const context = new FakeAudioContext();
   const destination = new FakeAudioNode();

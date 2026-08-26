@@ -41,6 +41,7 @@ const samplePreparation = (
 export function createSampler(options: SamplerOptions): Sampler {
   const buffers = new Map<DrumSoundId, AudioBuffer>();
   let pendingPreparation: Promise<SamplePreparation> | undefined;
+  let preparationGeneration = 0;
 
   return {
     prepare(): Promise<SamplePreparation> {
@@ -53,6 +54,7 @@ export function createSampler(options: SamplerOptions): Sampler {
         return Promise.resolve(samplePreparation(options.kit, buffers));
       }
 
+      const generation = preparationGeneration;
       let preparation: Promise<SamplePreparation>;
       preparation = Promise.allSettled(
         unavailableSounds.map(async ({ url }) => options.context.decodeAudioData(
@@ -60,7 +62,7 @@ export function createSampler(options: SamplerOptions): Sampler {
         )),
       ).then((results) => {
         for (const [index, result] of results.entries()) {
-          if (result.status === "fulfilled") {
+          if (generation === preparationGeneration && result.status === "fulfilled") {
             const sound = unavailableSounds[index];
             if (sound !== undefined) {
               buffers.set(sound.id, result.value);
@@ -120,6 +122,7 @@ export function createSampler(options: SamplerOptions): Sampler {
     clear(): void {
       buffers.clear();
       pendingPreparation = undefined;
+      preparationGeneration += 1;
     },
   };
 }
