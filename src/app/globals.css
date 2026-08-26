@@ -840,6 +840,7 @@ input:focus-visible {
 .channel-strip {
   position: relative;
   display: grid;
+  min-width: 0;
   padding: 11px 9px 9px;
   grid-template-columns: 1fr 15px;
   grid-template-rows: 23px 1fr 29px 20px;
