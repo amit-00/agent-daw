@@ -6,7 +6,7 @@ import type { Pattern, Project, SoundCatalog, Track } from "./model.ts";
 import { validateProject } from "./model.ts";
 
 type Diff = { readonly created: readonly string[]; readonly updated: readonly string[]; readonly deleted: readonly string[] };
-type Event = { readonly id: string; readonly value: unknown };
+type Event = { readonly key: string; readonly id: string; readonly value: unknown };
 
 const withChanges = (
   changes: Partial<{ readonly created: Partial<ChangeSummary["created"]>; readonly updated: Partial<ChangeSummary["updated"]>; readonly deleted: Partial<ChangeSummary["deleted"]> }>,
@@ -59,16 +59,18 @@ const diff = <T extends { readonly id: string }>(before: readonly T[], after: re
 
 const events = (patterns: readonly Pattern[], kind: Pattern["kind"]): readonly Event[] =>
   patterns.flatMap((pattern) =>
-    pattern.kind === kind ? pattern.events.map((event) => ({ id: event.id, value: event })) : [],
+    pattern.kind === kind
+      ? pattern.events.map((event) => ({ key: `${pattern.id}:${event.id}`, id: event.id, value: event }))
+      : [],
   );
 
 const eventDiff = (before: readonly Event[], after: readonly Event[]): Diff => {
-  const beforeById = new Map(before.map((event) => [event.id, event.value]));
-  const afterById = new Map(after.map((event) => [event.id, event.value]));
+  const beforeByKey = new Map(before.map((event) => [event.key, event.value]));
+  const afterByKey = new Map(after.map((event) => [event.key, event.value]));
   return {
-    created: after.filter((event) => !beforeById.has(event.id)).map((event) => event.id),
-    updated: after.filter((event) => beforeById.has(event.id) && !isDeepStrictEqual(beforeById.get(event.id), event.value)).map((event) => event.id),
-    deleted: before.filter((event) => !afterById.has(event.id)).map((event) => event.id),
+    created: after.filter((event) => !beforeByKey.has(event.key)).map((event) => event.id),
+    updated: after.filter((event) => beforeByKey.has(event.key) && !isDeepStrictEqual(beforeByKey.get(event.key), event.value)).map((event) => event.id),
+    deleted: before.filter((event) => !afterByKey.has(event.key)).map((event) => event.id),
   };
 };
 

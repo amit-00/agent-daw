@@ -311,3 +311,45 @@ test("summarizeProjectDiff preserves entity collection order", () => {
   assert.deepEqual(result.created.arrangementClipIds, [id(22)]);
   assert.deepEqual(result.updated.projectIds, [id(1)]);
 });
+
+test("summarizeProjectDiff distinguishes same event IDs in separate patterns", () => {
+  const sharedEventId = id(23);
+  const firstPattern = {
+    id: id(21),
+    trackId: id(20),
+    name: "First line",
+    kind: "synth" as const,
+    lengthBars: 1 as const,
+    events: [{ id: sharedEventId, midiNote: 36, startStep: 0, lengthSteps: 4 }],
+  };
+  const secondPattern = {
+    id: id(22),
+    trackId: id(20),
+    name: "Second line",
+    kind: "synth" as const,
+    lengthBars: 1 as const,
+    events: [{ id: sharedEventId, midiNote: 40, startStep: 0, lengthSteps: 4 }],
+  };
+  const before: Project = {
+    ...blankProject(),
+    tracks: [{
+      id: id(20), name: "Bass", kind: "synth", instrumentId: "synth.bass", volumeDb: 0,
+      pan: 0, muted: false, soloed: false,
+    }],
+    patterns: [firstPattern, secondPattern],
+  };
+  const after: Project = {
+    ...before,
+    patterns: [
+      firstPattern,
+      {
+        ...secondPattern,
+        events: [{ id: sharedEventId, midiNote: 41, startStep: 0, lengthSteps: 4 }],
+      },
+    ],
+  };
+
+  const result = summarizeProjectDiff(before, after);
+
+  assert.deepEqual(result.updated.synthNoteIds, [sharedEventId]);
+});
