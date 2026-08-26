@@ -1,77 +1,52 @@
 # AgentDAW
 
-AgentDAW is a small browser-based multitrack editor built for a simple idea:
-the human and the agent should be able to work on the same music project
-without either one pretending to be the other.
+AgentDAW is a simple browser-based pattern sequencer where a person can compose
+with clicks or direct an external agent to compose through WebMCP. Both paths
+edit the same tracks, patterns, arrangement, mixer, and visible history.
 
-The human gets a visual timeline. The agent gets a semantic project model and
-safe editing tools through [WebMCP](https://github.com/webmachinelearning/webmcp).
-Both paths execute the same command system, so an agent edit is visible,
-reviewable, and undoable in the UI.
+## Product
 
-## Why this project
+Users can:
 
-The [WebMCP Challenge](https://openai.com/webmcp-challenge/) asks builders to
-explore apps that become meaningfully better when people and their agents use
-them together. A DAW is a useful test case because its timeline is easy for a
-person to understand visually but awkward for an agent to manipulate through
-clicks alone.
+- Program drums on a step grid.
+- Write bass, chords, leads, and pads in a piano roll.
+- Arrange reusable patterns into a complete instrumental song.
+- Play, mix, autosave, undo, restore, and export the result as WAV.
+- Ask an external agent for broad composition or exact note-level changes.
 
-AgentDAW is intentionally not an Ableton replacement. It is a focused
-demonstration of agent-native creative software.
+Agent operations use the same validation and command service as manual edits.
+Every action records whether it came from the UI or WebMCP, and multi-operation
+agent requests commit as one atomic, undoable history entry.
 
-## MVP
+## Challenge scope
 
-- Load a bundled demo song or upload local audio files.
-- Create tracks and place clips on a beat-based timeline.
-- Drag, trim, duplicate, and delete clips.
-- Play, pause, seek, and change BPM.
-- Adjust volume and pan; mute and solo tracks.
-- Inspect the project through WebMCP.
-- Apply grouped agent edits with one visible, undoable history entry.
-- Let a human edit between two agent actions; the next agent action reads the
-  current project state.
+The September 3 MVP is desktop-only and uses bundled drum sounds plus curated
+Web Audio synth presets. Microphone recording, audio-clip editing, sound design,
+effects, automation, cloud storage, and an embedded chatbot are deferred until
+the complete compose-to-WAV workflow is stable.
 
-The core product loop is:
+## Architecture
 
 ```text
-human edits → agent inspects → agent edits → human reviews/edits → agent adapts
+Manual UI ──────┐
+                ├─→ command service ─→ project state ─→ editor + Web Audio
+WebMCP adapter ─┘          │                 │
+                           └─→ history       ├─→ IndexedDB autosave
+                                             └─→ offline WAV export
 ```
 
-## Architecture at a glance
-
-```text
-Human UI ───────┐
-                ├── executeCommand() ── Project Store ── Web Audio graph
-WebMCP tools ───┘                         │
-                                          └── grouped history / undo
-```
-
-The UI and WebMCP adapters are consumers of one command layer. The app does
-not contain an LLM or an in-app chatbot; ChatGPT or another compatible agent is
-the intelligence layer.
-
-## Suggested demo
-
-1. Load the demo project and ask the agent to describe its structure.
-2. Ask it to shorten the intro and bring the bass in earlier.
-3. Ask it to make the chorus hit harder with a grouped edit transaction.
-4. Manually move the synth clip.
-5. Ask the agent to keep that human change and smooth the transition.
-6. Undo the grouped agent transaction from the history panel.
-
-The important moment is the handoff between human and agent, not autonomous
-music generation.
+The planned stack is strict TypeScript, React, Next.js, native Web Audio, and
+IndexedDB with no application backend.
 
 ## Documentation
 
-- [Project design](docs/design.md) — product boundary, architecture, command
-  model, WebMCP surface, history model, stack, non-goals, and delivery plan.
+- [Project design](docs/design.md) — approved scope, workflows, architecture,
+  data model, WebMCP tools, history, failures, testing, and delivery schedule.
 
 ## Status
 
-Documentation seed for a public hackathon project. The implementation should
-follow the design and stay within the MVP boundary until the demo works.
+Product design approved; implementation planning is next. The MVP feature freeze
+is September 1, with September 2–3 reserved for submission and bug fixes.
 
 ## License
 

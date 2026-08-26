@@ -4,563 +4,566 @@
 
 ### 1.1 Outcomes
 
-1. A visitor can open a browser app, load a demo project, and hear a short
-   multitrack arrangement immediately.
-2. A human can make the core edits needed for the demo: move, trim, duplicate,
-   delete, mute, solo, volume, pan, playback, seek, and BPM changes.
-3. An agent can inspect the same project through semantic WebMCP tools instead
-   of inferring state from pixels.
-4. Human and agent edits pass through one validated command layer.
-5. A multi-step agent request appears as one labeled transaction that a human
-   can inspect and undo as a unit.
-6. The demo proves the sequence human → agent → human → agent.
+1. A beginner can start a blank desktop-browser project and create an instrumental song without importing audio.
+2. A user can program reusable drum and melodic patterns, arrange them, mix the tracks, play the result, and export WAV.
+3. An external agent can inspect and edit the same project through WebMCP, from full-song composition down to exact notes and drum hits.
+4. Manual and agent edits pass through one validated command service and are attributed in chronological history.
+5. The user can undo, redo, or restore an earlier version without erasing history.
+6. The complete workflow is stable by September 1, leaving September 2–3 for submission and fixes.
 
-### 1.2 Non-goals
+### 1.2 Product definition
 
-- A full-featured DAW, notation editor, or production suite.
-- Recording, MIDI, piano roll, synthesizers, plugin hosting, VST support,
-  time-stretching, pitch correction, mastering, or generative music.
-- Multiplayer collaboration, accounts, cloud project storage, or a backend.
-- An embedded LLM, prompt orchestration service, or agent chat panel.
-- Pixel-perfect waveform editing. Colored clip blocks are sufficient for the
-  first demo; waveforms are optional polish.
-- A generalized automation language. Commands are the only supported mutation
-  interface in the MVP.
+AgentDAW is a desktop browser-based **pattern workstation** for beginner and music-curious creators. The user can compose with clicks or ask an external WebMCP agent to compose. Both paths edit the same instruments, patterns, arrangement, mixer, and history.
 
-### 1.3 Assumptions and constraints
+```text
+create pattern → arrange song → play and mix → revise manually or by agent → export WAV
+```
 
-- This is a ten-day solo or very small-team hackathon project.
-- The challenge submission deadline is September 3 at 5 p.m. PT; the target is
-  feature-complete by September 1, with September 2 for submission materials
-  and September 3 for bug fixes.
-- The browser is the deployment target and must support Web Audio API and the
-  experimental WebMCP surface used by the challenge.
-- Audio stays local to the browser in the MVP. No user audio is uploaded to a
-  server.
-- A demo project and a small set of short audio assets are more important than
-  broad file-format support.
+The MVP succeeds when a user or agent can start empty, create drum, bass, chord, and melody parts, arrange a complete instrumental, and export the audible result. There is no artistic song-length target; technical caps only prevent browser resource exhaustion.
+
+### 1.3 MVP scope
+
+- Blank and bundled demo projects.
+- Drum tracks using a bundled kit with stable sound identifiers.
+- Synth tracks using one polyphonic Web Audio engine with curated bass, chord, lead, and pad presets.
+- Reusable 1-, 2-, or 4-bar patterns in 4/4 with sixteenth-note quantization.
+- Drum step grid with named sound rows.
+- Melodic piano roll with pitch, note start, note length, and chords.
+- Arrangement clips that reference patterns and can be placed, repeated, moved, duplicated, shortened, and deleted on a bar grid.
+- Playback, seek, BPM, track names, preset selection, track volume, pan, mute, solo, and master volume.
+- Browser-local autosave and full-arrangement WAV export.
+- Chronological manual and agent history with undo, redo, and non-destructive restore.
+- Direct WebMCP tools plus atomic multi-operation transactions.
+- Desktop layout with beginner-friendly labels and defaults.
+
+### 1.4 Stretch scope
+
+Stretch work starts only after every MVP acceptance path passes:
+
+- Per-note velocity; additional instruments, drum kits, and presets.
+- Downloadable project-file import/export.
+- User audio import and clip editing.
+- Synth sound design.
+- Effects, automation, EQ, compression, sends, and mastering.
+- Tablet or phone layouts.
+
+### 1.5 Non-goals
+
+- Microphone or instrument recording.
+- Embedded chat, model calls, or prompt orchestration.
+- Accounts, backend storage, cloud sync, or multiplayer.
+- Arbitrary audio decoding, waveform editing, fades, crossfades, or time-stretching.
+- MIDI hardware, MIDI files, notation, odd meters, triplets, swing, or free-time notes.
+- VST, Audio Unit, or third-party plugin hosting.
+- Production mastering or replacement of a professional DAW.
+- Git-style branches or selective removal of an arbitrary past action while preserving later actions.
+
+### 1.6 Assumptions and constraints
+
+- Development starts August 25 with a September 3 submission deadline.
+- This is a solo or very small-team challenge build.
+- The target is a current desktop browser with Web Audio, IndexedDB, `OfflineAudioContext`, and challenge-supported WebMCP.
+- The host page is static; no application server or secrets are required.
+- WebMCP may require the challenge's supported browser or feature setup.
+- Sound uses bundled drum samples and deterministic synth presets.
+- Audio must be pleasant enough for a demo, not mastering-grade.
 
 ## 2) Glossary
 
 | Term | Meaning |
 |---|---|
-| Agent | An external AI assistant that can call the app's WebMCP tools. |
-| Beat | The timeline unit used by the project model; seconds are derived from BPM. |
-| Clip | A placed region that references an audio asset and has a start and length. |
-| Command | A validated state mutation with a typed payload. |
-| Transaction | An ordered group of commands committed as one history entry. |
-| Project | BPM, audio assets, tracks, clips, selection, and history metadata. |
-| Track | A lane containing clips plus mix controls. |
-| WebMCP | The experimental web standard for exposing structured tools to agents. |
+| Agent | External AI assistant operating AgentDAW through WebMCP. |
+| Arrangement | Song-level sequence of pattern clips across tracks. |
+| Arrangement clip | Reference to a reusable pattern placed at a bar and repeated. |
+| Command | Validated project mutation from the UI or WebMCP. |
+| Compensating edit | New action reversing part of an earlier action without rewriting history. |
+| Drum hit | Trigger for a named drum sound on one sixteenth-note step. |
+| Pattern | Reusable 1-, 2-, or 4-bar collection of drum hits or synth notes. |
+| Piano roll | Grid whose horizontal axis is time and vertical axis is pitch. |
+| Preset | Curated fixed configuration of the built-in synth. |
+| Restore | Replace current state with an earlier snapshot and record it as a new action. |
+| Step | One sixteenth note; 16 steps make one 4/4 bar. |
+| Transaction | Ordered commands validated and committed as one history entry. |
+| WebMCP | Browser surface through which an external agent discovers and calls tools. |
 
 ## 3) Technical stack
 
-### 3.1 Language and runtime
+### 3.1 Runtime and deployment
 
-- TypeScript in a browser-first React application.
-- React for the single-screen editor.
-- Web Audio API for decoding and playback.
-- IndexedDB only if persistence is needed after the first playable demo.
+- Strict TypeScript, React, and Next.js.
+- Native Web Audio for drums, synthesis, mixing, and offline rendering.
+- IndexedDB for project and history persistence.
+- Static-friendly deployment on Vercel or an equivalent host.
+- No application server, database server, authentication provider, or secrets.
 
-### 3.2 Framework and deployment
+### 3.2 Dependencies
 
-- Next.js for the app shell and static deployment path.
-- Vercel, Netlify, or another static-friendly host for the live submission.
-- No application server in the MVP.
-
-### 3.3 Dependencies
-
-| Category | Choice | Reason |
+| Category | Choice | Purpose |
 |---|---|---|
-| UI | React + existing project defaults | Fast iteration on a single screen. |
-| Audio | Browser Web Audio API | Native playback graph; no audio service to operate. |
-| Agent bridge | WebMCP API surface | The challenge requires structured agent access. |
-| State | Small typed project store | One source of truth for UI, tools, and history. |
-| Persistence | None initially; IndexedDB if required | Avoid backend work before the demo works. |
+| Application | Next.js + React | Editor shell and static deployment path. |
+| Language | TypeScript | Shared strict types across all boundaries. |
+| Audio | Web Audio API | Native scheduling, synthesis, mixing, and render. |
+| Persistence | IndexedDB | Native structured storage without a backend. |
+| IDs | `crypto.randomUUID()` | Stable identifiers without a package. |
+| State | React reducer and context | One store without another state library. |
+| Agent bridge | WebMCP browser API | External-agent inspection and mutation. |
 
-### 3.4 Target project structure
+### 3.3 Target structure
 
 ```text
 src/
-  app/                 # route and editor shell
-  components/          # timeline, transport, inspector, history
-  audio/               # Web Audio graph and clip scheduling
-  project/             # entities, commands, reducer, history
-  webmcp/              # inspection and mutation tool adapters
-public/
-  demo/                # bundled audio and demo project metadata
-docs/
-  design.md
+  app/                 # route, start screen, editor shell
+  components/          # transport, arranger, sequencers, mixer, history
+  audio/               # scheduler, sampler, synth, offline renderer
+  project/             # entities, commands, validation, reducer, history
+  persistence/         # IndexedDB load and save
+  webmcp/              # tool schemas, registration, adapters
+public/demo/           # demo project and bundled drum samples
+docs/design.md
 ```
 
 ## 4) Architecture overview
 
-### 4.1 System diagram
-
 ```mermaid
 flowchart LR
-    H[Human UI] --> C[Command dispatcher]
-    W[WebMCP tools] --> C
+    U[Manual UI] --> C[Command service]
+    W[WebMCP adapter] --> C
     C --> V[Validation + reducer]
-    V --> S[(Project store)]
-    S --> T[Timeline render]
-    S --> A[Web Audio scheduler]
-    C --> R[History / transactions]
-    R --> S
+    V --> P[(Project state)]
+    C --> H[History service]
+    P --> UI[Editor]
+    P --> A[Audio engine]
+    P --> S[IndexedDB autosave]
+    P --> E[WAV exporter]
+    H --> S
 ```
 
-### 4.2 Data flow
+### 4.1 Mutation flow
 
-1. A drag gesture, control change, or WebMCP call creates a typed command.
-2. The dispatcher validates entity IDs, numeric ranges, and time boundaries.
-3. The reducer applies the command to the project snapshot and returns the
-   next snapshot plus an inverse operation where practical.
-4. The store publishes the new snapshot to the timeline, inspector, and audio
-   scheduler.
-5. The history service records the source (`human` or `agent`), label, command
-   list, and inverse data. A transaction becomes one undoable entry.
+A completed manual gesture or WebMCP call produces a typed command. The command service validates identifiers, musical ranges, relationships, and caps before the reducer creates the next immutable state. Only a valid result commits, so UI and agent behavior cannot bypass attribution or history.
 
-Keeping these stages separate means the UI can change without changing the
-agent contract, and WebMCP calls cannot bypass validation or history.
+### 4.2 Playback flow
 
-### 4.3 Services and responsibilities
+The audio engine consumes state but never mutates it. On play or seek, it converts arrangement bars and pattern steps to seconds using BPM, then schedules drum samples or synth voices through per-track gain and pan nodes. Project changes invalidate future scheduling and reschedule safely from the current transport position.
 
-#### Project store
+### 4.3 Persistence and export flow
 
-Owns the current immutable project snapshot and dispatches commands. It rejects
-invalid commands with a user-readable error and leaves the prior snapshot
-untouched. Replaying the same command with a stale entity or invalid range is a
-failed operation, not a best-effort mutation.
+Committed project and history state saves asynchronously to IndexedDB. WAV export renders a frozen project through an offline graph and encodes PCM as a downloadable WAV. A save or export failure cannot corrupt current project state.
 
-#### Audio engine
+## 5) WebMCP integration
 
-Owns decoded `AudioBuffer` objects, track buses, and scheduled playback. It
-consumes project snapshots; it does not mutate project state. If a file cannot
-be decoded, the clip remains visible with an error state and playback skips
-that clip while the rest of the project remains available.
+AgentDAW registers semantic tools with the WebMCP API in the challenge-supported browser. The integration requires no OAuth, key, webhook, or server. Inputs are untrusted and use the same validation as manual actions.
 
-#### WebMCP adapter
+The UI displays registration status so unsupported browser setup is distinguishable from a project error. Exact registration syntax follows the challenge-supported WebMCP version during implementation; the contracts in Section 10 remain stable.
 
-Exposes read tools and semantic mutation tools. It converts tool input into
-commands or transactions and returns the resulting project summary. It must
-return validation errors with enough context for an agent to correct its call.
+## 6) Components
 
-#### History service
+### 6.1 Project store and command service
 
-Groups commands, stores inverse data, and exposes human-readable labels. An
-agent transaction is undone as a unit; a later human edit remains intact unless
-it is itself selected for undo.
+**Responsibility:** Own current immutable state and provide the only mutation path.
 
-## 5) Project data model
+**Inputs:** Manual commands, agent commands and transactions, undo, redo, and restore.
 
-### 5.1 Project
+**Outputs:** Project state, history entry, UI/audio update, and autosave request.
 
-```ts
-type Project = {
-  id: string;
-  name: string;
-  bpm: number;                 // 40–240 in the MVP
-  durationBeats: number;
-  tracks: Track[];
-  assets: AudioAsset[];
-  selection: Selection | null;
-};
-```
-
-### 5.2 Track, clip, and asset
-
-```ts
-type Track = {
-  id: string;
-  name: string;
-  volumeDb: number;            // practical UI range: -60 to +6
-  pan: number;                 // -1 left to +1 right
-  muted: boolean;
-  soloed: boolean;
-  clips: Clip[];
-};
-
-type Clip = {
-  id: string;
-  trackId: string;
-  assetId: string;
-  startBeat: number;
-  sourceOffsetSeconds: number;
-  durationSeconds: number;
-};
-
-type AudioAsset = {
-  id: string;
-  name: string;
-  source: "demo" | "upload";
-  durationSeconds: number;
-  blob?: Blob;
-};
-```
-
-Audio data is local and may be omitted from serialized project metadata. Clip
-IDs and asset IDs are stable within a project so both the UI and agent can refer
-to the same entities.
-
-## 6) Command model
-
-### 6.1 Command envelope
-
-```ts
-type CommandEnvelope = {
-  id: string;
-  source: "human" | "agent";
-  label?: string;
-  command: DawCommand;
-};
-```
-
-The `source` is metadata for history and presentation, not permission to skip
-validation. Every command has a deterministic result or a clear rejection.
-
-### 6.2 MVP command union
-
-```ts
-type DawCommand =
-  | { type: "set_bpm"; bpm: number }
-  | { type: "create_track"; trackId: string; name: string }
-  | { type: "move_clip"; clipId: string; startBeat: number }
-  | { type: "trim_clip"; clipId: string; startBeat: number; endBeat: number }
-  | { type: "duplicate_clip"; clipId: string; startBeat: number }
-  | { type: "delete_clip"; clipId: string }
-  | { type: "set_track_volume"; trackId: string; volumeDb: number }
-  | { type: "set_track_pan"; trackId: string; pan: number }
-  | { type: "set_track_mute"; trackId: string; muted: boolean }
-  | { type: "set_track_solo"; trackId: string; soloed: boolean };
-```
-
-Commands operate in beats where arrangement semantics matter. The audio engine
-converts beats to seconds using the current BPM. The MVP does not promise
-time-stretching: changing BPM changes scheduling, not the pitch or duration of
-decoded audio.
-
-### 6.3 Batch transactions
-
-```ts
-type EditTransaction = {
-  id: string;
-  source: "human" | "agent";
-  label: string;
-  operations: DawCommand[];
-};
-```
-
-`apply_edits` validates all operations before committing. If any operation is
-invalid, the transaction is rejected without applying a partial subset. This is
-the key safety boundary for natural-language agent requests.
-
-## 7) WebMCP tool surface
-
-Expose a small semantic surface rather than mirroring every button in the UI.
-Names below are the intended contract; the exact registration syntax follows
-the WebMCP implementation available in the target browser.
-
-### 7.1 Inspection tools
-
-| Tool | Purpose | Result |
+| Failure | Behavior | Recovery |
 |---|---|---|
-| `get_project` | Read BPM, duration, tracks, clips, and selection. | Compact project summary. |
-| `get_tracks` | Read track names and mix state. | Track list with IDs. |
-| `get_timeline` | Read clips ordered by beat. | Timeline ranges and asset names. |
-| `get_selection` | Read the current human selection. | Selection or `null`. |
+| Invalid command | Reject without mutation. | Return an actionable field error. |
+| Invalid batch member | Reject the entire batch. | Correct the named operation. |
+| Duplicate command ID | Return the prior result. | Continue from current state. |
 
-### 7.2 Editing tools
+Commits are synchronous and deterministic. Duplicate IDs are idempotent; JavaScript serialization prevents concurrent reducer writes.
 
-| Tool | Maps to |
-|---|---|
-| `create_track` | `create_track` |
-| `move_clip` | `move_clip` |
-| `trim_clip` | `trim_clip` |
-| `duplicate_clip` | `duplicate_clip` |
-| `delete_clip` | `delete_clip` |
-| `set_track_volume` | `set_track_volume` |
-| `set_track_pan` | `set_track_pan` |
-| `set_track_mute` | `set_track_mute` |
-| `set_track_solo` | `set_track_solo` |
-| `set_bpm` | `set_bpm` |
+### 6.2 History service
 
-### 7.3 Higher-level tools
+**Responsibility:** Record attributed actions and restorable state, coalescing a gesture or batch into one entry.
 
-| Tool | Purpose |
-|---|---|
-| `apply_edits` | Validate and commit a labeled list of commands atomically. |
-| `duplicate_range` | Copy all clips overlapping a beat range to a destination. |
-| `get_history` | Explain recent human and agent changes. |
+**Inputs:** Successful commits and history-control requests.
 
-`duplicate_range` is intentionally a semantic convenience: an agent should be
-able to express “repeat the chorus” without individually discovering and
-duplicating every clip. It still expands into ordinary commands before commit.
+**Outputs:** Activity entries, history cursor, and restored state.
 
-### 7.4 Tool behavior rules
+| Failure | Behavior | Recovery |
+|---|---|---|
+| Snapshot cap reached | Prune oldest restorable entries. | Keep current and recent state. |
+| Restore during playback | Stop playback first. | Rebuild scheduling from restored state. |
+| New edit after undo | Discard redo states. | Continue from the new branch. |
 
-- Read tools are side-effect free.
-- Mutation tools return the changed entity summary and history entry ID.
-- Unknown IDs, invalid ranges, and out-of-bounds values return structured errors.
-- `apply_edits` is all-or-nothing.
-- Tool responses should be compact enough for an agent to reuse in its next
-  turn; do not return raw audio bytes.
+One completed gesture or agent transaction maps to one entry. History mutations are atomic.
 
-## 8) Agent-aware undo and history
+### 6.3 Audio engine
 
-### 8.1 History entry
+**Responsibility:** Load drum samples, create preset synth voices, schedule notes, and route tracks through the mixer.
 
-```ts
-type HistoryEntry = {
-  id: string;
-  source: "human" | "agent";
-  label: string;
-  commands: DawCommand[];
-  inverseCommands: DawCommand[];
-  createdAt: number;
-};
-```
+**Inputs:** Project snapshot and transport controls.
 
-The UI displays entries like:
+**Outputs:** Stereo audio and transport timing.
 
-```text
-Agent — Strengthen chorus (5 edits)     [Undo]
-  moved synth
-  duplicated drums
-  bass +2 dB
-  ...
-```
+| Failure | Behavior | Recovery |
+|---|---|---|
+| Audio context blocked | Keep editing available. | Resume after user gesture. |
+| Sample missing | Skip hit and identify sound. | Other voices continue. |
+| Voice cap reached | Stop oldest voice on the track. | Continue later notes. |
+| State restored | Cancel future sources. | Rebuild and wait for Play. |
 
-### 8.2 Undo rules
+Scheduling uses a short look-ahead window and never duplicates an already scheduled event.
 
-1. A single human gesture normally creates one entry.
-2. An `apply_edits` call always creates one agent entry.
-3. Undo applies inverse commands in reverse order.
-4. If an inverse cannot be applied because the project was changed outside the
-   command system, the UI reports the conflict and keeps the current snapshot.
-5. Redo is optional polish; it is not required for the first WebMCP demo.
+### 6.4 WebMCP adapter
 
-This makes agent behavior legible without pretending that an agent's work is
-irreversible or automatically correct.
+**Responsibility:** Register tools, map mutation inputs to commands, and return compact structured results.
+
+**Inputs:** Tool calls and current project/catalog state.
+
+**Outputs:** Read summaries, history entry IDs, changed entities, or errors.
+
+| Failure | Behavior | Recovery |
+|---|---|---|
+| WebMCP unavailable | Manual editing remains functional. | Show setup status. |
+| Unknown entity/sound | Reject with invalid ID. | Re-inspect and retry. |
+| Oversized batch | Reject before mutation. | Divide into smaller batches. |
+
+Reads are side-effect free; mutations are idempotent by call ID; batches are atomic.
+
+### 6.5 Persistence service
+
+**Responsibility:** Load the latest local project and asynchronously save committed project/history state.
+
+**Inputs:** Successful commits and project lifecycle actions.
+
+**Outputs:** Versioned IndexedDB record and save status.
+
+| Failure | Behavior | Recovery |
+|---|---|---|
+| Storage unavailable | Continue in memory with warning. | Avoid refresh. |
+| Quota exceeded | Preserve in-memory state. | Prune history and retry once. |
+| Unsupported schema | Preserve stored record. | Offer blank or demo project. |
+
+Saves are debounced and ordered. Multiple tabs editing one project are unsupported.
+
+### 6.6 WAV exporter
+
+**Responsibility:** Render the complete arrangement offline and encode stereo WAV.
+
+**Inputs:** Frozen project and bundled samples.
+
+**Outputs:** WAV download or visible export error.
+
+| Failure | Behavior | Recovery |
+|---|---|---|
+| Duration exceeds cap | Reject before allocation. | Shorten song or raise BPM. |
+| Offline render fails | Leave project unchanged. | Report stage and retry. |
+| Sample missing | Reject with sound ID. | Reload assets. |
+
+Export is deterministic for a project and sample set and never creates history.
+
+## 7) Data model
+
+All IDs are UUID strings. Ordering is explicit so UI and agent results stay stable.
+
+### 7.1 Project
+
+| Field | Type | Constraint |
+|---|---|---|
+| `schemaVersion` | integer | Current supported version. |
+| `id` | UUID | Stable identifier. |
+| `name` | string | 1–80 characters. |
+| `bpm` | number | 40–240. |
+| `masterVolumeDb` | number | -60 to 0 dB. |
+| `tracks` | Track[] | Ordered; maximum 16. |
+| `patterns` | Pattern[] | Maximum 128. |
+| `arrangement` | ArrangementClip[] | Maximum 512. |
+
+### 7.2 Track
+
+| Field | Type | Constraint |
+|---|---|---|
+| `id` | UUID | Stable identifier. |
+| `name` | string | 1–40 characters. |
+| `kind` | `drum` or `synth` | Immutable after creation. |
+| `instrumentId` | string | Existing kit or preset. |
+| `volumeDb` | number | -60 to +6 dB. |
+| `pan` | number | -1 to +1. |
+| `muted`, `soloed` | boolean | Mixer state. |
+
+### 7.3 Pattern content
+
+| Entity | Fields | Constraint |
+|---|---|---|
+| Pattern | `id`, `trackId`, `name`, `lengthBars`, `content` | 1, 2, or 4 bars; maximum 512 events. |
+| Drum hit | `id`, `soundId`, `startStep` | Sound belongs to kit; step is in range. |
+| Synth note | `id`, `midiNote`, `startStep`, `lengthSteps` | MIDI 24–96; positive in-range length. |
+
+Drum patterns contain only hits and synth patterns only synth notes. Overlapping synth notes allow chords.
+
+### 7.4 Arrangement clip
+
+| Field | Type | Constraint |
+|---|---|---|
+| `id` | UUID | Stable identifier. |
+| `patternId` | UUID | Existing pattern. |
+| `startBar` | integer | Zero or greater. |
+| `repeatCount` | integer | 1–64. |
+
+Different tracks may overlap. Clips on the same track may not overlap because simultaneous patterns on one instrument are ambiguous for the target user.
+
+### 7.5 History entry
+
+| Field | Type | Constraint |
+|---|---|---|
+| `id` | UUID | Stable activity identifier. |
+| `source` | `manual` or `agent` | UI or WebMCP dispatch-path attribution. |
+| `label` | string | User-readable summary. |
+| `createdAt` | integer | Unix milliseconds. |
+| `operations` | Operation[] | Ordered committed commands. |
+| `before`, `after` | Project snapshots | Restorable states. |
+
+Attribution identifies the application control path, not cryptographic identity.
+
+## 8) Storage artifacts
+
+IndexedDB stores one versioned record per local project containing project state, retained history, and update time. Bundled samples stay as deployment assets. Runtime audio nodes, decoded buffers, playback position, hover state, and open panels are not persisted.
+
+The MVP opens the most recently edited project. Downloadable project files are stretch scope.
 
 ## 9) Core workflows
 
-### 9.1 Human edit
+### 9.1 Manual composition
 
-1. The user drags a clip.
-2. The timeline converts pixels to a beat position.
-3. The UI dispatches `move_clip` with `source: "human"`.
-4. The dispatcher validates the clip and range.
-5. The store updates, history records the inverse, and the audio scheduler
-   receives the new snapshot.
+1. Start blank or load the demo.
+2. Create a drum or synth track and select a preset.
+3. Create a 1-, 2-, or 4-bar pattern.
+4. Toggle drum hits or add, move, resize, and delete synth notes.
+5. Place and repeat the pattern in the arranger.
+6. Commit each completed gesture as one manual history entry.
+7. Reschedule playback from updated state.
 
-### 9.2 Agent inspection and edit
+Invalid gestures snap back and explain why. Pointer movement commits only on release so history stays readable.
 
-1. The agent calls `get_project` and receives IDs, beats, and track state.
-2. The agent chooses one or more semantic operations.
-3. For a multi-step request, it calls `apply_edits` with a human-readable label.
-4. The adapter validates the complete transaction before committing it.
-5. The UI highlights changed clips and adds one grouped history entry.
-6. The tool response includes the new state needed for the next agent turn.
+### 9.2 Agent composition
 
-### 9.3 Playback
+1. Agent calls `get_sound_catalog` and `get_project`.
+2. Agent translates broad or granular instructions into semantic calls.
+3. For a song or section, it submits one `apply_operations` batch.
+4. Validate each operation against temporary state in order.
+5. Commit the full batch once or commit nothing.
+6. Highlight affected entities and display one agent history entry.
 
-1. The transport starts an `AudioContext` after a user gesture.
-2. The scheduler converts clip beats to seconds from the current BPM.
-3. Each clip uses an `AudioBufferSourceNode` into its track gain and pan nodes.
-4. Track mute/solo state controls routing; project state remains the source of
-   truth.
-5. Missing or undecodable assets are skipped with a visible warning.
+Identical operation payloads are deterministic. Musical generation belongs to the external agent and is not deterministic inside AgentDAW.
 
-## 10) Security and safety model
+### 9.3 Compensating edit
 
-- No secrets or API keys are required in the browser-only MVP.
-- Uploaded audio stays in memory or IndexedDB and is not sent to a service.
-- WebMCP mutation inputs are untrusted and must pass the same validation as UI
-  inputs.
-- Hard caps prevent pathological calls: 64 tracks, 512 clips, and 100
-  operations per transaction in the demo build.
-- Tool responses omit raw file contents and return only project metadata.
-- The app should clearly label agent-originated changes and provide undo.
+1. User asks the agent to reverse a specific part of an earlier batch.
+2. Agent compares `get_history` with current project state.
+3. Agent submits new operations restoring intended values while retaining unrelated changes.
+4. Record the correction as a new agent entry.
 
-## 11) Operational guardrails
+Compensation can fail when later edits removed a dependency. The conflict is returned and history is never rewritten.
 
-### 11.1 Metrics worth observing during the demo
+### 9.4 Undo, redo, and restore
 
-- Time from tool call to visible project update.
-- Rejected tool calls by error type.
-- Transaction size and transaction failure rate.
-- Playback start failures and audio decode failures.
-- Browser console errors during the scripted demo.
+1. Undo replaces current state with the latest entry's `before` snapshot.
+2. Redo applies the corresponding `after` snapshot.
+3. A new edit after undo discards redo states.
+4. A user-triggered restore copies a retained snapshot into a new `manual` action.
+5. Playback stops and audio scheduling rebuilds.
 
-### 11.2 Health checks
+### 9.5 Playback and export
 
-There is no server health endpoint in the MVP. The app's lightweight readiness
-check should verify that Web Audio can create an `AudioContext`, the demo
-project loads, and WebMCP registration completes. A visible status indicator is
-more useful than adding an operational backend for a ten-day demo.
+Playback converts bars and steps to seconds with `60 / BPM`, expands pattern repetitions inside a short look-ahead window, triggers drum samples or synth voices, and applies the mixer. Pause or seek cancels scheduled sources before restarting.
 
-## 12) Persistence and lifecycle
+WAV export freezes state, validates duration and samples, renders the full mixer offline, and encodes a 44.1 kHz 16-bit stereo WAV. It is read-only and creates no history entry.
 
-- Demo assets are shipped with the app and versioned with the repository.
-- Uploaded blobs last for the current browser session unless IndexedDB is added.
-- Project metadata may be exported as JSON later, but export is not required for
-  the challenge demo.
-- No cloud retention, account deletion, or server-side archival exists in the
-  MVP because no server stores user data.
+### 9.6 Limits
 
-## 13) Deployment
+| Parameter | Default |
+|---|---:|
+| BPM | 40–240 |
+| Tracks | 16 |
+| Patterns | 128 |
+| Events per pattern | 512 |
+| Arrangement clips | 512 |
+| Arrangement end | 256 bars |
+| Operations per batch | 100 |
+| Retained history entries | 100 |
+| Live synth voices | 64 |
+| WAV duration | 10 minutes |
 
-### 13.1 Bootstrap
+## 10) WebMCP contracts
 
-1. Install the chosen Node.js version and project dependencies.
-2. Run the local development server.
-3. Test in ChatGPT's in-app browser or Chrome with WebMCP enabled, as described
-   by the challenge documentation.
-4. Deploy the static app to the selected host.
+Every mutation accepts a call ID for idempotency and returns a history entry ID plus changed-entity summaries. Errors name the failing field or batch index and leave state unchanged.
 
-### 13.2 CI/CD
+### 10.1 Inspection
 
-The first implementation should use the host's default GitHub integration:
-pull request → install → typecheck → lint → build; merge to the deployment
-branch → production deploy. No custom pipeline or infrastructure-as-code is
-needed for the documentation seed.
+| Tool | Result |
+|---|---|
+| `get_project` | Compact tracks, patterns, notes, arrangement, mix, and optional filtered detail. |
+| `get_sound_catalog` | Stable drum sound and synth preset IDs with descriptions. |
+| `get_history` | Retained source, label, operations, and relevant prior/current values. |
 
-### 13.3 Rollback
+### 10.2 Direct mutation
 
-Use the hosting provider's previous deployment rollback. Keep the last known
-working demo URL available while polishing the submission.
+| Family | Tools |
+|---|---|
+| Project | `set_project_details` |
+| Tracks | `create_track`, `update_track`, `delete_track` |
+| Patterns | `create_pattern`, `duplicate_pattern`, `update_pattern`, `delete_pattern` |
+| Notes | `add_notes`, `update_notes`, `delete_notes` |
+| Arrangement | `place_pattern`, `update_arrangement_clip`, `delete_arrangement_clip` |
 
-## 14) Decision log
+Deletion rejects when dependencies remain unless the same batch removes them first. Direct calls create one agent history entry each.
 
-### Decision: Browser-first, no backend
+### 10.3 Batch mutation
 
-**Context:** The challenge rewards the human-agent interaction, not account or
-storage infrastructure.
+`apply_operations` accepts a label and ordered list of the same direct operations. It validates against temporary state, then commits one agent entry. Unknown operations, invalid references, invalid dependencies, or more than 100 operations reject the full transaction.
 
-**Decision:** Keep audio and project state local to the browser for the MVP.
+## 11) Security and privacy
 
-**Alternatives considered:**
+- No API keys or secrets.
+- Project data remains in-browser unless WAV is exported.
+- WebMCP inputs receive strict schema and domain validation.
+- Text renders as text, never interpreted HTML.
+- IDs and numeric ranges validate before lookup, scheduling, or allocation.
+- Hard caps limit agent-generated CPU, memory, and storage use.
+- Tool results contain metadata, never raw audio.
+- Agent changes are visible and reversible.
+- No authentication because there is no server or shared data.
 
-- Add a database and auth — rejected because it consumes the time needed for
-  WebMCP and history UX.
-- Build a server audio pipeline — rejected because Web Audio is enough for the
-  short demo.
+## 12) Operational guardrails
 
-**Trade-offs:** Refresh persistence and sharing are deferred.
+The editor reports audio-context availability, bundled-asset load, and WebMCP registration. WebMCP failure does not disable manual editing; audio failure does not hide or corrupt the project.
 
-### Decision: One command layer
+Useful local diagnostics are rejected commands by validation code, audio underruns or voice-cap events, IndexedDB failures, WAV render duration/failures, and WebMCP registration/tool failures. No remote analytics service is required for the challenge.
 
-**Context:** Separate UI and agent mutation APIs would drift and create unsafe
-  edge cases.
+## 13) Retention and lifecycle
 
-**Decision:** Both UI and WebMCP adapters dispatch the same typed commands.
+- Latest project and up to 100 complete history entries persist until site data is cleared or the project is replaced.
+- Autosave is local and does not synchronize across devices.
+- Under storage pressure, oldest history is removed before current state.
+- Bundled samples follow deployment retention; WAV files are browser downloads.
+- Multi-tab editing of the same project is unsupported.
 
-**Alternatives considered:**
+## 14) Deployment and schedule
 
-- Let WebMCP call store methods directly — rejected because validation and
-  history become inconsistent.
-- Maintain a separate agent DSL — rejected because it duplicates the model.
+Pull requests run installation, unit tests, typecheck, lint, and production build. Merge triggers static deployment. No infrastructure-as-code is justified because no custom infrastructure exists. Rollback uses the hosting provider's prior deployment.
 
-**Trade-offs:** The command union must stay intentionally small and stable.
+| Date | Required outcome |
+|---|---|
+| Aug 25 | Approved design and implementation plan. |
+| Aug 26 | Project model, commands, history, undo, redo. |
+| Aug 27 | Drum sampler, synth presets, playback. |
+| Aug 28 | Drum grid and piano roll. |
+| Aug 29 | Pattern arrangement and mixer. |
+| Aug 30 | WebMCP inspection and direct tools. |
+| Aug 31 | Atomic batches and agent-readable history. |
+| Sep 1 | Autosave, WAV export, demo, feature freeze. |
+| Sep 2 | Integration fixes, deploy, recording, submission copy. |
+| Sep 3 | Submission buffer only. |
 
-### Decision: Atomic agent transactions
+## 15) Decision log
 
-**Context:** Natural-language requests often imply several related edits.
+### Decision: Step sequencing over audio clips
 
-**Decision:** `apply_edits` validates all operations, then commits one history
-entry.
+**Decision:** Build songs from drum hits and synth notes on a beat grid.
 
-**Alternatives considered:**
+**Alternatives:** Loops and recording require audio decoding, waveforms, offsets, and tempo matching.
 
-- Apply calls one at a time — rejected because partial failures are confusing.
-- Hide all agent changes — rejected because human review is the product.
+**Trade-off:** No recording or arbitrary audio import in the MVP.
 
-**Trade-offs:** Transaction validation is stricter than a best-effort editor.
+### Decision: Pattern workstation
 
-### Decision: Beats as the semantic timeline unit
+**Decision:** Separate a selected-pattern editor from song arrangement.
 
-**Context:** Agents can reason about musical structure more easily in bars and
-beats than in pixels or raw seconds.
+**Alternatives:** Scene launch adds performance concepts; one long piano roll makes reuse cumbersome.
 
-**Decision:** Store arrangement positions in beats and derive seconds from BPM.
+**Trade-off:** Onboarding must clearly distinguish patterns from arrangement clips.
 
-**Alternatives considered:**
+### Decision: External WebMCP agent
 
-- Store only seconds — rejected because the agent-facing contract is less
-  musical and harder to demo.
-- Implement full tempo mapping — rejected as outside the MVP.
+**Decision:** External ChatGPT or another compatible agent supplies musical reasoning.
 
-**Trade-offs:** BPM changes do not provide time-stretching.
+**Alternatives:** Embedded chat duplicates the challenge host and requires credentials and infrastructure.
 
-## 15) Implementation checklist
+**Trade-off:** Agent use needs a supported environment; manual creation remains independent.
+
+### Decision: Direct tools plus batches
+
+**Decision:** Expose discoverable entity tools and `apply_operations` for grouped composition.
+
+**Alternatives:** One generic tool is hard to discover; direct calls alone leave partial songs and noisy history.
+
+**Trade-off:** The public surface and batch operation union duplicate schemas.
+
+### Decision: Snapshot history
+
+**Decision:** Retain before/after snapshots for 100 actions in IndexedDB.
+
+**Alternatives:** Event replay and branches add migration and conflict complexity.
+
+**Trade-off:** Restore depth is bounded, but pattern projects are small.
+
+### Decision: Preset-only instruments
+
+**Decision:** One drum kit and one poly synth engine with curated presets.
+
+**Alternatives:** Sound design and multiple engines expand audio and UI testing.
+
+**Trade-off:** Sonic variety is curated rather than open-ended.
+
+## 16) Verification strategy
+
+### 16.1 Automated checks
+
+- Command range, identifier, ownership, overlap, and dependency validation.
+- Pattern and note editing.
+- Batch success and rollback at every failing position.
+- Attribution, history labels, undo, redo, restore, and redo invalidation.
+- Deterministic bar/step/BPM scheduling times.
+- Equivalent manual and WebMCP commands produce identical state.
+- IndexedDB save/reload and WAV headers/duration.
+
+### 16.2 Acceptance paths
+
+1. Blank → tracks → patterns → arrangement → mix → reload → WAV.
+2. Demo → manual note edit → undo → redo → restore.
+3. Agent inspects → creates song in one batch → user edits → agent applies granular correction.
+4. Invalid agent batch → structured error → no partial mutation.
+
+## 17) Implementation checklist
 
 ### Foundation
 
-- [ ] Create the typed project, track, clip, asset, command, and history models.
-- [ ] Implement a reducer/dispatcher with validation and inverse commands.
-- [ ] Add grouped transactions and atomic failure behavior.
+- [ ] Bootstrap strict TypeScript and minimal tests.
+- [ ] Implement entities, caps, validation, reducer, and command service.
+- [ ] Implement history grouping, undo, redo, and restore.
 
-### Audio
+### Audio and UI
 
-- [ ] Load the bundled demo assets.
-- [ ] Support local upload and decode.
-- [ ] Build track gain/pan/mute/solo routing.
-- [ ] Implement play, pause, seek, and BPM-derived scheduling.
+- [ ] Add licensed drum samples and catalog.
+- [ ] Implement sampler, preset poly synth, mixer, transport, and voice caps.
+- [ ] Implement start screen, track controls, drum grid, piano roll, arranger, and history UI.
 
-### Timeline
+### WebMCP, persistence, and export
 
-- [ ] Render track lanes, clip blocks, beat grid, playhead, and selection.
-- [ ] Add drag, trim, duplicate, delete, and basic zoom.
-- [ ] Add transport and track controls.
-
-### WebMCP
-
-- [ ] Register the four inspection tools.
-- [ ] Register the ten direct editing tools.
-- [ ] Register `apply_edits`, `duplicate_range`, and `get_history`.
-- [ ] Return structured validation errors and compact summaries.
-
-### Human-agent UX
-
-- [ ] Show agent-originated changes in the timeline.
-- [ ] Display grouped history entries and one-click undo.
-- [ ] Script the human → agent → human → agent demo.
+- [ ] Register inspection and direct mutation tools.
+- [ ] Implement atomic `apply_operations` and structured errors.
+- [ ] Implement schema-versioned IndexedDB autosave/load.
+- [ ] Implement offline render and WAV encoding.
 
 ### Submission
 
-- [ ] Deploy a stable live URL.
-- [ ] Record the demo video.
-- [ ] Write the project description around the collaboration loop.
-- [ ] Freeze features by September 1; reserve September 2–3 for submission and
-  bug fixes.
+- [ ] Build demo song and scripted collaboration sequence.
+- [ ] Run automated and acceptance checks.
+- [ ] Deploy, retain rollback, record demo, and prepare submission.
+- [ ] Freeze features September 1.
 
-## 16) Development plan: Aug 25–Sep 3
+## 18) Summary
 
-| Date | Focus | Exit criterion |
-|---|---|---|
-| Aug 25 | Foundation | Models, dispatcher, reducer, undo skeleton. |
-| Aug 26 | Audio | Demo stems upload/decode/play with volume and pan. |
-| Aug 27 | Timeline | Lanes, clips, drag, selection, playhead. |
-| Aug 28 | Editing | Move, trim, duplicate, delete, mute, solo through commands. |
-| Aug 29 | WebMCP | Inspection and direct mutation tools work in ChatGPT/Chrome. |
-| Aug 30 | Agent operations | Atomic `apply_edits`, `duplicate_range`, fade polish if time remains. |
-| Aug 31 | Human-agent UX | History grouping, undo, highlights; use office hours at 11 a.m. PT. |
-| Sep 1 | Polish | Demo project, shortcuts, empty states, responsive cleanup. |
-| Sep 2 | Submission | Deploy, record, write submission copy, verify repository. |
-| Sep 3 | Buffer | Bug fixes only before 5 p.m. PT. |
-
-The cutoff is deliberate: if a feature is not serving the collaboration demo,
-it waits until after submission.
-
-## 17) Summary
-
-- AgentDAW is a browser-first multitrack editor for human-agent collaboration.
-- The timeline is visual for humans and semantic for agents.
-- WebMCP exposes project inspection and editing tools.
-- UI and agent paths share one command dispatcher and reducer.
-- Agent transactions are atomic, labeled, visible, and undoable.
-- The audio engine uses native Web Audio nodes.
-- Audio and project state stay local in the MVP.
-- The demo centers on handoffs, not autonomous music generation.
-- A small stable tool surface beats dozens of low-level controls.
-- Scope is frozen around a ten-day challenge submission.
+- Beginner-oriented desktop pattern workstation.
+- Manual clicks and external WebMCP composition share one project.
+- Reusable drum and synth patterns feed a bar-aligned arrangement.
+- One preset synth covers bass, chords, leads, and pads.
+- Basic mixer, autosave, and WAV export complete the song workflow.
+- One command service enforces validation, attribution, and history.
+- Direct agent tools stay discoverable; batches stay atomic.
+- Undo, redo, restore, and compensating edits preserve user control.
+- Browser-only and local-first, with no model or backend.
+- Stretch work waits until the MVP passes end to end.
