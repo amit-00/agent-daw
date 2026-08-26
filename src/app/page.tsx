@@ -5,6 +5,7 @@ import { useState } from "react";
 
 type TrackId = "drums" | "bass" | "chords" | "melody" | "pad";
 type ToolId = "select" | "draw" | "split" | "focus";
+type EditorTab = "mixer" | "sequence";
 type IconName =
   | "activity"
   | "chevron"
@@ -122,6 +123,8 @@ const NOTE_MARKS = [
   [5, 22, 16], [18, 46, 25], [32, 31, 11], [43, 62, 20],
   [58, 18, 13], [67, 43, 21], [82, 29, 12], [91, 56, 7],
 ] as const;
+const SEQUENCE_NOTES = ["C5", "A4", "F4", "C4"] as const;
+const INITIAL_SEQUENCE_STEPS = [1, 6, 12, 17, 23, 29, 36, 42, 49, 55, 60] as const;
 
 function Icon({ name, size = 16 }: Readonly<{ name: IconName; size?: number }>): ReactElement {
   return (
@@ -231,15 +234,18 @@ function formatTime(playhead: number): string {
 export default function StudioPage(): ReactElement {
   const [isPlaying, setIsPlaying] = useState(false);
   const [selectedClipId, setSelectedClipId] = useState(CLIPS[4].id);
-  const [mixerOpen, setMixerOpen] = useState(true);
+  const [editorOpen, setEditorOpen] = useState(true);
+  const [editorTab, setEditorTab] = useState<EditorTab>("sequence");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [activityOpen, setActivityOpen] = useState(true);
   const [activeTool, setActiveTool] = useState<ToolId>("select");
   const [playhead, setPlayhead] = useState(27);
   const [mutedTracks, setMutedTracks] = useState<ReadonlySet<TrackId>>(new Set());
   const [soloTracks, setSoloTracks] = useState<ReadonlySet<TrackId>>(new Set());
+  const [sequenceSteps, setSequenceSteps] = useState<ReadonlySet<number>>(new Set(INITIAL_SEQUENCE_STEPS));
 
   const selectedClip = CLIPS.find((clip) => clip.id === selectedClipId) ?? CLIPS[0];
+  const selectedTrack = TRACKS.find((track) => track.id === selectedClip.trackId) ?? TRACKS[0];
   return (
     <main className="studio-shell">
       {sidebarOpen ? (
@@ -415,34 +421,71 @@ export default function StudioPage(): ReactElement {
             </label>
           </section>
 
-          {mixerOpen ? (
-            <aside className="mixer glass-card" aria-label="Mixer">
-              <div className="mixer-header">
-                <span><Icon name="mixer" /> Mixer</span>
-                <div className="mixer-tabs"><button className="active" type="button">Channels</button><button type="button">Master</button></div>
-                <button className="close-button" type="button" aria-label="Close mixer" onClick={() => setMixerOpen(false)}>×</button>
+          {editorOpen ? (
+            <aside className="editor-drawer glass-card" aria-label="Track editor">
+              <div className="editor-header">
+                <span><Icon name={editorTab === "sequence" ? "draw" : "mixer"} /> Track editor</span>
+                <div className="editor-tabs">
+                  <button className={editorTab === "sequence" ? "active" : ""} type="button" onClick={() => setEditorTab("sequence")}>Sequence</button>
+                  <button className={editorTab === "mixer" ? "active" : ""} type="button" onClick={() => setEditorTab("mixer")}>Mixer</button>
+                </div>
+                <button className="close-button" type="button" aria-label="Close track editor" onClick={() => setEditorOpen(false)}>×</button>
               </div>
-              <div className="mixer-strips">
-                {TRACKS.map((track) => (
-                  <div className="channel-strip" key={`${track.id}-mixer`}>
-                    <span className="channel-name">{track.name.split(" ")[0]}</span>
-                    <span className="meter"><i style={{ height: `${track.volume}%` }} /><i style={{ height: `${track.volume - 8}%` }} /></span>
-                    <input aria-label={`${track.name} volume`} type="range" min="0" max="100" defaultValue={track.volume} />
-                    <span className="pan-knob" aria-hidden="true"><i /></span>
-                    <div className="channel-buttons">
-                      <button className={mutedTracks.has(track.id) ? "active" : ""} type="button" aria-label={`Mute ${track.name}`} aria-pressed={mutedTracks.has(track.id)} onClick={() => setMutedTracks((current) => toggleSet(current, track.id))}>M</button>
-                      <button className={soloTracks.has(track.id) ? "active solo" : ""} type="button" aria-label={`Solo ${track.name}`} aria-pressed={soloTracks.has(track.id)} onClick={() => setSoloTracks((current) => toggleSet(current, track.id))}>S</button>
+
+              {editorTab === "sequence" ? (
+                <section
+                  className="sequence-editor"
+                  aria-label={`Sequence editor for ${selectedTrack.name}`}
+                  style={{ "--sequence-color": selectedTrack.color } as CSSProperties}
+                >
+                  <div className="sequence-toolbar">
+                    <span><small>SELECTED TRACK</small><strong>{selectedTrack.name}</strong><em>{selectedClip.name} · {selectedClip.detail}</em></span>
+                    <div className="sequence-options"><button type="button">Pattern A</button><button type="button">1 / 16</button><button type="button">100%</button></div>
+                  </div>
+                  <div className="sequence-workspace">
+                    <div className="sequence-ruler">
+                      {Array.from({ length: 16 }, (_, step) => <span key={step}>{step + 1}</span>)}
+                    </div>
+                    <div className="sequence-notes">
+                      {SEQUENCE_NOTES.map((note) => <span key={note}>{note}</span>)}
+                    </div>
+                    <div className="sequence-grid">
+                      {Array.from({ length: 64 }, (_, step) => (
+                        <button
+                          className={sequenceSteps.has(step) ? "sequence-step active" : "sequence-step"}
+                          key={step}
+                          type="button"
+                          aria-label={`${sequenceSteps.has(step) ? "Clear" : "Add"} ${SEQUENCE_NOTES[Math.floor(step / 16)]} at step ${(step % 16) + 1}`}
+                          aria-pressed={sequenceSteps.has(step)}
+                          onClick={() => setSequenceSteps((current) => toggleSet(current, step))}
+                        />
+                      ))}
                     </div>
                   </div>
-                ))}
-                <div className="channel-strip master-strip">
-                  <span className="channel-name">Master</span>
-                  <span className="meter"><i style={{ height: "82%" }} /><i style={{ height: "76%" }} /></span>
-                  <input aria-label="Master volume" type="range" min="0" max="100" defaultValue="78" />
-                  <span className="pan-knob" aria-hidden="true"><i /></span>
-                  <span className="master-label">−3.2</span>
+                </section>
+              ) : (
+                <div className="mixer-strips">
+                  {TRACKS.map((track) => (
+                    <div className="channel-strip" key={`${track.id}-mixer`}>
+                      <span className="channel-name">{track.name.split(" ")[0]}</span>
+                      <span className="meter"><i style={{ height: `${track.volume}%` }} /><i style={{ height: `${track.volume - 8}%` }} /></span>
+                      <input aria-label={`${track.name} volume`} type="range" min="0" max="100" defaultValue={track.volume} />
+                      <span className="pan-knob" aria-hidden="true"><i /></span>
+                      <div className="channel-buttons">
+                        <button className={mutedTracks.has(track.id) ? "active" : ""} type="button" aria-label={`Mute ${track.name}`} aria-pressed={mutedTracks.has(track.id)} onClick={() => setMutedTracks((current) => toggleSet(current, track.id))}>M</button>
+                        <button className={soloTracks.has(track.id) ? "active solo" : ""} type="button" aria-label={`Solo ${track.name}`} aria-pressed={soloTracks.has(track.id)} onClick={() => setSoloTracks((current) => toggleSet(current, track.id))}>S</button>
+                      </div>
+                    </div>
+                  ))}
+                  <div className="channel-strip master-strip">
+                    <span className="channel-name">Master</span>
+                    <span className="meter"><i style={{ height: "82%" }} /><i style={{ height: "76%" }} /></span>
+                    <input aria-label="Master volume" type="range" min="0" max="100" defaultValue="78" />
+                    <span className="pan-knob" aria-hidden="true"><i /></span>
+                    <span className="master-label">−3.2</span>
+                  </div>
                 </div>
-              </div>
+              )}
             </aside>
           ) : null}
 
@@ -462,11 +505,20 @@ export default function StudioPage(): ReactElement {
             ))}
             <span className="dock-divider" />
             <button
-              className={mixerOpen ? "active wide" : "wide"}
+              className={editorOpen && editorTab === "sequence" ? "active wide" : "wide"}
               type="button"
-              aria-label={mixerOpen ? "Hide mixer" : "Show mixer"}
-              aria-pressed={mixerOpen}
-              onClick={() => setMixerOpen((open) => !open)}
+              aria-label="Show sequence editor"
+              aria-pressed={editorOpen && editorTab === "sequence"}
+              onClick={() => { setEditorTab("sequence"); setEditorOpen(true); }}
+            >
+              <Icon name="draw" /> Sequence
+            </button>
+            <button
+              className={editorOpen && editorTab === "mixer" ? "active wide" : "wide"}
+              type="button"
+              aria-label="Show mixer"
+              aria-pressed={editorOpen && editorTab === "mixer"}
+              onClick={() => { setEditorTab("mixer"); setEditorOpen(true); }}
             >
               <Icon name="mixer" /> Mixer
             </button>
