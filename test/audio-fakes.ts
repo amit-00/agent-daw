@@ -160,3 +160,25 @@ export class FakeAudioContext {
     return this as unknown as AudioContext;
   }
 }
+
+export class FakeTimers {
+  nextId = 1;
+  readonly callbacks = new Map<number, () => void>();
+  readonly intervals: number[] = [];
+
+  setInterval(callback: () => void, milliseconds: number): unknown {
+    const id = this.nextId;
+    this.nextId += 1;
+    this.callbacks.set(id, callback);
+    this.intervals.push(milliseconds);
+    return id;
+  }
+
+  clearInterval(handle: unknown): void {
+    if (typeof handle === "number") this.callbacks.delete(handle);
+  }
+
+  tick(): void {
+    for (const callback of [...this.callbacks.values()]) callback();
+  }
+}
