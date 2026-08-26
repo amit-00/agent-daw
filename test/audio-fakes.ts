@@ -1,5 +1,5 @@
 export interface AutomationEvent {
-  readonly method: "set" | "linear" | "cancel";
+  readonly method: "set" | "linear" | "cancel" | "hold";
   readonly value?: number;
   readonly time: number;
 }
@@ -22,6 +22,11 @@ export class FakeAudioParam {
 
   cancelScheduledValues(time: number): FakeAudioParam {
     this.events.push({ method: "cancel", time });
+    return this;
+  }
+
+  cancelAndHoldAtTime(time: number): FakeAudioParam {
+    this.events.push({ method: "hold", time });
     return this;
   }
 }

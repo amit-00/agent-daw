@@ -37,21 +37,32 @@ const findPreset = (
 ): SynthPreset | undefined => Object.values(presets).find(({ id }) => id === instrumentId);
 
 export function createSynth(options: SynthOptions): Synth {
-  if (options.voiceCap <= 0) {
-    throw new RangeError(`Synth voice cap must be greater than zero; received ${options.voiceCap}`);
+  if (!Number.isInteger(options.voiceCap) || options.voiceCap <= 0) {
+    throw new RangeError(`Synth voice cap must be a positive integer; received ${options.voiceCap}`);
   }
-  if (options.stopRampSeconds <= 0) {
+  if (!Number.isFinite(options.stopRampSeconds) || options.stopRampSeconds <= 0) {
     throw new RangeError(
-      `Synth stop ramp seconds must be greater than zero; received ${options.stopRampSeconds}`,
+      `Synth stop ramp seconds must be finite and greater than zero; received ${options.stopRampSeconds}`,
     );
   }
 
   const activeVoices = new Set<SynthVoice>();
 
   const stopOldestVoice = (trackId: string, audioTime: number): void => {
-    const oldest = [...activeVoices].find((voice) => voice.trackId === trackId)
-      ?? activeVoices.values().next().value;
-    oldest?.stop(audioTime);
+    let oldestOnTrack: SynthVoice | undefined;
+    let oldest: SynthVoice | undefined;
+    for (const voice of activeVoices) {
+      if (oldest === undefined || voice.startedAt < oldest.startedAt) {
+        oldest = voice;
+      }
+      if (
+        voice.trackId === trackId &&
+        (oldestOnTrack === undefined || voice.startedAt < oldestOnTrack.startedAt)
+      ) {
+        oldestOnTrack = voice;
+      }
+    }
+    (oldestOnTrack ?? oldest)?.stop(audioTime);
   };
 
   return {
@@ -107,7 +118,7 @@ export function createSynth(options: SynthOptions): Synth {
         preset.peakGain * preset.sustainGain,
         audioTime + preset.attackSeconds + preset.decaySeconds,
       );
-      gain.gain.setValueAtTime(preset.peakGain * preset.sustainGain, audioTime + durationSeconds);
+      gain.gain.cancelAndHoldAtTime(audioTime + durationSeconds);
       gain.gain.linearRampToValueAtTime(0, releaseEnd);
       oscillator.connect(filter);
       filter.connect(gain);
@@ -124,8 +135,7 @@ export function createSynth(options: SynthOptions): Synth {
           }
           stopped = true;
           activeVoices.delete(voice);
-          gain.gain.cancelScheduledValues(stopAudioTime);
-          gain.gain.setValueAtTime(gain.gain.value, stopAudioTime);
+          gain.gain.cancelAndHoldAtTime(stopAudioTime);
           const stopEnd = Math.round((stopAudioTime + options.stopRampSeconds) * 1_000_000_000) / 1_000_000_000;
           gain.gain.linearRampToValueAtTime(0, stopEnd);
           oscillator.stop(stopEnd);

@@ -78,3 +78,87 @@ test("unknown preset is skipped and stopAll is idempotent", async () => {
   await voice.ended;
   assert.equal(synth.activeVoiceCount(), 0);
 });
+
+test("forced stop holds the envelope before its five millisecond fade", () => {
+  const context = new FakeAudioContext();
+  const synth = createSynth({
+    context: context.asAudioContext(),
+    presets: SYNTH_PRESETS,
+    voiceCap: 64,
+    stopRampSeconds: 0.005,
+  });
+  const voice = synth.schedule(
+    event("note-1", "bass", "synth.bass"),
+    0,
+    1,
+    new FakeAudioNode() as unknown as AudioNode,
+  );
+  assert.ok(voice);
+  voice.stop(0.5);
+  assert.deepEqual(context.gains[0]?.gain.events.slice(-2), [
+    { method: "hold", time: 0.5 },
+    { method: "linear", value: 0, time: 0.505 },
+  ]);
+});
+
+test("short pad note holds its envelope at note end before release", () => {
+  const context = new FakeAudioContext();
+  const synth = createSynth({
+    context: context.asAudioContext(),
+    presets: SYNTH_PRESETS,
+    voiceCap: 64,
+    stopRampSeconds: 0.005,
+  });
+  synth.schedule(
+    event("note-1", "pad", "synth.pad"),
+    2,
+    0.1,
+    new FakeAudioNode() as unknown as AudioNode,
+  );
+  assert.deepEqual(context.gains[0]?.gain.events.slice(-2), [
+    { method: "hold", time: 2.1 },
+    { method: "linear", value: 0, time: 2.9 },
+  ]);
+});
+
+test("voice cap evicts the earliest requesting-track voice when scheduled out of order", () => {
+  const context = new FakeAudioContext();
+  const synth = createSynth({
+    context: context.asAudioContext(),
+    presets: SYNTH_PRESETS,
+    voiceCap: 2,
+    stopRampSeconds: 0.005,
+  });
+  const destination = new FakeAudioNode() as unknown as AudioNode;
+  synth.schedule(event("newer", "bass", "synth.bass"), 2, 2, destination);
+  synth.schedule(event("older", "bass", "synth.bass"), 1, 2, destination);
+  synth.schedule(event("incoming", "bass", "synth.bass"), 3, 2, destination);
+  assert.deepEqual(context.oscillators[0]?.stopTimes, [4.12]);
+  assert.deepEqual(context.oscillators[1]?.stopTimes, [3.005]);
+});
+
+test("synth rejects non-finite and fractional caps and non-finite ramps", () => {
+  const context = new FakeAudioContext();
+  for (const voiceCap of [Number.NaN, Number.POSITIVE_INFINITY, 1.5]) {
+    assert.throws(
+      () => createSynth({
+        context: context.asAudioContext(),
+        presets: SYNTH_PRESETS,
+        voiceCap,
+        stopRampSeconds: 0.005,
+      }),
+      RangeError,
+    );
+  }
+  for (const stopRampSeconds of [Number.NaN, Number.POSITIVE_INFINITY]) {
+    assert.throws(
+      () => createSynth({
+        context: context.asAudioContext(),
+        presets: SYNTH_PRESETS,
+        voiceCap: 64,
+        stopRampSeconds,
+      }),
+      RangeError,
+    );
+  }
+});
