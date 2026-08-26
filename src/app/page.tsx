@@ -269,6 +269,11 @@ export default function StudioPage(): ReactElement {
           </div>
 
           <div className="transport-actions">
+            <button className="export-button" type="button">
+              <Icon name="download" />
+              Export
+            </button>
+
             <button
               className={activityOpen ? "activity-button active" : "activity-button"}
               type="button"
@@ -278,11 +283,6 @@ export default function StudioPage(): ReactElement {
             >
               <Icon name="activity" />
               Activity
-            </button>
-
-            <button className="export-button" type="button">
-              <Icon name="download" />
-              Export
             </button>
           </div>
         </header>
@@ -431,13 +431,12 @@ export default function StudioPage(): ReactElement {
           <div className="activity-list">
             <span className="eyebrow">LATEST CHANGES</span>
             {[
-              ["✦", "Agent shaped Glasshouse", "Added open voicings · just now"],
-              ["AM", "You adjusted Neon Kit", "Muted the final kick · 2m"],
-              ["✦", "Agent created Afterglow", "19 notes · 6m"],
-              ["AM", "You renamed the project", "Midnight Polaroid · 9m"],
-            ].map(([avatar, title, detail]) => (
+              ["Agent shaped Glasshouse", "Added open voicings · just now"],
+              ["You adjusted Neon Kit", "Muted the final kick · 2m"],
+              ["Agent created Afterglow", "19 notes · 6m"],
+              ["You renamed the project", "Midnight Polaroid · 9m"],
+            ].map(([title, detail]) => (
               <div className="activity-entry" key={title}>
-                <span className={avatar === "✦" ? "mini-orb" : "mini-avatar"}>{avatar}</span>
                 <p><strong>{title}</strong><small>{detail}</small></p>
               </div>
             ))}

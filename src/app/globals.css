@@ -72,25 +72,6 @@ input:focus-visible {
   backdrop-filter: blur(24px) saturate(125%);
 }
 
-.mini-orb {
-  display: grid;
-  border: 1px solid rgba(188, 147, 255, 0.45);
-  color: #d8c2ff;
-  place-items: center;
-  background: radial-gradient(circle at 34% 30%, #d8c1ff, #7550ac 36%, #1b102b 75%);
-}
-
-.mini-avatar {
-  display: grid;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  border-radius: 50%;
-  color: #f9e4d1;
-  font-size: 8px;
-  font-weight: 700;
-  place-items: center;
-  background: linear-gradient(145deg, #995339, #34201c);
-}
-
 .workspace {
   position: relative;
   display: flex;
@@ -990,13 +971,18 @@ input:focus-visible {
 
 .inspector {
   position: absolute;
-  top: 76px;
-  right: 14px;
-  bottom: 14px;
+  top: 58px;
+  right: 0;
+  bottom: 0;
   z-index: 9;
   width: 286px;
   overflow: hidden;
-  border-radius: 14px;
+  border: 0;
+  border-left: 1px solid var(--line-strong);
+  border-radius: 0;
+  background: var(--panel);
+  box-shadow: none;
+  backdrop-filter: none;
 }
 
 .inspector-header {
@@ -1025,19 +1011,6 @@ input:focus-visible {
   letter-spacing: 0.15em;
 }
 
-.mini-orb,
-.mini-avatar {
-  width: 20px;
-  height: 20px;
-  flex: 0 0 auto;
-  border-radius: 7px;
-  font-size: 8px;
-}
-
-.mini-avatar {
-  border-radius: 50%;
-}
-
 .activity-list {
   height: calc(100% - 48px);
   padding: 24px 17px;
@@ -1047,10 +1020,7 @@ input:focus-visible {
 }
 
 .activity-entry {
-  display: flex;
   padding: 15px 0;
-  gap: 10px;
-  align-items: flex-start;
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
 }
 
