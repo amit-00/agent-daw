@@ -30,6 +30,13 @@ export type LoadResult =
   | { readonly status: "empty" }
   | { readonly status: "failed"; readonly error: PersistenceError };
 
+export type SaveResult =
+  | { readonly status: "saved"; readonly updatedAt: number }
+  | { readonly status: "cancelled_by_clear" }
+  | { readonly status: "failed"; readonly error: PersistenceError };
+
+export type FlushResult = SaveResult | { readonly status: "idle" };
+
 export interface ProjectPersistenceOptions {
   readonly indexedDB: IDBFactory;
   readonly catalog: SoundCatalog;
@@ -69,10 +76,45 @@ const requestValue = <T>(request: IDBRequest<T>): Promise<T> =>
     );
   });
 
+const transactionDone = (transaction: IDBTransaction): Promise<void> =>
+  new Promise((resolve, reject) => {
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(
+      transaction.error ?? new DOMException("IndexedDB transaction failed", "UnknownError"),
+    );
+    transaction.onabort = () => reject(
+      transaction.error ?? new DOMException("IndexedDB transaction aborted", "AbortError"),
+    );
+  });
+
+interface PendingSave {
+  project: Project;
+  readonly promise: Promise<SaveResult>;
+  readonly resolve: (result: SaveResult) => void;
+  readonly reject: (error: unknown) => void;
+}
+
+const createPendingSave = (project: Project): PendingSave => {
+  let resolveResult: ((result: SaveResult) => void) | undefined;
+  let rejectResult: ((error: unknown) => void) | undefined;
+  const promise = new Promise<SaveResult>((resolve, reject) => {
+    resolveResult = resolve;
+    rejectResult = reject;
+  });
+  if (resolveResult === undefined || rejectResult === undefined) {
+    throw new Error("Failed to create pending persistence result");
+  }
+  return { project, promise, resolve: resolveResult, reject: rejectResult };
+};
+
 export class ProjectPersistenceService {
   private readonly options: ProjectPersistenceOptions;
   private databasePromise: Promise<IDBDatabase> | undefined;
   private recoveryRequired = false;
+  private timer: ReturnType<typeof setTimeout> | undefined;
+  private pending: PendingSave | undefined;
+  private pendingReady = false;
+  private activeWrite: Promise<SaveResult> | undefined;
 
   constructor(options: ProjectPersistenceOptions) {
     if (!Number.isInteger(options.debounceMs) || options.debounceMs < 0) {
@@ -89,6 +131,39 @@ export class ProjectPersistenceService {
     } catch (error: unknown) {
       return { status: "failed", error: mapStorageError(error, "Project load") };
     }
+  }
+
+  scheduleSave(project: Project): Promise<SaveResult> {
+    if (this.recoveryRequired) {
+      return Promise.resolve({
+        status: "failed",
+        error: persistenceError("recovery_required", "Clear the unreadable stored project before saving"),
+      });
+    }
+    validateProject(project, this.options.catalog);
+    const clone = structuredClone(project);
+    if (this.pending === undefined) this.pending = createPendingSave(clone);
+    else this.pending.project = clone;
+    this.pendingReady = false;
+    this.resetTimer();
+    return this.pending.promise;
+  }
+
+  async flush(): Promise<FlushResult> {
+    if (this.recoveryRequired) {
+      return {
+        status: "failed",
+        error: persistenceError("recovery_required", "Clear the unreadable stored project before flushing"),
+      };
+    }
+    if (this.pending !== undefined) {
+      this.cancelTimer();
+      this.pendingReady = true;
+      const result = this.pending.promise;
+      this.startPendingIfIdle();
+      return result;
+    }
+    return this.activeWrite === undefined ? { status: "idle" } : this.activeWrite;
   }
 
   private decodeStoredValue(value: unknown): LoadResult {
@@ -164,5 +239,60 @@ export class ProjectPersistenceService {
     const database = await this.openDatabase();
     const transaction = database.transaction(STORE_NAME, "readonly");
     return requestValue(transaction.objectStore(STORE_NAME).get(RECORD_KEY));
+  }
+
+  private resetTimer(): void {
+    this.cancelTimer();
+    this.timer = setTimeout(() => {
+      this.timer = undefined;
+      this.pendingReady = true;
+      this.startPendingIfIdle();
+    }, this.options.debounceMs);
+  }
+
+  private cancelTimer(): void {
+    if (this.timer === undefined) return;
+    clearTimeout(this.timer);
+    this.timer = undefined;
+  }
+
+  private startPendingIfIdle(): void {
+    if (this.activeWrite !== undefined || !this.pendingReady || this.pending === undefined) return;
+    const pending = this.pending;
+    this.pending = undefined;
+    this.pendingReady = false;
+    const operation = this.writeProject(pending.project);
+    this.activeWrite = operation;
+    void operation.then(
+      (result) => {
+        pending.resolve(result);
+        this.finishWrite(operation);
+      },
+      (error: unknown) => {
+        pending.reject(error);
+        this.finishWrite(operation);
+      },
+    );
+  }
+
+  private finishWrite(operation: Promise<SaveResult>): void {
+    if (this.activeWrite === operation) this.activeWrite = undefined;
+    this.startPendingIfIdle();
+  }
+
+  private async writeProject(project: Project): Promise<SaveResult> {
+    const updatedAt = this.options.now();
+    if (!Number.isInteger(updatedAt) || updatedAt < 0) {
+      throw new RangeError("Persistence clock must return a non-negative integer");
+    }
+    try {
+      const database = await this.openDatabase();
+      const transaction = database.transaction(STORE_NAME, "readwrite");
+      transaction.objectStore(STORE_NAME).put({ project, updatedAt }, RECORD_KEY);
+      await transactionDone(transaction);
+      return { status: "saved", updatedAt };
+    } catch (error: unknown) {
+      return { status: "failed", error: mapStorageError(error, "Project save") };
+    }
   }
 }

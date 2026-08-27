@@ -102,3 +102,59 @@ test("load distinguishes an unsupported project schema", async () => {
   assert.equal(result.status, "failed");
   if (result.status === "failed") assert.equal(result.error.code, "unsupported_schema");
 });
+
+test("scheduleSave and flush persist a project", async () => {
+  const indexedDB = new IDBFactory();
+  const service = createService(indexedDB);
+  const pending = service.scheduleSave(blankProject());
+
+  assert.deepEqual(await service.flush(), { status: "saved", updatedAt: 1_700_000_000_000 });
+  assert.deepEqual(await pending, { status: "saved", updatedAt: 1_700_000_000_000 });
+  assert.equal((await createService(indexedDB).load()).status, "loaded");
+});
+
+test("scheduleSave coalesces to the newest snapshot", async (context) => {
+  context.mock.timers.enable({ apis: ["setTimeout"] });
+  const indexedDB = new IDBFactory();
+  const service = createService(indexedDB);
+  const first = service.scheduleSave({ ...blankProject(), name: "First" });
+  const second = service.scheduleSave({ ...blankProject(), name: "Second" });
+
+  assert.equal(first, second);
+  context.mock.timers.tick(500);
+  assert.equal((await second).status, "saved");
+  const loaded = await createService(indexedDB).load();
+  assert.equal(loaded.status === "loaded" ? loaded.project.name : undefined, "Second");
+});
+
+test("scheduleSave clones the queued project", async () => {
+  const indexedDB = new IDBFactory();
+  const service = createService(indexedDB);
+  const project = blankProject();
+  service.scheduleSave(project);
+  (project as { name: string }).name = "Caller mutation";
+
+  await service.flush();
+  const loaded = await createService(indexedDB).load();
+  assert.equal(loaded.status === "loaded" ? loaded.project.name : undefined, "Untitled");
+});
+
+test("a save queued during an active write runs afterward", async () => {
+  const indexedDB = new IDBFactory();
+  const service = createService(indexedDB);
+  const first = service.scheduleSave({ ...blankProject(), name: "First" });
+  const firstFlush = service.flush();
+  const second = service.scheduleSave({ ...blankProject(), name: "Second" });
+  const secondFlush = service.flush();
+
+  assert.equal((await first).status, "saved");
+  await firstFlush;
+  assert.equal((await second).status, "saved");
+  await secondFlush;
+  const loaded = await createService(indexedDB).load();
+  assert.equal(loaded.status === "loaded" ? loaded.project.name : undefined, "Second");
+});
+
+test("flush is idle when no save is active or pending", async () => {
+  assert.deepEqual(await createService(new IDBFactory()).flush(), { status: "idle" });
+});
