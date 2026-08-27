@@ -4,6 +4,7 @@ import test from "node:test";
 import { IDBFactory } from "fake-indexeddb";
 
 import {
+  InvalidInputError,
   type Project,
   type SoundCatalog,
 } from "../src/project/index.ts";
@@ -68,32 +69,38 @@ const readRawRecord = async (indexedDB: IDBFactory): Promise<unknown> => {
   return value;
 };
 
-const failNextReadwriteTransaction = (indexedDB: IDBFactory): IDBFactory => {
-  let failed = false;
-  const proxyDatabase = (database: IDBDatabase): IDBDatabase => new Proxy(database, {
-    get(target, property) {
-      if (property !== "transaction") return Reflect.get(target, property, target);
-      return (...args: Parameters<IDBDatabase["transaction"]>): IDBTransaction => {
-        const transaction = target.transaction(...args);
-        if (!failed && args[1] === "readwrite") {
-          failed = true;
-          queueMicrotask(() => transaction.abort());
-        }
-        return transaction;
-      };
-    },
-  });
+const failingOpenFactory = (error: DOMException): IDBFactory => ({
+  open: () => { throw error; },
+}) as unknown as IDBFactory;
+
+const failingNextReadwriteFactory = (indexedDB: IDBFactory, error: DOMException): IDBFactory => {
+  let shouldFail = true;
   return new Proxy(indexedDB, {
-    get(target, property) {
-      if (property !== "open") return Reflect.get(target, property, target);
-      return (...args: Parameters<IDBFactory["open"]>): IDBOpenDBRequest => {
-        const request = target.open(...args);
-        return new Proxy(request, {
-          get(requestTarget, requestProperty) {
-            if (requestProperty === "result") return proxyDatabase(requestTarget.result);
-            return Reflect.get(requestTarget, requestProperty, requestTarget);
-          },
-        });
+    get(target, property, receiver) {
+      if (property !== "open") return Reflect.get(target, property, receiver);
+      return (name: string, version?: number): IDBOpenDBRequest => {
+        const request = version === undefined ? target.open(name) : target.open(name, version);
+        request.addEventListener("success", () => {
+          const database = request.result;
+          const transaction = database.transaction.bind(database);
+          Object.defineProperty(database, "transaction", {
+            configurable: true,
+            value: (
+              storeNames: string | string[],
+              mode: IDBTransactionMode = "readonly",
+              options?: IDBTransactionOptions,
+            ): IDBTransaction => {
+              if (mode === "readwrite" && shouldFail) {
+                shouldFail = false;
+                throw error;
+              }
+              return options === undefined
+                ? transaction(storeNames, mode)
+                : transaction(storeNames, mode, options);
+            },
+          });
+        }, { once: true });
+        return request;
       };
     },
   });
@@ -110,6 +117,13 @@ const createService = (indexedDB: IDBFactory): ProjectPersistenceService =>
 test("load returns empty when no project is stored", async () => {
   const result = await createService(new IDBFactory()).load();
   assert.deepEqual(result, { status: "empty" });
+});
+
+test("load maps unavailable IndexedDB", async () => {
+  const service = createService(failingOpenFactory(new DOMException("blocked", "SecurityError")));
+  const result = await service.load();
+  assert.equal(result.status, "failed");
+  if (result.status === "failed") assert.equal(result.error.code, "storage_unavailable");
 });
 
 test("load returns a valid stored project", async () => {
@@ -179,6 +193,22 @@ test("scheduleSave clones the queued project", async () => {
   await service.flush();
   const loaded = await createService(indexedDB).load();
   assert.equal(loaded.status === "loaded" ? loaded.project.name : undefined, "Untitled");
+});
+
+test("an invalid project cannot replace valid pending work", async () => {
+  const indexedDB = new IDBFactory();
+  const service = createService(indexedDB);
+  service.scheduleSave({ ...blankProject(), name: "Valid" });
+
+  assert.throws(
+    () => service.scheduleSave({ ...blankProject(), bpm: Number.NaN }),
+    (error: unknown) =>
+      error instanceof InvalidInputError && error.info.path === "project.bpm",
+  );
+
+  await service.flush();
+  const loaded = await createService(indexedDB).load();
+  assert.equal(loaded.status === "loaded" ? loaded.project.name : undefined, "Valid");
 });
 
 test("a save queued during an active write runs afterward", async () => {
@@ -275,7 +305,10 @@ test("failed clear preserves recovery and the corrupt record", async () => {
   const indexedDB = new IDBFactory();
   const record = { project: { broken: true }, updatedAt: 123 };
   await seedRawRecord(indexedDB, record);
-  const service = createService(failNextReadwriteTransaction(indexedDB));
+  const service = createService(failingNextReadwriteFactory(
+    indexedDB,
+    new DOMException("aborted", "AbortError"),
+  ));
 
   assert.equal((await service.load()).status, "failed");
   const clear = await service.clear();
@@ -289,4 +322,55 @@ test("failed clear preserves recovery and the corrupt record", async () => {
   assert.equal(flush.status, "failed");
   if (flush.status === "failed") assert.equal(flush.error.code, "recovery_required");
   assert.deepEqual(await readRawRecord(indexedDB), record);
+});
+
+test("a failed save preserves the last durable record", async () => {
+  const indexedDB = new IDBFactory();
+  const original = { ...blankProject(), name: "Durable" };
+  await seedRawRecord(indexedDB, { project: original, updatedAt: 123 });
+  const service = createService(failingNextReadwriteFactory(
+    indexedDB,
+    new DOMException("full", "QuotaExceededError"),
+  ));
+  service.scheduleSave({ ...blankProject(), name: "Rejected" });
+
+  const result = await service.flush();
+
+  assert.equal(result.status, "failed");
+  if (result.status === "failed") assert.equal(result.error.code, "quota_exceeded");
+  const loaded = await createService(indexedDB).load();
+  assert.equal(loaded.status === "loaded" ? loaded.project.name : undefined, "Durable");
+});
+
+test("failed clear keeps the recovery gate active", async () => {
+  const indexedDB = new IDBFactory();
+  await seedRawRecord(indexedDB, { project: { broken: true }, updatedAt: 123 });
+  const service = createService(failingNextReadwriteFactory(
+    indexedDB,
+    new DOMException("aborted", "AbortError"),
+  ));
+  await service.load();
+
+  const clear = await service.clear();
+  const save = await service.scheduleSave(blankProject());
+
+  assert.equal(clear.status, "failed");
+  if (clear.status === "failed") assert.equal(clear.error.code, "transaction_failed");
+  assert.equal(save.status, "failed");
+  if (save.status === "failed") assert.equal(save.error.code, "recovery_required");
+});
+
+test("a newer save still runs after an earlier write fails", async () => {
+  const indexedDB = new IDBFactory();
+  const service = createService(failingNextReadwriteFactory(
+    indexedDB,
+    new DOMException("aborted", "AbortError"),
+  ));
+  service.scheduleSave({ ...blankProject(), name: "Failed" });
+  assert.equal((await service.flush()).status, "failed");
+
+  service.scheduleSave({ ...blankProject(), name: "Recovered" });
+  assert.equal((await service.flush()).status, "saved");
+  const loaded = await createService(indexedDB).load();
+  assert.equal(loaded.status === "loaded" ? loaded.project.name : undefined, "Recovered");
 });
