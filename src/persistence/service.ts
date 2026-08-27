@@ -37,6 +37,10 @@ export type SaveResult =
 
 export type FlushResult = SaveResult | { readonly status: "idle" };
 
+export type ClearResult =
+  | { readonly status: "cleared" }
+  | { readonly status: "failed"; readonly error: PersistenceError };
+
 export interface ProjectPersistenceOptions {
   readonly indexedDB: IDBFactory;
   readonly catalog: SoundCatalog;
@@ -115,6 +119,8 @@ export class ProjectPersistenceService {
   private pending: PendingSave | undefined;
   private pendingReady = false;
   private activeWrite: Promise<SaveResult> | undefined;
+  private clearing = false;
+  private clearOperation: Promise<ClearResult> | undefined;
 
   constructor(options: ProjectPersistenceOptions) {
     if (!Number.isInteger(options.debounceMs) || options.debounceMs < 0) {
@@ -134,6 +140,7 @@ export class ProjectPersistenceService {
   }
 
   scheduleSave(project: Project): Promise<SaveResult> {
+    if (this.clearing) return Promise.resolve({ status: "cancelled_by_clear" });
     if (this.recoveryRequired) {
       return Promise.resolve({
         status: "failed",
@@ -150,6 +157,7 @@ export class ProjectPersistenceService {
   }
 
   async flush(): Promise<FlushResult> {
+    if (this.clearing) return { status: "cancelled_by_clear" };
     if (this.recoveryRequired) {
       return {
         status: "failed",
@@ -164,6 +172,24 @@ export class ProjectPersistenceService {
       return result;
     }
     return this.activeWrite === undefined ? { status: "idle" } : this.activeWrite;
+  }
+
+  clear(): Promise<ClearResult> {
+    if (this.clearOperation !== undefined) return this.clearOperation;
+    this.clearing = true;
+    this.cancelTimer();
+    if (this.pending !== undefined) {
+      this.pending.resolve({ status: "cancelled_by_clear" });
+      this.pending = undefined;
+      this.pendingReady = false;
+    }
+    const operation = this.performClear();
+    this.clearOperation = operation;
+    void operation.then(
+      () => this.finishClear(operation),
+      () => this.finishClear(operation),
+    );
+    return operation;
   }
 
   private decodeStoredValue(value: unknown): LoadResult {
@@ -282,6 +308,26 @@ export class ProjectPersistenceService {
   private finishWrite(operation: Promise<SaveResult>): void {
     if (this.activeWrite === operation) this.activeWrite = undefined;
     this.startPendingIfIdle();
+  }
+
+  private async performClear(): Promise<ClearResult> {
+    if (this.activeWrite !== undefined) await this.activeWrite;
+    try {
+      const database = await this.openDatabase();
+      const transaction = database.transaction(STORE_NAME, "readwrite");
+      transaction.objectStore(STORE_NAME).delete(RECORD_KEY);
+      await transactionDone(transaction);
+      this.recoveryRequired = false;
+      return { status: "cleared" };
+    } catch (error: unknown) {
+      return { status: "failed", error: mapStorageError(error, "Project clear") };
+    }
+  }
+
+  private finishClear(operation: Promise<ClearResult>): void {
+    if (this.clearOperation !== operation) return;
+    this.clearOperation = undefined;
+    this.clearing = false;
   }
 
   private enterRecovery(): void {

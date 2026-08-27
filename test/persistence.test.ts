@@ -180,3 +180,51 @@ test("a corrupt load cancels an already queued save", async (context) => {
   assert.equal(stored.status, "failed");
   if (stored.status === "failed") assert.equal(stored.error.code, "corrupt_record");
 });
+
+test("corrupt load blocks saves until clear succeeds", async () => {
+  const indexedDB = new IDBFactory();
+  await seedRawRecord(indexedDB, { project: { broken: true }, updatedAt: 123 });
+  const service = createService(indexedDB);
+
+  assert.equal((await service.load()).status, "failed");
+  const blocked = await service.scheduleSave(blankProject());
+  assert.equal(blocked.status, "failed");
+  if (blocked.status === "failed") assert.equal(blocked.error.code, "recovery_required");
+  assert.deepEqual(await service.clear(), { status: "cleared" });
+  service.scheduleSave(blankProject());
+  assert.equal((await service.flush()).status, "saved");
+});
+
+test("clear cancels a pending save", async () => {
+  const service = createService(new IDBFactory());
+  const pending = service.scheduleSave(blankProject());
+
+  assert.deepEqual(await service.clear(), { status: "cleared" });
+  assert.deepEqual(await pending, { status: "cancelled_by_clear" });
+  assert.deepEqual(await service.load(), { status: "empty" });
+});
+
+test("clear waits for an active save and cancels the queued successor", async () => {
+  const indexedDB = new IDBFactory();
+  const service = createService(indexedDB);
+  const first = service.scheduleSave({ ...blankProject(), name: "First" });
+  const activeFlush = service.flush();
+  const second = service.scheduleSave({ ...blankProject(), name: "Second" });
+  const clearing = service.clear();
+  const duringClear = service.scheduleSave({ ...blankProject(), name: "Third" });
+
+  assert.equal((await first).status, "saved");
+  await activeFlush;
+  assert.deepEqual(await second, { status: "cancelled_by_clear" });
+  assert.deepEqual(await duringClear, { status: "cancelled_by_clear" });
+  assert.deepEqual(await clearing, { status: "cleared" });
+  assert.deepEqual(await service.load(), { status: "empty" });
+});
+
+test("repeated clear calls share one idempotent operation", async () => {
+  const service = createService(new IDBFactory());
+  const first = service.clear();
+  const second = service.clear();
+  assert.equal(first, second);
+  assert.deepEqual(await first, { status: "cleared" });
+});
