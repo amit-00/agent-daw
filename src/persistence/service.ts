@@ -1,0 +1,168 @@
+import {
+  DomainError,
+  type Project,
+  type SoundCatalog,
+  validateProject,
+} from "../project/index.ts";
+
+const DATABASE_NAME = "agent-daw";
+const DATABASE_VERSION = 1;
+const STORE_NAME = "current-project";
+const RECORD_KEY = "current";
+const SUPPORTED_PROJECT_SCHEMA_VERSION = 1;
+
+export type PersistenceErrorCode =
+  | "storage_unavailable"
+  | "quota_exceeded"
+  | "corrupt_record"
+  | "unsupported_schema"
+  | "transaction_failed"
+  | "recovery_required";
+
+export interface PersistenceError {
+  readonly code: PersistenceErrorCode;
+  readonly message: string;
+  readonly cause?: unknown;
+}
+
+export type LoadResult =
+  | { readonly status: "loaded"; readonly project: Project; readonly updatedAt: number }
+  | { readonly status: "empty" }
+  | { readonly status: "failed"; readonly error: PersistenceError };
+
+export interface ProjectPersistenceOptions {
+  readonly indexedDB: IDBFactory;
+  readonly catalog: SoundCatalog;
+  readonly now: () => number;
+  readonly debounceMs: number;
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const persistenceError = (
+  code: PersistenceErrorCode,
+  message: string,
+  cause?: unknown,
+): PersistenceError => ({
+  code,
+  message,
+  ...(cause === undefined ? {} : { cause }),
+});
+
+const mapStorageError = (error: unknown, action: string): PersistenceError => {
+  if (!(error instanceof DOMException)) throw error;
+  if (error.name === "QuotaExceededError") {
+    return persistenceError("quota_exceeded", `${action} failed because browser storage is full`, error);
+  }
+  if (["SecurityError", "InvalidStateError", "NotSupportedError", "VersionError"].includes(error.name)) {
+    return persistenceError("storage_unavailable", `${action} cannot access IndexedDB`, error);
+  }
+  return persistenceError("transaction_failed", `${action} failed in IndexedDB`, error);
+};
+
+const requestValue = <T>(request: IDBRequest<T>): Promise<T> =>
+  new Promise((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(
+      request.error ?? new DOMException("IndexedDB request failed", "UnknownError"),
+    );
+  });
+
+export class ProjectPersistenceService {
+  private readonly options: ProjectPersistenceOptions;
+  private databasePromise: Promise<IDBDatabase> | undefined;
+  private recoveryRequired = false;
+
+  constructor(options: ProjectPersistenceOptions) {
+    if (!Number.isInteger(options.debounceMs) || options.debounceMs < 0) {
+      throw new RangeError("Persistence debounceMs must be a non-negative integer");
+    }
+    this.options = options;
+  }
+
+  async load(): Promise<LoadResult> {
+    try {
+      const value = await this.readStoredValue();
+      if (value === undefined) return { status: "empty" };
+      return this.decodeStoredValue(value);
+    } catch (error: unknown) {
+      return { status: "failed", error: mapStorageError(error, "Project load") };
+    }
+  }
+
+  private decodeStoredValue(value: unknown): LoadResult {
+    if (!isRecord(value) || !isRecord(value.project)) {
+      this.recoveryRequired = true;
+      return { status: "failed", error: persistenceError("corrupt_record", "Stored project record is malformed") };
+    }
+    const schemaVersion = value.project.schemaVersion;
+    if (typeof schemaVersion === "number" && Number.isInteger(schemaVersion)
+      && schemaVersion !== SUPPORTED_PROJECT_SCHEMA_VERSION) {
+      this.recoveryRequired = true;
+      return { status: "failed", error: persistenceError("unsupported_schema", `Project schema ${schemaVersion} is unsupported`) };
+    }
+    if (!Number.isInteger(value.updatedAt) || (value.updatedAt as number) < 0) {
+      this.recoveryRequired = true;
+      return { status: "failed", error: persistenceError("corrupt_record", "Stored project update time is invalid") };
+    }
+    try {
+      validateProject(value.project as unknown as Project, this.options.catalog);
+    } catch (error: unknown) {
+      if (!(error instanceof DomainError)) throw error;
+      this.recoveryRequired = true;
+      return { status: "failed", error: persistenceError("corrupt_record", "Stored project failed validation", error) };
+    }
+    return {
+      status: "loaded",
+      project: value.project as unknown as Project,
+      updatedAt: value.updatedAt as number,
+    };
+  }
+
+  private async openDatabase(): Promise<IDBDatabase> {
+    if (this.databasePromise !== undefined) return this.databasePromise;
+    let opening: Promise<IDBDatabase>;
+    opening = new Promise((resolve, reject) => {
+      const request = this.options.indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
+      let blocked = false;
+      request.onupgradeneeded = () => {
+        if (!request.result.objectStoreNames.contains(STORE_NAME)) {
+          request.result.createObjectStore(STORE_NAME);
+        }
+      };
+      request.onblocked = () => {
+        blocked = true;
+        reject(new DOMException("IndexedDB upgrade is blocked", "InvalidStateError"));
+      };
+      request.onsuccess = () => {
+        if (blocked) {
+          request.result.close();
+          return;
+        }
+        const database = request.result;
+        database.onversionchange = () => {
+          database.close();
+          if (this.databasePromise === opening) this.databasePromise = undefined;
+        };
+        resolve(database);
+      };
+      request.onerror = () => reject(
+        request.error ?? new DOMException("IndexedDB open failed", "UnknownError"),
+      );
+    });
+    this.databasePromise = opening;
+    try {
+      return await opening;
+    } catch (error: unknown) {
+      if (this.databasePromise === opening) this.databasePromise = undefined;
+      throw error;
+    }
+  }
+
+  private async readStoredValue(): Promise<unknown> {
+    const database = await this.openDatabase();
+    const transaction = database.transaction(STORE_NAME, "readonly");
+    return requestValue(transaction.objectStore(STORE_NAME).get(RECORD_KEY));
+  }
+}
