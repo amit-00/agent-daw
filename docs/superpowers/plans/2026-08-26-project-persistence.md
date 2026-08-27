@@ -4,7 +4,7 @@
 
 **Goal:** Persist and restore one latest validated AgentDAW project through a debounced, ordered IndexedDB service with explicit recovery and clear behavior.
 
-**Architecture:** Add one concrete `ProjectPersistenceService` outside the project domain. It validates complete snapshots with `validateProject`, keeps at most one active and one pending write, and stores one `{ project, updatedAt }` record under a fixed IndexedDB key. Browser storage failures return typed results; corrupt or unsupported loads block writes until explicit clear succeeds.
+**Architecture:** Add one concrete `ProjectPersistenceService` outside the project domain. It validates complete snapshots with `validateProject`, keeps at most one active and one pending write, and stores one `{ project, updatedAt }` record under a fixed IndexedDB key. An unresolved-load barrier prevents pending writes from becoming active until recovery validation finishes. Browser storage failures return typed results; corrupt or unsupported loads block writes until explicit clear succeeds.
 
 **Tech Stack:** Strict TypeScript, browser-native IndexedDB, native `structuredClone`, Node's built-in test runner, and `fake-indexeddb` 6.2.5 for Node integration tests.
 
@@ -58,7 +58,7 @@ npm install --save-dev fake-indexeddb@6.2.5
 
 Expected: `package.json` contains `"fake-indexeddb": "^6.2.5"`; no runtime dependency is added.
 
-- [ ] **Step 2: Write failing empty, valid, corrupt, and unsupported load tests**
+- [ ] **Step 2: Write failing empty, valid, corrupt, unsupported, and close-reopen load tests**
 
 Create `test/persistence.test.ts` with isolated factories and raw-record helpers:
 
@@ -170,6 +170,8 @@ test("load distinguishes an unsupported project schema", async () => {
 });
 ```
 
+Also force-close the service's opened fake-indexeddb connection, await its `close` event, and verify the next `load` opens a fresh connection and returns normally.
+
 - [ ] **Step 3: Run the focused tests and verify they fail**
 
 Run:
@@ -259,9 +261,9 @@ const requestValue = <T>(request: IDBRequest<T>): Promise<T> =>
 const transactionDone = (transaction: IDBTransaction): Promise<void> =>
   new Promise((resolve, reject) => {
     transaction.oncomplete = () => resolve();
-    transaction.onerror = () => reject(
-      transaction.error ?? new DOMException("IndexedDB transaction failed", "UnknownError"),
-    );
+    transaction.onerror = () => {
+      if (transaction.error !== null) reject(transaction.error);
+    };
     transaction.onabort = () => reject(
       transaction.error ?? new DOMException("IndexedDB transaction aborted", "AbortError"),
     );
@@ -324,7 +326,7 @@ export class ProjectPersistenceService {
 }
 ```
 
-Add the database methods inside the class. On `versionchange`, close the connection and clear the cached promise. If opening fails, clear the rejected cached promise so a later call may retry:
+Add the database methods inside the class. On `versionchange`, close the connection and clear the cached promise. On an unexpected `close` event, clear the cached promise without closing again. If opening fails, clear the rejected cached promise so a later call may retry:
 
 ```ts
 private async openDatabase(): Promise<IDBDatabase> {
@@ -350,6 +352,9 @@ private async openDatabase(): Promise<IDBDatabase> {
       const database = request.result;
       database.onversionchange = () => {
         database.close();
+        if (this.databasePromise === opening) this.databasePromise = undefined;
+      };
+      database.onclose = () => {
         if (this.databasePromise === opening) this.databasePromise = undefined;
       };
       resolve(database);
@@ -410,7 +415,7 @@ git commit -m "feat: load persisted project"
 - Consumes: `ProjectPersistenceService.load()` from Task 1.
 - Produces: `SaveResult`, `FlushResult`, `scheduleSave(project: Project): Promise<SaveResult>`, and `flush(): Promise<FlushResult>`.
 
-- [ ] **Step 1: Write failing round-trip, coalescing, clone, ordering, and idle-flush tests**
+- [ ] **Step 1: Write failing round-trip, coalescing, clone, load/write ordering, and idle-flush tests**
 
 Append tests using Node mock timers:
 
@@ -472,6 +477,8 @@ test("flush is idle when no save is active or pending", async () => {
 });
 ```
 
+Add the critical ordering regression against a directly seeded corrupt record: start `load()`, call `scheduleSave()`, then call `flush()` without awaiting load. Both save promises must resolve `recovery_required`, the load must report `corrupt_record`, and the raw record must remain unchanged. In Task 4, use the real abort helper to cover the symmetric active-write → load → queued-successor ordering.
+
 - [ ] **Step 2: Run the new save tests and verify they fail**
 
 Run:
@@ -519,7 +526,7 @@ const createPendingSave = (project: Project): PendingSave => {
 };
 ```
 
-Add class state for `pending`, `pendingReady`, one debounce timer, and one `activeWrite`. `scheduleSave` must be non-`async` so coalesced callers receive the exact same promise:
+Add class state for `pending`, `pendingReady`, one debounce timer, one `activeWrite`, and an `activeLoads` count. Increment the count before `load` starts asynchronous work, decrement it in `finally`, and let only the final completing load call `startPendingIfIdle`. `scheduleSave` must be non-`async` so coalesced callers receive the exact same promise:
 
 ```ts
 scheduleSave(project: Project): Promise<SaveResult> {
@@ -575,7 +582,8 @@ private cancelTimer(): void {
 }
 
 private startPendingIfIdle(): void {
-  if (this.activeWrite !== undefined || !this.pendingReady || this.pending === undefined) return;
+  if (this.activeLoads > 0 || this.activeWrite !== undefined
+    || !this.pendingReady || this.pending === undefined) return;
   const pending = this.pending;
   this.pending = undefined;
   this.pendingReady = false;
@@ -813,14 +821,14 @@ git commit -m "feat: clear persisted project safely"
 
 - [ ] **Step 1: Add focused failure-injection helpers and tests**
 
-Use the native `IDBFactory` constructor seam rather than adding a production storage interface. Add a tiny open-failure stub and a proxy that makes only read-write transactions throw:
+Use the native `IDBFactory` constructor seam rather than adding a production storage interface. Keep synchronous throws only for focused error-code/cause mapping. Rollback tests must use a separate helper that creates a real read-write transaction, lets the service issue its `put` or `delete`, then aborts before commit:
 
 ```ts
 const failingOpenFactory = (error: DOMException): IDBFactory => ({
   open: () => { throw error; },
 }) as unknown as IDBFactory;
 
-const failingNextReadwriteFactory = (indexedDB: IDBFactory, error: DOMException): IDBFactory => {
+const throwingNextReadwriteFactory = (indexedDB: IDBFactory, error: DOMException): IDBFactory => {
   let shouldFail = true;
   return new Proxy(indexedDB, {
     get(target, property, receiver) {
@@ -852,6 +860,40 @@ const failingNextReadwriteFactory = (indexedDB: IDBFactory, error: DOMException)
     },
   });
 };
+
+const abortingNextReadwriteFactory = (indexedDB: IDBFactory): IDBFactory => {
+  let shouldAbort = true;
+  return new Proxy(indexedDB, {
+    get(target, property, receiver) {
+      if (property !== "open") return Reflect.get(target, property, receiver);
+      return (name: string, version?: number): IDBOpenDBRequest => {
+        const request = version === undefined ? target.open(name) : target.open(name, version);
+        request.addEventListener("success", () => {
+          const database = request.result;
+          const transaction = database.transaction.bind(database);
+          Object.defineProperty(database, "transaction", {
+            configurable: true,
+            value: (
+              storeNames: string | string[],
+              mode: IDBTransactionMode = "readonly",
+              options?: IDBTransactionOptions,
+            ): IDBTransaction => {
+              const result = options === undefined
+                ? transaction(storeNames, mode)
+                : transaction(storeNames, mode, options);
+              if (mode === "readwrite" && shouldAbort) {
+                shouldAbort = false;
+                queueMicrotask(() => result.abort());
+              }
+              return result;
+            },
+          });
+        }, { once: true });
+        return request;
+      };
+    },
+  });
+};
 ```
 
 Append tests:
@@ -868,27 +910,22 @@ test("a failed save preserves the last durable record", async () => {
   const indexedDB = new IDBFactory();
   const original = { ...blankProject(), name: "Durable" };
   await seedRawRecord(indexedDB, { project: original, updatedAt: 123 });
-  const service = createService(failingNextReadwriteFactory(
-    indexedDB,
-    new DOMException("full", "QuotaExceededError"),
-  ));
+  const service = createService(abortingNextReadwriteFactory(indexedDB));
   service.scheduleSave({ ...blankProject(), name: "Rejected" });
 
   const result = await service.flush();
 
   assert.equal(result.status, "failed");
-  if (result.status === "failed") assert.equal(result.error.code, "quota_exceeded");
+  if (result.status === "failed") assert.equal(result.error.code, "transaction_failed");
   const loaded = await createService(indexedDB).load();
   assert.equal(loaded.status === "loaded" ? loaded.project.name : undefined, "Durable");
 });
 
-test("failed clear keeps the recovery gate active", async () => {
+test("failed clear preserves recovery and the corrupt record", async () => {
   const indexedDB = new IDBFactory();
-  await seedRawRecord(indexedDB, { project: { broken: true }, updatedAt: 123 });
-  const service = createService(failingNextReadwriteFactory(
-    indexedDB,
-    new DOMException("aborted", "AbortError"),
-  ));
+  const record = { project: { broken: true }, updatedAt: 123 };
+  await seedRawRecord(indexedDB, record);
+  const service = createService(abortingNextReadwriteFactory(indexedDB));
   await service.load();
 
   const clear = await service.clear();
@@ -898,14 +935,27 @@ test("failed clear keeps the recovery gate active", async () => {
   if (clear.status === "failed") assert.equal(clear.error.code, "transaction_failed");
   assert.equal(save.status, "failed");
   if (save.status === "failed") assert.equal(save.error.code, "recovery_required");
+  assert.deepEqual(await readRawRecord(indexedDB), record);
+});
+
+test("save maps a synchronous quota error and preserves its cause", async () => {
+  const indexedDB = new IDBFactory();
+  const error = new DOMException("full", "QuotaExceededError");
+  const service = createService(throwingNextReadwriteFactory(indexedDB, error));
+  service.scheduleSave(blankProject());
+
+  const result = await service.flush();
+
+  assert.equal(result.status, "failed");
+  if (result.status === "failed") {
+    assert.equal(result.error.code, "quota_exceeded");
+    assert.equal(result.error.cause, error);
+  }
 });
 
 test("a newer save still runs after an earlier write fails", async () => {
   const indexedDB = new IDBFactory();
-  const service = createService(failingNextReadwriteFactory(
-    indexedDB,
-    new DOMException("aborted", "AbortError"),
-  ));
+  const service = createService(abortingNextReadwriteFactory(indexedDB));
   service.scheduleSave({ ...blankProject(), name: "Failed" });
   assert.equal((await service.flush()).status, "failed");
 
@@ -916,15 +966,17 @@ test("a newer save still runs after an earlier write fails", async () => {
 });
 ```
 
-- [ ] **Step 2: Run the failure tests and verify the first implementation gaps**
+Also seed a corrupt record, start and flush a save through `abortingNextReadwriteFactory`, then call `load`, queue a successor save, and flush again. The first save must fail, load must report `corrupt_record`, both successor promises must report `recovery_required`, and the corrupt raw record must remain unchanged. This proves the active-write → load side of the load/write barrier.
+
+- [ ] **Step 2: Run the failure tests and verify the real abort paths**
 
 Run:
 
 ```bash
-node --disable-warning=ExperimentalWarning --test --test-name-pattern="unavailable|failed save|failed clear|newer save" test/persistence.test.ts
+node --disable-warning=ExperimentalWarning --test --test-name-pattern="unavailable|aborting active write|failed save|failed clear|synchronous quota|newer save" test/persistence.test.ts
 ```
 
-Expected: at least one test FAIL until synchronous IndexedDB exceptions and failed-clear recovery are mapped exactly as specified.
+Expected: the rollback tests reach `transaction.onabort`, map it to `transaction_failed`, and preserve prior storage. The separate synchronous quota test verifies exact error-code and cause identity without being used as rollback evidence.
 
 - [ ] **Step 3: Tighten error boundaries without swallowing programming failures**
 

@@ -83,9 +83,9 @@ const requestValue = <T>(request: IDBRequest<T>): Promise<T> =>
 const transactionDone = (transaction: IDBTransaction): Promise<void> =>
   new Promise((resolve, reject) => {
     transaction.oncomplete = () => resolve();
-    transaction.onerror = () => reject(
-      transaction.error ?? new DOMException("IndexedDB transaction failed", "UnknownError"),
-    );
+    transaction.onerror = () => {
+      if (transaction.error !== null) reject(transaction.error);
+    };
     transaction.onabort = () => reject(
       transaction.error ?? new DOMException("IndexedDB transaction aborted", "AbortError"),
     );
@@ -119,6 +119,7 @@ export class ProjectPersistenceService {
   private pending: PendingSave | undefined;
   private pendingReady = false;
   private activeWrite: Promise<SaveResult> | undefined;
+  private activeLoads = 0;
   private clearing = false;
   private clearOperation: Promise<ClearResult> | undefined;
 
@@ -130,12 +131,16 @@ export class ProjectPersistenceService {
   }
 
   async load(): Promise<LoadResult> {
+    this.activeLoads += 1;
     try {
       const value = await this.readStoredValue();
       if (value === undefined) return { status: "empty" };
       return this.decodeStoredValue(value);
     } catch (error: unknown) {
       return { status: "failed", error: mapStorageError(error, "Project load") };
+    } finally {
+      this.activeLoads -= 1;
+      if (this.activeLoads === 0) this.startPendingIfIdle();
     }
   }
 
@@ -246,6 +251,9 @@ export class ProjectPersistenceService {
           database.close();
           if (this.databasePromise === opening) this.databasePromise = undefined;
         };
+        database.onclose = () => {
+          if (this.databasePromise === opening) this.databasePromise = undefined;
+        };
         resolve(database);
       };
       request.onerror = () => reject(
@@ -287,7 +295,8 @@ export class ProjectPersistenceService {
       this.enterRecovery();
       return;
     }
-    if (this.activeWrite !== undefined || !this.pendingReady || this.pending === undefined) return;
+    if (this.activeLoads > 0 || this.activeWrite !== undefined
+      || !this.pendingReady || this.pending === undefined) return;
     const pending = this.pending;
     this.pending = undefined;
     this.pendingReady = false;

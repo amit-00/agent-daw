@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { IDBFactory } from "fake-indexeddb";
+import { forceCloseDatabase, IDBFactory } from "fake-indexeddb";
 
 import {
   InvalidInputError,
@@ -14,6 +14,7 @@ const DATABASE_NAME = "agent-daw";
 const DATABASE_VERSION = 1;
 const STORE_NAME = "current-project";
 const RECORD_KEY = "current";
+const forceClose = forceCloseDatabase as unknown as (database: IDBDatabase) => void;
 
 const id = (value: number): string =>
   `00000000-0000-4000-8000-${value.toString().padStart(12, "0")}`;
@@ -73,7 +74,7 @@ const failingOpenFactory = (error: DOMException): IDBFactory => ({
   open: () => { throw error; },
 }) as unknown as IDBFactory;
 
-const failingNextReadwriteFactory = (indexedDB: IDBFactory, error: DOMException): IDBFactory => {
+const throwingNextReadwriteFactory = (indexedDB: IDBFactory, error: DOMException): IDBFactory => {
   let shouldFail = true;
   return new Proxy(indexedDB, {
     get(target, property, receiver) {
@@ -106,6 +107,54 @@ const failingNextReadwriteFactory = (indexedDB: IDBFactory, error: DOMException)
   });
 };
 
+const abortingNextReadwriteFactory = (indexedDB: IDBFactory): IDBFactory => {
+  let shouldAbort = true;
+  return new Proxy(indexedDB, {
+    get(target, property, receiver) {
+      if (property !== "open") return Reflect.get(target, property, receiver);
+      return (name: string, version?: number): IDBOpenDBRequest => {
+        const request = version === undefined ? target.open(name) : target.open(name, version);
+        request.addEventListener("success", () => {
+          const database = request.result;
+          const transaction = database.transaction.bind(database);
+          Object.defineProperty(database, "transaction", {
+            configurable: true,
+            value: (
+              storeNames: string | string[],
+              mode: IDBTransactionMode = "readonly",
+              options?: IDBTransactionOptions,
+            ): IDBTransaction => {
+              const result = options === undefined
+                ? transaction(storeNames, mode)
+                : transaction(storeNames, mode, options);
+              if (mode === "readwrite" && shouldAbort) {
+                shouldAbort = false;
+                queueMicrotask(() => result.abort());
+              }
+              return result;
+            },
+          });
+        }, { once: true });
+        return request;
+      };
+    },
+  });
+};
+
+const observingOpenFactory = (
+  indexedDB: IDBFactory,
+  connections: IDBDatabase[],
+): IDBFactory => new Proxy(indexedDB, {
+  get(target, property, receiver) {
+    if (property !== "open") return Reflect.get(target, property, receiver);
+    return (name: string, version?: number): IDBOpenDBRequest => {
+      const request = version === undefined ? target.open(name) : target.open(name, version);
+      request.addEventListener("success", () => connections.push(request.result), { once: true });
+      return request;
+    };
+  },
+});
+
 const createService = (indexedDB: IDBFactory): ProjectPersistenceService =>
   new ProjectPersistenceService({
     indexedDB,
@@ -117,6 +166,24 @@ const createService = (indexedDB: IDBFactory): ProjectPersistenceService =>
 test("load returns empty when no project is stored", async () => {
   const result = await createService(new IDBFactory()).load();
   assert.deepEqual(result, { status: "empty" });
+});
+
+test("an unexpected database close reopens on the next operation", async () => {
+  const connections: IDBDatabase[] = [];
+  const service = createService(observingOpenFactory(new IDBFactory(), connections));
+
+  assert.deepEqual(await service.load(), { status: "empty" });
+  const first = connections[0];
+  assert.ok(first);
+  const closed = new Promise<void>((resolve) => {
+    first.addEventListener("close", () => resolve(), { once: true });
+  });
+  forceClose(first);
+  await closed;
+
+  assert.deepEqual(await service.load(), { status: "empty" });
+  assert.equal(connections.length, 2);
+  assert.notEqual(connections[1], first);
 });
 
 test("load maps unavailable IndexedDB", async () => {
@@ -253,6 +320,61 @@ test("a corrupt load cancels an already queued save", async (context) => {
   if (stored.status === "failed") assert.equal(stored.error.code, "corrupt_record");
 });
 
+test("load blocks a flushed save until corrupt recovery is known", async () => {
+  const indexedDB = new IDBFactory();
+  const record = { project: { broken: true }, updatedAt: 123 };
+  await seedRawRecord(indexedDB, record);
+  const service = createService(indexedDB);
+
+  const loading = service.load();
+  const saving = service.scheduleSave(blankProject());
+  const flushing = service.flush();
+
+  const load = await loading;
+  assert.equal(load.status, "failed");
+  if (load.status === "failed") assert.equal(load.error.code, "corrupt_record");
+  const recoveryRequired = {
+    status: "failed",
+    error: {
+      code: "recovery_required",
+      message: "Clear the unreadable stored project before saving",
+    },
+  };
+  assert.deepEqual(await saving, recoveryRequired);
+  assert.deepEqual(await flushing, recoveryRequired);
+  assert.deepEqual(await readRawRecord(indexedDB), record);
+});
+
+test("load keeps a queued successor behind an aborting active write", async () => {
+  const indexedDB = new IDBFactory();
+  const record = { project: { broken: true }, updatedAt: 123 };
+  await seedRawRecord(indexedDB, record);
+  const service = createService(abortingNextReadwriteFactory(indexedDB));
+
+  service.scheduleSave({ ...blankProject(), name: "Aborted" });
+  const activeFlush = service.flush();
+  const loading = service.load();
+  const saving = service.scheduleSave({ ...blankProject(), name: "Queued" });
+  const queuedFlush = service.flush();
+
+  const active = await activeFlush;
+  assert.equal(active.status, "failed");
+  if (active.status === "failed") assert.equal(active.error.code, "transaction_failed");
+  const load = await loading;
+  assert.equal(load.status, "failed");
+  if (load.status === "failed") assert.equal(load.error.code, "corrupt_record");
+  const recoveryRequired = {
+    status: "failed",
+    error: {
+      code: "recovery_required",
+      message: "Clear the unreadable stored project before saving",
+    },
+  };
+  assert.deepEqual(await saving, recoveryRequired);
+  assert.deepEqual(await queuedFlush, recoveryRequired);
+  assert.deepEqual(await readRawRecord(indexedDB), record);
+});
+
 test("corrupt load blocks saves until clear succeeds", async () => {
   const indexedDB = new IDBFactory();
   await seedRawRecord(indexedDB, { project: { broken: true }, updatedAt: 123 });
@@ -305,18 +427,15 @@ test("failed clear preserves recovery and the corrupt record", async () => {
   const indexedDB = new IDBFactory();
   const record = { project: { broken: true }, updatedAt: 123 };
   await seedRawRecord(indexedDB, record);
-  const error = new DOMException("aborted", "AbortError");
-  const service = createService(failingNextReadwriteFactory(
-    indexedDB,
-    error,
-  ));
+  const service = createService(abortingNextReadwriteFactory(indexedDB));
 
   assert.equal((await service.load()).status, "failed");
   const clear = await service.clear();
   assert.equal(clear.status, "failed");
   if (clear.status === "failed") {
     assert.equal(clear.error.code, "transaction_failed");
-    assert.equal(clear.error.cause, error);
+    assert.ok(clear.error.cause instanceof DOMException);
+    assert.equal(clear.error.cause.name, "AbortError");
   }
 
   const save = await service.scheduleSave(blankProject());
@@ -332,44 +451,42 @@ test("a failed save preserves the last durable record", async () => {
   const indexedDB = new IDBFactory();
   const original = { ...blankProject(), name: "Durable" };
   await seedRawRecord(indexedDB, { project: original, updatedAt: 123 });
-  const service = createService(failingNextReadwriteFactory(
-    indexedDB,
-    new DOMException("full", "QuotaExceededError"),
-  ));
+  const service = createService(abortingNextReadwriteFactory(indexedDB));
   service.scheduleSave({ ...blankProject(), name: "Rejected" });
 
   const result = await service.flush();
 
   assert.equal(result.status, "failed");
-  if (result.status === "failed") assert.equal(result.error.code, "quota_exceeded");
+  if (result.status === "failed") {
+    assert.equal(result.error.code, "transaction_failed");
+    assert.ok(result.error.cause instanceof DOMException);
+    assert.equal(result.error.cause.name, "AbortError");
+  }
   const loaded = await createService(indexedDB).load();
   assert.equal(loaded.status === "loaded" ? loaded.project.name : undefined, "Durable");
 });
 
-test("failed clear keeps the recovery gate active", async () => {
+test("save maps a synchronous quota error and preserves its cause", async () => {
   const indexedDB = new IDBFactory();
-  await seedRawRecord(indexedDB, { project: { broken: true }, updatedAt: 123 });
-  const service = createService(failingNextReadwriteFactory(
+  const error = new DOMException("full", "QuotaExceededError");
+  const service = createService(throwingNextReadwriteFactory(
     indexedDB,
-    new DOMException("aborted", "AbortError"),
+    error,
   ));
-  await service.load();
+  service.scheduleSave(blankProject());
 
-  const clear = await service.clear();
-  const save = await service.scheduleSave(blankProject());
+  const result = await service.flush();
 
-  assert.equal(clear.status, "failed");
-  if (clear.status === "failed") assert.equal(clear.error.code, "transaction_failed");
-  assert.equal(save.status, "failed");
-  if (save.status === "failed") assert.equal(save.error.code, "recovery_required");
+  assert.equal(result.status, "failed");
+  if (result.status === "failed") {
+    assert.equal(result.error.code, "quota_exceeded");
+    assert.equal(result.error.cause, error);
+  }
 });
 
 test("a newer save still runs after an earlier write fails", async () => {
   const indexedDB = new IDBFactory();
-  const service = createService(failingNextReadwriteFactory(
-    indexedDB,
-    new DOMException("aborted", "AbortError"),
-  ));
+  const service = createService(abortingNextReadwriteFactory(indexedDB));
   service.scheduleSave({ ...blankProject(), name: "Failed" });
   assert.equal((await service.flush()).status, "failed");
 

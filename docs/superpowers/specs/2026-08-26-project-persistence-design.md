@@ -110,6 +110,8 @@ Application orchestration schedules a save after every current-project change, i
 
 Only one write transaction runs at a time. A snapshot scheduled during an in-flight transaction becomes the next pending write; because snapshots are complete values rather than patches, the prior transaction cannot invalidate the pending snapshot. Failure of one write does not make later snapshots structurally dependent on it, so a newer pending write still attempts independently.
 
+Loads and writes share a barrier around the fixed record. A pending write cannot become active while any load is unresolved, including when `flush` makes it ready. A load started behind an active write uses IndexedDB's transaction ordering to observe that write's committed result or rollback, while the load barrier keeps successor writes pending until recovery validation finishes. If a load discovers corrupt or unsupported data, those pending saves complete as `recovery_required` before they can overwrite the raw record.
+
 ## 4.4 Browser lifecycle
 
 The application, not the persistence service, listens for document lifecycle events. When the document becomes hidden, application orchestration calls `flush`. Browser shutdown cannot guarantee asynchronous work will finish, so an abrupt process exit may lose the pending 500 ms window while preserving the last completed transaction.
@@ -128,7 +130,7 @@ The application composition root supplies the native `IDBFactory`, normally `glo
 
 ## 6.1 Responsibility
 
-`ProjectPersistenceService` owns the IndexedDB lifecycle for the one current project, along with the debounce timer, newest pending snapshot, active write chain, and recovery gate. It does not own project mutation, history, UI state, or browser lifecycle listeners.
+`ProjectPersistenceService` owns the IndexedDB lifecycle for the one current project, along with the debounce timer, newest pending snapshot, active write chain, unresolved-load barrier, and recovery gate. It does not own project mutation, history, UI state, or browser lifecycle listeners.
 
 The service is one concrete class because its operations share lifecycle state. There is no factory, base class, or custom single-implementation interface.
 
@@ -166,10 +168,10 @@ Expected browser-storage failures use typed results. Unexpected programming fail
 ## 6.5 Non-functional requirements
 
 - **Atomicity:** One IndexedDB transaction replaces or deletes the full record.
-- **Ordering:** At most one write transaction is active; newer pending state writes afterward.
+- **Ordering:** At most one write transaction is active, and no pending write is promoted until all unresolved loads finish; newer pending state writes afterward.
 - **Idempotency:** Re-saving the same valid project safely replaces the same fixed key.
 - **Isolation:** Each queued project is a structured clone.
-- **Latency:** Normal saves begin 500 ms after the latest schedule request; `flush` begins immediately.
+- **Latency:** Normal saves become ready 500 ms after the latest schedule request; `flush` makes them ready immediately, subject to the load/write barrier.
 - **Bounded memory:** The service holds at most one in-flight snapshot and one newest pending snapshot.
 
 # 7) Data model
@@ -218,7 +220,7 @@ Errors include an actionable message and retain diagnostic cause information for
 | Record key | `current` |
 | Record value | `StoredProjectRecord` |
 
-Database version 1 creates the object store without indexes. Opening an existing version-1 database performs no upgrade write. The service may reuse its connection for the page lifetime and closes it on a database version-change event so future upgrades are not blocked.
+Database version 1 creates the object store without indexes. Opening an existing version-1 database performs no upgrade write. The service may reuse its connection for the page lifetime, closes it on a database version-change event so future upgrades are not blocked, and discards the cached connection on an unexpected `close` event so a later operation reopens it.
 
 # 9) Core workflows
 
@@ -235,14 +237,16 @@ Restore the latest durable local project without mutating stored data.
 
 ### Procedure
 
-1. Open database version 1 and ensure the version-1 store exists.
-2. Read key `current` in a read-only transaction.
-3. Return `empty` when no record exists.
-4. Validate the record container and `updatedAt`.
-5. Distinguish an unsupported project schema from other malformed data.
-6. Run `validateProject` with the supplied sound catalog.
-7. Return the loaded project and update time.
-8. On corrupt or unsupported data, retain the original record and activate the recovery gate.
+1. Enter the unresolved-load barrier before any asynchronous database work.
+2. Open database version 1 and ensure the version-1 store exists.
+3. Read key `current` in a read-only transaction; IndexedDB queues it behind an already-active write on the same store.
+4. Return `empty` when no record exists.
+5. Validate the record container and `updatedAt`.
+6. Distinguish an unsupported project schema from other malformed data.
+7. Run `validateProject` with the supplied sound catalog.
+8. Return the loaded project and update time.
+9. On corrupt or unsupported data, retain the original record and activate the recovery gate.
+10. Leave the load barrier; only the final completing load may promote pending work.
 
 ### Error handling
 
@@ -275,7 +279,7 @@ Coalesce rapid current-project changes while providing a durability result to ca
 4. Replace the not-yet-written pending snapshot with the clone.
 5. Reuse one shared completion promise for callers covered by that pending flush.
 6. Restart the 500 ms debounce timer.
-7. When the timer fires, wait for any active transaction and atomically store the newest pending snapshot.
+7. When the timer fires, wait for unresolved loads and any active transaction, then atomically store the newest pending snapshot.
 8. If a newer snapshot arrived while writing, repeat the write loop once the active transaction completes.
 9. Complete each shared save result only when its snapshot or a newer coalesced snapshot is durable.
 
@@ -307,7 +311,7 @@ Request immediate durability for the newest pending project, normally when the d
 
 1. Reject when the recovery gate is active.
 2. Cancel the active debounce timer.
-3. If a snapshot is pending, run the ordered write immediately.
+3. If a snapshot is pending, mark it ready immediately and run it after the load barrier permits.
 4. If a write is already active, wait for it and any newer pending snapshot.
 5. If no work exists, return a successful no-op result.
 
@@ -421,13 +425,14 @@ Implementation proceeds test-first:
 1. Add `fake-indexeddb` as the one approved development dependency.
 2. Test empty load and save/load round-trip.
 3. Test debounce coalescing, write ordering, and flush.
-4. Test queued save behavior during an in-flight transaction.
+4. Test both `load` → queued save → `flush` and active write → `load` ordering so recovery validation always precedes successor writes.
 5. Test clear as an exclusive barrier and `cancelled_by_clear` completion.
 6. Insert malformed records directly and test corrupt/unsupported preservation.
 7. Test the recovery gate and successful clear reset.
-8. Test failed transactions preserve the last durable record.
-9. Run the complete Node test suite and strict typecheck.
-10. Perform one manual browser check: edit, autosave, close or reload, and restore.
+8. Abort real fake-indexeddb read-write transactions after `put` or `delete` and verify rollback preserves the last durable or corrupt record.
+9. Force an unexpected database close and verify the next operation opens a fresh connection.
+10. Run the complete Node test suite and strict typecheck.
+11. Perform one manual browser check: edit, autosave, close or reload, and restore.
 
 Browser automation is deferred until the full application UI exists. A handwritten IndexedDB fake is rejected because `fake-indexeddb` is smaller and exercises the production API surface.
 
@@ -504,6 +509,7 @@ Rollback removes the persistence-service files and development dependency. Store
 - [ ] Test and implement read-only load with domain validation.
 - [ ] Test and implement debounced save coalescing and structured cloning.
 - [ ] Test and implement serialized writes and flush.
+- [ ] Test and implement the load/write barrier in both operation orderings.
 - [ ] Test and implement recovery gating.
 - [ ] Test and implement clear barrier semantics.
 - [ ] Export the service through `src/persistence/index.ts`.
@@ -512,6 +518,7 @@ Rollback removes the persistence-service files and development dependency. Store
 
 - [ ] Add `fake-indexeddb` as a development dependency.
 - [ ] Cover all Section 14 scenarios with `node:test`.
+- [ ] Verify rollback with real aborted fake-indexeddb transactions and fresh connection opening after unexpected close.
 - [ ] Run `npm test`.
 - [ ] Run `npm run typecheck`.
 - [ ] Inspect `git diff` for unintended changes.
