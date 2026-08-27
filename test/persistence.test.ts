@@ -57,6 +57,48 @@ const seedRawRecord = async (indexedDB: IDBFactory, value: unknown): Promise<voi
   database.close();
 };
 
+const readRawRecord = async (indexedDB: IDBFactory): Promise<unknown> => {
+  const database = await openRawDatabase(indexedDB);
+  const request = database.transaction(STORE_NAME, "readonly").objectStore(STORE_NAME).get(RECORD_KEY);
+  const value = await new Promise<unknown>((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+  database.close();
+  return value;
+};
+
+const failNextReadwriteTransaction = (indexedDB: IDBFactory): IDBFactory => {
+  let failed = false;
+  const proxyDatabase = (database: IDBDatabase): IDBDatabase => new Proxy(database, {
+    get(target, property) {
+      if (property !== "transaction") return Reflect.get(target, property, target);
+      return (...args: Parameters<IDBDatabase["transaction"]>): IDBTransaction => {
+        const transaction = target.transaction(...args);
+        if (!failed && args[1] === "readwrite") {
+          failed = true;
+          queueMicrotask(() => transaction.abort());
+        }
+        return transaction;
+      };
+    },
+  });
+  return new Proxy(indexedDB, {
+    get(target, property) {
+      if (property !== "open") return Reflect.get(target, property, target);
+      return (...args: Parameters<IDBFactory["open"]>): IDBOpenDBRequest => {
+        const request = target.open(...args);
+        return new Proxy(request, {
+          get(requestTarget, requestProperty) {
+            if (requestProperty === "result") return proxyDatabase(requestTarget.result);
+            return Reflect.get(requestTarget, requestProperty, requestTarget);
+          },
+        });
+      };
+    },
+  });
+};
+
 const createService = (indexedDB: IDBFactory): ProjectPersistenceService =>
   new ProjectPersistenceService({
     indexedDB,
@@ -227,4 +269,24 @@ test("repeated clear calls share one idempotent operation", async () => {
   const second = service.clear();
   assert.equal(first, second);
   assert.deepEqual(await first, { status: "cleared" });
+});
+
+test("failed clear preserves recovery and the corrupt record", async () => {
+  const indexedDB = new IDBFactory();
+  const record = { project: { broken: true }, updatedAt: 123 };
+  await seedRawRecord(indexedDB, record);
+  const service = createService(failNextReadwriteTransaction(indexedDB));
+
+  assert.equal((await service.load()).status, "failed");
+  const clear = await service.clear();
+  assert.equal(clear.status, "failed");
+  if (clear.status === "failed") assert.equal(clear.error.code, "transaction_failed");
+
+  const save = await service.scheduleSave(blankProject());
+  assert.equal(save.status, "failed");
+  if (save.status === "failed") assert.equal(save.error.code, "recovery_required");
+  const flush = await service.flush();
+  assert.equal(flush.status, "failed");
+  if (flush.status === "failed") assert.equal(flush.error.code, "recovery_required");
+  assert.deepEqual(await readRawRecord(indexedDB), record);
 });
