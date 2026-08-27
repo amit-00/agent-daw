@@ -2,6 +2,7 @@
 
 import type { ReactElement } from "react";
 
+import { Mixer } from "@/components/editor/Mixer";
 import { PatternEditor } from "@/components/editor/PatternEditor";
 import { Icon } from "@/components/icons";
 import { useStudioStore } from "@/stores/studio-store";
@@ -19,7 +20,7 @@ export function TrackEditor(): ReactElement {
           <button className={`rounded border-0 px-[9px] py-1 text-[10px] ${editorTab === "mixer" ? "bg-white/[0.08] text-zinc-300" : "bg-transparent text-zinc-600"}`} type="button" aria-pressed={editorTab === "mixer"} onClick={() => selectEditorTab("mixer")}>Mixer</button>
         </div>
       </div>
-      {editorTab === "pattern" ? <PatternEditor /> : <div aria-label="Mixer channels" />}
+      {editorTab === "pattern" ? <PatternEditor /> : <Mixer />}
     </aside>
   );
 }

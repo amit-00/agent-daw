@@ -71,4 +71,14 @@ describe("Studio", () => {
     await user.click(screen.getByRole("button", { name: "Mixer" }));
     expect(screen.getByRole("button", { name: "Mixer" })).toHaveAttribute("aria-pressed", "true");
   });
+
+  it("shows mixer-only volume and pan controls", async () => {
+    const user = userEvent.setup();
+    render(<Studio />);
+
+    expect(screen.queryByRole("slider", { name: "Neon Kit volume" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Mixer" }));
+    expect(screen.getByRole("slider", { name: "Neon Kit volume" })).toHaveValue("74");
+    expect(screen.getByRole("slider", { name: "Neon Kit pan" })).toHaveValue("50");
+  });
 });
