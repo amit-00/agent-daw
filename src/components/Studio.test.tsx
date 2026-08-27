@@ -51,4 +51,24 @@ describe("Studio", () => {
     expect(screen.getAllByRole("button", { name: "Unmute Neon Kit" })[0]).toHaveAttribute("aria-pressed", "true");
     expect(screen.getAllByRole("button", { name: "Unsolo Low Orbit" })[0]).toHaveAttribute("aria-pressed", "true");
   });
+
+  it("switches patterns and edits sequence steps", async () => {
+    const user = userEvent.setup();
+    render(<Studio />);
+
+    await user.click(screen.getByRole("button", { name: "Select pattern Afterglow" }));
+    expect(screen.getByRole("region", { name: "Pattern editor for Afterglow" })).toBeVisible();
+
+    const step = screen.getByRole("button", { name: "Add C5 at step 1" });
+    await user.click(step);
+    expect(step).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("changes editor tabs", async () => {
+    const user = userEvent.setup();
+    render(<Studio />);
+
+    await user.click(screen.getByRole("button", { name: "Mixer" }));
+    expect(screen.getByRole("button", { name: "Mixer" })).toHaveAttribute("aria-pressed", "true");
+  });
 });
