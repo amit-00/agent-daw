@@ -30,4 +30,25 @@ describe("Studio", () => {
     await user.click(screen.getByRole("button", { name: "Hide activity" }));
     expect(screen.queryByRole("complementary", { name: "Activity" })).not.toBeInTheDocument();
   });
+
+  it("selects a clip and its pattern", async () => {
+    const user = userEvent.setup();
+    render(<Studio />);
+
+    await user.click(screen.getByRole("button", { name: "Select Afterglow" }));
+
+    expect(screen.getByRole("button", { name: "Select Afterglow" })).toHaveAttribute("aria-pressed", "true");
+    expect(useStudioStore.getState().selectedPatternId).toBe("afterglow");
+  });
+
+  it("shares mute and solo state from track controls", async () => {
+    const user = userEvent.setup();
+    render(<Studio />);
+
+    await user.click(screen.getAllByRole("button", { name: "Mute Neon Kit" })[0]);
+    await user.click(screen.getAllByRole("button", { name: "Solo Low Orbit" })[0]);
+
+    expect(screen.getAllByRole("button", { name: "Unmute Neon Kit" })[0]).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getAllByRole("button", { name: "Unsolo Low Orbit" })[0]).toHaveAttribute("aria-pressed", "true");
+  });
 });
