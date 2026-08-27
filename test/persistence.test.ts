@@ -305,15 +305,19 @@ test("failed clear preserves recovery and the corrupt record", async () => {
   const indexedDB = new IDBFactory();
   const record = { project: { broken: true }, updatedAt: 123 };
   await seedRawRecord(indexedDB, record);
+  const error = new DOMException("aborted", "AbortError");
   const service = createService(failingNextReadwriteFactory(
     indexedDB,
-    new DOMException("aborted", "AbortError"),
+    error,
   ));
 
   assert.equal((await service.load()).status, "failed");
   const clear = await service.clear();
   assert.equal(clear.status, "failed");
-  if (clear.status === "failed") assert.equal(clear.error.code, "transaction_failed");
+  if (clear.status === "failed") {
+    assert.equal(clear.error.code, "transaction_failed");
+    assert.equal(clear.error.cause, error);
+  }
 
   const save = await service.scheduleSave(blankProject());
   assert.equal(save.status, "failed");
