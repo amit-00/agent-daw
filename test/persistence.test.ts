@@ -158,3 +158,25 @@ test("a save queued during an active write runs afterward", async () => {
 test("flush is idle when no save is active or pending", async () => {
   assert.deepEqual(await createService(new IDBFactory()).flush(), { status: "idle" });
 });
+
+test("a corrupt load cancels an already queued save", async (context) => {
+  context.mock.timers.enable({ apis: ["setTimeout"] });
+  const indexedDB = new IDBFactory();
+  await seedRawRecord(indexedDB, { project: { broken: true }, updatedAt: 123 });
+  const service = createService(indexedDB);
+  const pending = service.scheduleSave(blankProject());
+
+  const load = await service.load();
+  assert.equal(load.status, "failed");
+  context.mock.timers.tick(500);
+  assert.deepEqual(await pending, {
+    status: "failed",
+    error: {
+      code: "recovery_required",
+      message: "Clear the unreadable stored project before saving",
+    },
+  });
+  const stored = await createService(indexedDB).load();
+  assert.equal(stored.status, "failed");
+  if (stored.status === "failed") assert.equal(stored.error.code, "corrupt_record");
+});

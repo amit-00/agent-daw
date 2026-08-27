@@ -168,24 +168,24 @@ export class ProjectPersistenceService {
 
   private decodeStoredValue(value: unknown): LoadResult {
     if (!isRecord(value) || !isRecord(value.project)) {
-      this.recoveryRequired = true;
+      this.enterRecovery();
       return { status: "failed", error: persistenceError("corrupt_record", "Stored project record is malformed") };
     }
     const schemaVersion = value.project.schemaVersion;
     if (typeof schemaVersion === "number" && Number.isInteger(schemaVersion)
       && schemaVersion !== SUPPORTED_PROJECT_SCHEMA_VERSION) {
-      this.recoveryRequired = true;
+      this.enterRecovery();
       return { status: "failed", error: persistenceError("unsupported_schema", `Project schema ${schemaVersion} is unsupported`) };
     }
     if (!Number.isInteger(value.updatedAt) || (value.updatedAt as number) < 0) {
-      this.recoveryRequired = true;
+      this.enterRecovery();
       return { status: "failed", error: persistenceError("corrupt_record", "Stored project update time is invalid") };
     }
     try {
       validateProject(value.project as unknown as Project, this.options.catalog);
     } catch (error: unknown) {
       if (!(error instanceof DomainError)) throw error;
-      this.recoveryRequired = true;
+      this.enterRecovery();
       return { status: "failed", error: persistenceError("corrupt_record", "Stored project failed validation", error) };
     }
     return {
@@ -257,6 +257,10 @@ export class ProjectPersistenceService {
   }
 
   private startPendingIfIdle(): void {
+    if (this.recoveryRequired) {
+      this.enterRecovery();
+      return;
+    }
     if (this.activeWrite !== undefined || !this.pendingReady || this.pending === undefined) return;
     const pending = this.pending;
     this.pending = undefined;
@@ -278,6 +282,19 @@ export class ProjectPersistenceService {
   private finishWrite(operation: Promise<SaveResult>): void {
     if (this.activeWrite === operation) this.activeWrite = undefined;
     this.startPendingIfIdle();
+  }
+
+  private enterRecovery(): void {
+    this.recoveryRequired = true;
+    this.cancelTimer();
+    if (this.pending === undefined) return;
+    const pending = this.pending;
+    this.pending = undefined;
+    this.pendingReady = false;
+    pending.resolve({
+      status: "failed",
+      error: persistenceError("recovery_required", "Clear the unreadable stored project before saving"),
+    });
   }
 
   private async writeProject(project: Project): Promise<SaveResult> {
