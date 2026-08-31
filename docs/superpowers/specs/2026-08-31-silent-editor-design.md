@@ -2,7 +2,7 @@
 
 Date: 2026-08-31
 
-Status: Agreed scope documented; implementation has not started.
+Status: Ownership migration implemented and verified; awaiting first-slice human review. UI integration has not started.
 
 Branch: `codex/silent-editor`, based on `b3a3463` (pnpm migration).
 

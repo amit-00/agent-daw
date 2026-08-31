@@ -17,7 +17,6 @@ export interface SynthNote {
 
 export interface DrumPattern {
   readonly id: EntityId;
-  readonly trackId: EntityId;
   readonly name: string;
   readonly kind: "drum";
   readonly lengthBars: PatternLengthBars;
@@ -26,7 +25,6 @@ export interface DrumPattern {
 
 export interface SynthPattern {
   readonly id: EntityId;
-  readonly trackId: EntityId;
   readonly name: string;
   readonly kind: "synth";
   readonly lengthBars: PatternLengthBars;
@@ -49,12 +47,13 @@ export interface Track {
 export interface ArrangementClip {
   readonly id: EntityId;
   readonly patternId: EntityId;
+  readonly trackId: EntityId;
   readonly startBar: number;
   readonly repeatCount: number;
 }
 
 export interface Project {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 2;
   readonly id: EntityId;
   readonly name: string;
   readonly bpm: number;

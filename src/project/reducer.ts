@@ -111,24 +111,16 @@ export function reduceOperation(project: Project, operation: Operation): Reducti
       return { project: candidate, changes: withChanges({ updated: { trackIds: [track.id] } }) };
     }
     case "track.delete": {
-      const deletedPatterns = project.patterns.filter((pattern) => pattern.trackId === operation.trackId);
-      const deletedPatternIds = new Set(deletedPatterns.map((pattern) => pattern.id));
-      const deletedDrumHitIds = deletedPatterns.filter((pattern) => pattern.kind === "drum").flatMap((pattern) => pattern.events.map((event) => event.id));
-      const deletedSynthNoteIds = deletedPatterns.filter((pattern) => pattern.kind === "synth").flatMap((pattern) => pattern.events.map((event) => event.id));
-      const deletedClips = project.arrangement.filter((clip) => deletedPatternIds.has(clip.patternId));
+      const deletedClips = project.arrangement.filter((clip) => clip.trackId === operation.trackId);
       const candidate: Project = {
         ...project,
         tracks: project.tracks.filter((track) => track.id !== operation.trackId),
-        patterns: project.patterns.filter((pattern) => pattern.trackId !== operation.trackId),
-        arrangement: project.arrangement.filter((clip) => !deletedPatternIds.has(clip.patternId)),
+        arrangement: project.arrangement.filter((clip) => clip.trackId !== operation.trackId),
       };
       return {
         project: candidate,
         changes: withChanges({ deleted: {
           trackIds: [operation.trackId],
-          patternIds: deletedPatterns.map((pattern) => pattern.id),
-          drumHitIds: deletedDrumHitIds,
-          synthNoteIds: deletedSynthNoteIds,
           arrangementClipIds: deletedClips.map((clip) => clip.id),
         } }),
       };
@@ -199,6 +191,7 @@ export function reduceOperation(project: Project, operation: Operation): Reducti
       const clip: ArrangementClip = {
         id: operation.clip.id,
         patternId: operation.clip.patternId,
+        trackId: operation.clip.trackId,
         startBar: operation.clip.startBar,
         repeatCount: operation.clip.repeatCount,
       };
@@ -210,6 +203,7 @@ export function reduceOperation(project: Project, operation: Operation): Reducti
       const updatedClip: ArrangementClip = {
         ...clip,
         ...(operation.changes.patternId === undefined ? {} : { patternId: operation.changes.patternId }),
+        ...(operation.changes.trackId === undefined ? {} : { trackId: operation.changes.trackId }),
         ...(operation.changes.startBar === undefined ? {} : { startBar: operation.changes.startBar }),
         ...(operation.changes.repeatCount === undefined ? {} : { repeatCount: operation.changes.repeatCount }),
       };

@@ -16,7 +16,7 @@ const id = (value: number): string =>
   `00000000-0000-4000-8000-${value.toString().padStart(12, "0")}`;
 
 const blankProject = (): Project => ({
-  schemaVersion: 1,
+  schemaVersion: 2,
   id: id(1),
   name: "Untitled",
   bpm: 120,
@@ -79,13 +79,12 @@ const projectWithBasicDrums = (): Project => ({
   tracks: [basicDrumTrack()],
   patterns: [{
     id: id(11),
-    trackId: id(10),
     name: "Beat",
     kind: "drum",
     lengthBars: 1,
     events: [{ id: id(13), soundId: "kick", startStep: 0 }],
   }],
-  arrangement: [{ id: id(12), patternId: id(11), startBar: 0, repeatCount: 1 }],
+  arrangement: [{ id: id(12), patternId: id(11), trackId: id(10), startBar: 0, repeatCount: 1 }],
 });
 
 const projectWithBassAndDrums = (): Project => ({
@@ -107,7 +106,6 @@ const projectWithBassAndDrums = (): Project => ({
     ...projectWithBasicDrums().patterns,
     {
       id: id(21),
-      trackId: id(20),
       name: "Bass line",
       kind: "synth",
       lengthBars: 1,
@@ -116,7 +114,7 @@ const projectWithBassAndDrums = (): Project => ({
   ],
   arrangement: [
     ...projectWithBasicDrums().arrangement,
-    { id: id(22), patternId: id(21), startBar: 0, repeatCount: 1 },
+    { id: id(22), patternId: id(21), trackId: id(20), startBar: 0, repeatCount: 1 },
   ],
 });
 
@@ -134,7 +132,6 @@ const projectWithLead = (): Project => ({
   }],
   patterns: [{
     id: id(41),
-    trackId: id(40),
     name: "Lead phrase",
     kind: "synth",
     lengthBars: 1,
@@ -158,7 +155,7 @@ test("trusted commands apply values without domain validation", () => {
       { type: "project.update", changes: { bpm: 300 } },
       { type: "track.update", trackId: id(10), changes: { instrumentId: "kit.custom" } },
       { type: "drum-hits.add", patternId: id(11), hits: [{ id: "hit", soundId: "custom", startStep: 32 }] },
-      { type: "arrangement.place", clip: { id: "clip", patternId: id(11), startBar: 0, repeatCount: 1 } },
+      { type: "arrangement.place", clip: { id: "clip", patternId: id(11), trackId: id(10), startBar: 0, repeatCount: 1 } },
     ],
   });
 
@@ -285,33 +282,67 @@ test("track.update changes mixer fields", () => {
   assert.deepEqual(result.changes.updated.trackIds, [id(10)]);
 });
 
-test("track.delete removes its patterns and arrangement clips", () => {
+test("track.delete removes only its track and clips", () => {
   const project = projectWithBassAndDrums();
 
   const result = reduceOperation(project, { type: "track.delete", trackId: id(10) });
 
   assert.deepEqual(result.project.tracks.map(({ id: trackId }) => trackId), [id(20)]);
-  assert.deepEqual(result.project.patterns.map(({ id: patternId }) => patternId), [id(21)]);
+  assert.deepEqual(result.project.patterns, project.patterns);
   assert.deepEqual(result.project.arrangement.map(({ id: clipId }) => clipId), [id(22)]);
   assert.deepEqual(result.changes.deleted.trackIds, [id(10)]);
-  assert.deepEqual(result.changes.deleted.patternIds, [id(11)]);
-  assert.deepEqual(result.changes.deleted.drumHitIds, [id(13)]);
+  assert.deepEqual(result.changes.deleted.patternIds, []);
+  assert.deepEqual(result.changes.deleted.drumHitIds, []);
+  assert.deepEqual(result.changes.deleted.synthNoteIds, []);
   assert.deepEqual(result.changes.deleted.arrangementClipIds, [id(12)]);
   assert.equal(project.tracks.length, 2);
 });
 
-test("pattern.create adds a pattern with a matching track kind", () => {
+test("track deletion preserves shared patterns and other-track clips", () => {
+  const original = projectWithBasicDrums();
+  const project: Project = {
+    ...original,
+    tracks: [...original.tracks, { ...basicDrumTrack(), id: id(30) }],
+    arrangement: [
+      ...original.arrangement,
+      { id: id(31), patternId: id(11), trackId: id(30), startBar: 0, repeatCount: 1 },
+    ],
+  };
+  const before = structuredClone(project);
+  const service = createTestService(project);
+  const result = service.dispatch({
+    id: id(500), source: "manual", label: "Delete Drums", kind: "operation",
+    operation: { type: "track.delete", trackId: id(10) },
+  });
+
+  assert.deepEqual(result.project.patterns, project.patterns);
+  assert.deepEqual(result.project.arrangement.map((clip) => clip.id), [id(31)]);
+  assert.deepEqual(result.changes.deleted, {
+    projectIds: [], trackIds: [id(10)], patternIds: [], drumHitIds: [],
+    synthNoteIds: [], arrangementClipIds: [id(12)],
+  });
+  assert.equal(service.getState().history.length, 1);
+  service.undo();
+  assert.deepEqual(service.getState().project, before);
+  service.redo();
+  assert.deepEqual(service.getState().project, result.project);
+  assert.deepEqual(project, before);
+});
+
+test("pattern.create adds an unplaced pattern without tracks", () => {
   const result = reduceOperation(
-    projectWithBasicDrums(),
+    blankProject(),
     {
       type: "pattern.create",
       pattern: {
-        id: id(30), trackId: id(10), name: "Fill", kind: "drum", lengthBars: 1, events: [],
+        id: id(30), name: "Fill", kind: "drum", lengthBars: 1, events: [],
       },
     },
   );
 
-  assert.deepEqual(result.project.patterns.map(({ id: patternId }) => patternId), [id(11), id(30)]);
+  assert.deepEqual(result.project.patterns.map(({ id: patternId }) => patternId), [id(30)]);
+  assert.deepEqual(result.project.tracks, []);
+  assert.deepEqual(result.project.arrangement, []);
   assert.deepEqual(result.changes.created.patternIds, [id(30)]);
 });
 
@@ -329,7 +360,6 @@ test("pattern.duplicate copies content with supplied fresh IDs", () => {
   );
 
   const duplicate = result.project.patterns.find(({ id: patternId }) => patternId === id(30));
-  assert.equal(duplicate?.trackId, id(10));
   assert.equal(duplicate?.events[0]?.id, id(31));
   assert.equal(duplicate?.events[0]?.startStep, 0);
   assert.deepEqual(result.changes.created.patternIds, [id(30)]);
@@ -364,17 +394,23 @@ test("pattern.update returns the original project for no changes", () => {
   });
 });
 
-test("pattern.delete removes referencing clips but preserves the track", () => {
-  const project = projectWithBasicDrums();
+test("pattern.delete removes referencing clips across tracks but preserves tracks", () => {
+  const initial = projectWithBassAndDrums();
+  const project: Project = {
+    ...initial,
+    tracks: [...initial.tracks, { ...basicDrumTrack(), id: id(30) }],
+    arrangement: [...initial.arrangement,
+      { id: id(31), patternId: id(11), trackId: id(30), startBar: 0, repeatCount: 1 }],
+  };
   const result = reduceOperation(project, { type: "pattern.delete", patternId: id(11) });
 
-  assert.equal(result.project.tracks.length, 1);
-  assert.equal(result.project.patterns.length, 0);
-  assert.equal(result.project.arrangement.length, 0);
+  assert.deepEqual(result.project.tracks, project.tracks);
+  assert.deepEqual(result.project.patterns, [project.patterns[1]]);
+  assert.deepEqual(result.project.arrangement, [project.arrangement[1]]);
   assert.deepEqual(result.changes.deleted.patternIds, [id(11)]);
   assert.deepEqual(result.changes.deleted.drumHitIds, [id(13)]);
-  assert.deepEqual(result.changes.deleted.arrangementClipIds, [id(12)]);
-  assert.equal(project.patterns.length, 1);
+  assert.deepEqual(result.changes.deleted.arrangementClipIds, [id(12), id(31)]);
+  assert.equal(project.patterns.length, 2);
 });
 
 test("arrangement.place allows adjacent clips and overlaps on different tracks", () => {
@@ -382,20 +418,53 @@ test("arrangement.place allows adjacent clips and overlaps on different tracks",
     projectWithBasicDrums(),
     {
       type: "arrangement.place",
-      clip: { id: id(50), patternId: id(11), startBar: 1, repeatCount: 1 },
+      clip: { id: id(50), patternId: id(11), trackId: id(10), startBar: 1, repeatCount: 1 },
     },
   );
   const overlappingTracks = reduceOperation(
     { ...projectWithBassAndDrums(), arrangement: projectWithBasicDrums().arrangement },
     {
       type: "arrangement.place",
-      clip: { id: id(52), patternId: id(21), startBar: 0, repeatCount: 1 },
+      clip: { id: id(52), patternId: id(21), trackId: id(20), startBar: 0, repeatCount: 1 },
     },
   );
 
   assert.deepEqual(adjacent.project.arrangement.map(({ id: clipId }) => clipId), [id(12), id(50)]);
   assert.deepEqual(adjacent.changes.created.arrangementClipIds, [id(50)]);
   assert.deepEqual(overlappingTracks.project.arrangement.map(({ id: clipId }) => clipId), [id(12), id(52)]);
+  assert.equal(adjacent.project.arrangement[1]?.trackId, id(10));
+  assert.equal(overlappingTracks.project.arrangement[1]?.trackId, id(20));
+});
+
+test("arrangement.update changes routing without copying or editing the pattern", () => {
+  const original = projectWithBasicDrums();
+  const project: Project = {
+    ...original,
+    tracks: [...original.tracks, { ...basicDrumTrack(), id: id(30) }],
+  };
+  const service = createTestService(project);
+  const result = service.dispatch({
+    id: id(501), source: "manual", label: "Move clip to another track", kind: "operation",
+    operation: { type: "arrangement.update", clipId: id(12), changes: { trackId: id(30) } },
+  });
+
+  assert.deepEqual(result.project.arrangement, [{
+    id: id(12), patternId: id(11), trackId: id(30), startBar: 0, repeatCount: 1,
+  }]);
+  assert.deepEqual(result.project.patterns, project.patterns);
+  assert.deepEqual(result.changes.updated.arrangementClipIds, [id(12)]);
+  assert.deepEqual(result.changes.updated.patternIds, []);
+  assert.equal(service.getState().history.length, 1);
+  const unchanged = service.dispatch({
+    id: id(502), source: "manual", label: "Keep clip track", kind: "operation",
+    operation: { type: "arrangement.update", clipId: id(12), changes: { trackId: id(30) } },
+  });
+  assert.equal(unchanged.changed, false);
+  assert.equal(service.getState().history.length, 1);
+  service.undo();
+  assert.deepEqual(service.getState().project, project);
+  service.redo();
+  assert.deepEqual(service.getState().project, result.project);
 });
 
 test("arrangement.update moves, repeats, and changes its pattern", () => {
@@ -403,11 +472,11 @@ test("arrangement.update moves, repeats, and changes its pattern", () => {
     ...projectWithBasicDrums(),
     patterns: [
       ...projectWithBasicDrums().patterns,
-      { id: id(30), trackId: id(10), name: "Fill", kind: "drum", lengthBars: 2, events: [] },
+      { id: id(30), name: "Fill", kind: "drum", lengthBars: 2, events: [] },
     ],
     arrangement: [
-      { id: id(12), patternId: id(11), startBar: 0, repeatCount: 1 },
-      { id: id(50), patternId: id(11), startBar: 2, repeatCount: 1 },
+      { id: id(12), patternId: id(11), trackId: id(10), startBar: 0, repeatCount: 1 },
+      { id: id(50), patternId: id(11), trackId: id(10), startBar: 2, repeatCount: 1 },
     ],
   };
 
@@ -421,10 +490,10 @@ test("arrangement.update moves, repeats, and changes its pattern", () => {
   );
 
   assert.deepEqual(result.project.arrangement[1], {
-    id: id(50), patternId: id(30), startBar: 1, repeatCount: 2,
+    id: id(50), patternId: id(30), trackId: id(10), startBar: 1, repeatCount: 2,
   });
   assert.deepEqual(result.changes.updated.arrangementClipIds, [id(50)]);
-  assert.deepEqual(project.arrangement[1], { id: id(50), patternId: id(11), startBar: 2, repeatCount: 1 });
+  assert.deepEqual(project.arrangement[1], { id: id(50), patternId: id(11), trackId: id(10), startBar: 2, repeatCount: 1 });
 });
 
 test("arrangement.delete removes only the clip", () => {
@@ -543,7 +612,7 @@ test("runtime update payloads cannot alter immutable fields", () => {
     project,
     {
       type: "project.update",
-      changes: { name: "Retitled", id: id(90), schemaVersion: 2, tracks: [] },
+      changes: { name: "Retitled", id: id(90), schemaVersion: 99, tracks: [] },
     } as unknown as Parameters<typeof reduceOperation>[1],
   );
   const trackResult = reduceOperation(
@@ -589,20 +658,20 @@ test("runtime update payloads cannot alter immutable fields", () => {
 
   assert.deepEqual(
     { id: projectResult.project.id, schemaVersion: projectResult.project.schemaVersion, tracks: projectResult.project.tracks.length },
-    { id: id(1), schemaVersion: 1, tracks: 1 },
+    { id: id(1), schemaVersion: 2, tracks: 1 },
   );
   assert.deepEqual(
     { id: trackResult.project.tracks[0]?.id, kind: trackResult.project.tracks[0]?.kind, name: trackResult.project.tracks[0]?.name },
     { id: id(10), kind: "drum", name: "Renamed" },
   );
   assert.deepEqual(
-    { trackId: patternResult.project.patterns[0]?.trackId, kind: patternResult.project.patterns[0]?.kind, name: patternResult.project.patterns[0]?.name },
-    { trackId: id(10), kind: "drum", name: "Renamed beat" },
+    patternResult.project.patterns[0],
+    { ...project.patterns[0], name: "Renamed beat" },
   );
   assert.deepEqual(drumResult.project.patterns[0]?.events[0], { id: id(13), soundId: "snare", startStep: 0 });
   assert.deepEqual(synthResult.project.patterns[0]?.events[0], { id: id(42), midiNote: 64, startStep: 0, lengthSteps: 4 });
   assert.deepEqual(arrangementResult.project.arrangement[0], {
-    id: id(12), patternId: id(11), startBar: 1, repeatCount: 1,
+    id: id(12), patternId: id(11), trackId: id(10), startBar: 1, repeatCount: 1,
   });
 });
 
@@ -658,7 +727,6 @@ test("summarizeProjectDiff distinguishes same event IDs in separate patterns", (
   const sharedEventId = id(23);
   const firstPattern = {
     id: id(21),
-    trackId: id(20),
     name: "First line",
     kind: "synth" as const,
     lengthBars: 1 as const,
@@ -666,7 +734,6 @@ test("summarizeProjectDiff distinguishes same event IDs in separate patterns", (
   };
   const secondPattern = {
     id: id(22),
-    trackId: id(20),
     name: "Second line",
     kind: "synth" as const,
     lengthBars: 1 as const,
@@ -724,7 +791,7 @@ test("a successful batch dispatch commits merged changes once", () => {
       {
         type: "pattern.create",
         pattern: {
-          id: id(21), trackId: id(20), name: "Bass line", kind: "synth", lengthBars: 1, events: [],
+          id: id(21), name: "Bass line", kind: "synth", lengthBars: 1, events: [],
         },
       },
       {
@@ -734,7 +801,7 @@ test("a successful batch dispatch commits merged changes once", () => {
       },
       {
         type: "arrangement.place",
-        clip: { id: id(23), patternId: id(21), startBar: 0, repeatCount: 1 },
+        clip: { id: id(23), patternId: id(21), trackId: id(20), startBar: 0, repeatCount: 1 },
       },
     ],
   });
@@ -869,10 +936,10 @@ test("dispatch detaches caller-owned created tracks and patterns", () => {
     pan: 0, muted: false, soloed: false,
   };
   const callerBassPattern = {
-    id: id(21), trackId: id(20), name: "Bass line", kind: "synth" as const, lengthBars: 1 as const, events: [],
+    id: id(21), name: "Bass line", kind: "synth" as const, lengthBars: 1 as const, events: [],
   };
   const callerDrumPattern = {
-    id: id(30), trackId: id(10), name: "Beat", kind: "drum" as const, lengthBars: 1 as const, events: [],
+    id: id(30), name: "Beat", kind: "drum" as const, lengthBars: 1 as const, events: [],
   };
   const result = service.dispatch({
     kind: "batch",
@@ -1031,7 +1098,7 @@ test("restore reports the complete snapshot diff", () => {
       {
         type: "pattern.create",
         pattern: {
-          id: id(21), trackId: id(20), name: "Bass line", kind: "synth", lengthBars: 1, events: [],
+          id: id(21), name: "Bass line", kind: "synth", lengthBars: 1, events: [],
         },
       },
       {
@@ -1041,7 +1108,7 @@ test("restore reports the complete snapshot diff", () => {
       },
       {
         type: "arrangement.place",
-        clip: { id: id(23), patternId: id(21), startBar: 0, repeatCount: 1 },
+        clip: { id: id(23), patternId: id(21), trackId: id(20), startBar: 0, repeatCount: 1 },
       },
     ],
   });
@@ -1063,8 +1130,8 @@ test("restore reports the complete snapshot diff", () => {
   assert.equal(restored.ok, true);
   if (!restored.ok) return;
   assert.deepEqual(restored.changes.created.trackIds, [id(20)]);
-  assert.deepEqual(restored.changes.created.patternIds, [id(21)]);
-  assert.deepEqual(restored.changes.created.synthNoteIds, [id(22)]);
+  assert.deepEqual(restored.changes.created.patternIds, []);
+  assert.deepEqual(restored.changes.created.synthNoteIds, []);
   assert.deepEqual(restored.changes.created.arrangementClipIds, [id(23)]);
 });
 
@@ -1182,7 +1249,6 @@ test("pattern.create reports IDs for its embedded events in source order", () =>
     type: "pattern.create",
     pattern: {
       id: id(60),
-      trackId: id(10),
       name: "Drum fill",
       kind: "drum",
       lengthBars: 1,
@@ -1196,7 +1262,6 @@ test("pattern.create reports IDs for its embedded events in source order", () =>
     type: "pattern.create",
     pattern: {
       id: id(63),
-      trackId: id(20),
       name: "Bass variation",
       kind: "synth",
       lengthBars: 1,
@@ -1216,7 +1281,6 @@ test("mixed event updates report only changed IDs in source order", () => {
     ...projectWithBasicDrums(),
     patterns: [{
       id: id(11),
-      trackId: id(10),
       name: "Beat",
       kind: "drum",
       lengthBars: 1,
@@ -1231,7 +1295,6 @@ test("mixed event updates report only changed IDs in source order", () => {
     ...projectWithLead(),
     patterns: [{
       id: id(41),
-      trackId: id(40),
       name: "Lead phrase",
       kind: "synth",
       lengthBars: 1,

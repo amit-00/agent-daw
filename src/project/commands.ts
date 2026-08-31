@@ -51,6 +51,7 @@ export type Operation =
       readonly clipId: string;
       readonly changes: {
         readonly patternId?: string;
+        readonly trackId?: string;
         readonly startBar?: number;
         readonly repeatCount?: number;
       };

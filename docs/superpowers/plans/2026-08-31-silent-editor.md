@@ -52,11 +52,13 @@ Keep catalog IDs in `src/audio/catalog.ts` authoritative. Keep literal sixteenth
 
 ## Task 1: Migrate Ownership and Existing Audio Consumers
 
+Status: Implemented inline on 2026-08-31; awaiting human review before Task 2. All 115 tests (104 domain/audio/migration and 11 UI), typechecking, lint, and production build pass. No UI or persistence integration changed, and no dependencies or generic runtime validators were added. The legacy type reuses unchanged model fields; freeze those fields separately if a future schema changes them.
+
 **Files:** Modify `src/project/model.ts`, `commands.ts`, `reducer.ts`, `index.ts`, `src/audio/timeline.ts`, `test/project.test.ts`, `test/audio-fixtures.ts`, `test/audio-timeline.test.ts`, and other audio tests with inline project fixtures. Create `src/project/migration.ts` and `test/project-migration.test.ts`.
 
 **Interfaces:** `Project.schemaVersion` becomes `2`; `Pattern` loses `trackId`; `ArrangementClip` gains `readonly trackId: string`; `arrangement.update.changes` gains optional `trackId`. Export `ProjectV1` and `migrateProject(project: ProjectV1 | Project): Project` from the project package. Existing service method signatures stay unchanged.
 
-- [ ] Write the ownership regression first in `test/project.test.ts`, using its existing fixture helpers after migrating those helpers to schema 2:
+- [x] Write the ownership regression first in `test/project.test.ts`, using its existing fixture helpers after migrating those helpers to schema 2:
 
 ```ts
 test("track deletion preserves shared patterns and other-track clips", () => {
@@ -77,9 +79,9 @@ test("track deletion preserves shared patterns and other-track clips", () => {
 });
 ```
 
-- [ ] Run `node --disable-warning=ExperimentalWarning --test --test-name-pattern="track deletion preserves" test/project.test.ts`. Expect a failing retention assertion before changing reducer behavior.
-- [ ] Change the model and explicit clip field-copying paths; remove only the obsolete ownership cascade from `track.delete`. Its deleted summary contains the track and that track's clips, not patterns/events. Keep `pattern.delete` cascading through all referencing clips. Verify changing `arrangement.update.trackId` preserves the pattern ID and content.
-- [ ] Add migration tests for placed/unplaced drum and synth patterns, multiple clips sharing one old pattern, stable IDs/events/mix/order, input immutability, version-2 pass-through, and a dangling legacy clip reference. A representative assertion uses a literal legacy fixture, not a schema-2 cast:
+- [x] Run `node --disable-warning=ExperimentalWarning --test --test-name-pattern="track deletion preserves" test/project.test.ts`. Expect a failing retention assertion before changing reducer behavior.
+- [x] Change the model and explicit clip field-copying paths; remove only the obsolete ownership cascade from `track.delete`. Its deleted summary contains the track and that track's clips, not patterns/events. Keep `pattern.delete` cascading through all referencing clips. Verify changing `arrangement.update.trackId` preserves the pattern ID and content.
+- [x] Add migration tests for placed/unplaced drum and synth patterns, multiple clips sharing one old pattern, stable IDs/events/mix/order, input immutability, version-2 pass-through, and a dangling legacy clip reference. A representative assertion uses a literal legacy fixture, not a schema-2 cast:
 
 ```ts
 const legacy: ProjectV1 = {
@@ -102,7 +104,7 @@ test("migration moves track ownership without changing the legacy project", () =
 });
 ```
 
-- [ ] Run `node --disable-warning=ExperimentalWarning --test test/project-migration.test.ts` and confirm the new converter tests fail before implementation. Define `ProjectV1` with the old schema literal, old pattern ownership, and clips without `trackId`; freeze that contract when future schema changes occur. Implement only the typed conversion:
+- [x] Run `node --disable-warning=ExperimentalWarning --test test/project-migration.test.ts` and confirm the new converter tests fail before implementation. Define `ProjectV1` with the old schema literal, old pattern ownership, and clips without `trackId`; freeze that contract when future schema changes occur. Implement only the typed conversion:
 
 ```ts
 export function migrateProject(project: ProjectV1 | Project): Project {
@@ -128,9 +130,9 @@ export function migrateProject(project: ProjectV1 | Project): Project {
 
 Import model types at the top; do not introduce a general object-omission utility. This converter accepts typed data, not `unknown`; external decoding is a separate boundary.
 
-- [ ] Write an audio regression placing the same synth pattern on bass and lead tracks at the same bar. Assert two events with distinct clip-based keys, the respective track IDs and instrument IDs, and unchanged pitch/timing. Update the missing-track diagnostic test to reference the clip's missing track.
-- [ ] Run `node --disable-warning=ExperimentalWarning --test test/audio-timeline.test.ts` to observe the routing failure, then change the track lookup to `tracks.get(clip.trackId)` and the diagnostic to “Arrangement clip references a missing track.” Do not initialize an engine from the UI.
-- [ ] Run `pnpm test`, `pnpm typecheck`, and `pnpm lint`; search `rg -n 'pattern\.trackId|schemaVersion: 1' src test` and ensure only intentional legacy conversion/tests remain. Review `git diff --check` and `git diff`, commit as `feat: decouple patterns from tracks`, and request human review.
+- [x] Write an audio regression placing the same synth pattern on bass and lead tracks at the same bar. Assert two events with distinct clip-based keys, the respective track IDs and instrument IDs, and unchanged pitch/timing. Update the missing-track diagnostic test to reference the clip's missing track.
+- [x] Run `node --disable-warning=ExperimentalWarning --test test/audio-timeline.test.ts` to observe the routing failure, then change the track lookup to `tracks.get(clip.trackId)` and the diagnostic to “Arrangement clip references a missing track.” Do not initialize an engine from the UI.
+- [x] Run `pnpm test`, `pnpm typecheck`, and `pnpm lint`; search `rg -n 'pattern\.trackId|schemaVersion: 1' src test` and ensure only intentional legacy conversion/tests remain. Review `git diff --check` and `git diff`, commit as `feat: decouple patterns from tracks`, and request human review.
 
 ## Task 2: Add Undoable Track Reordering
 

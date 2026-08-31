@@ -1,7 +1,7 @@
 import type { Project } from "../src/project/index.ts";
 
 export const audioProject = (): Project => ({
-  schemaVersion: 1,
+  schemaVersion: 2,
   id: "00000000-0000-4000-8000-000000000001",
   name: "Audio test",
   bpm: 120,
@@ -31,7 +31,6 @@ export const audioProject = (): Project => ({
   patterns: [
     {
       id: "00000000-0000-4000-8000-000000000004",
-      trackId: "00000000-0000-4000-8000-000000000002",
       name: "Beat",
       kind: "drum",
       lengthBars: 1,
@@ -42,7 +41,6 @@ export const audioProject = (): Project => ({
     },
     {
       id: "00000000-0000-4000-8000-000000000007",
-      trackId: "00000000-0000-4000-8000-000000000003",
       name: "Bass note",
       kind: "synth",
       lengthBars: 1,
@@ -60,12 +58,14 @@ export const audioProject = (): Project => ({
     {
       id: "00000000-0000-4000-8000-000000000009",
       patternId: "00000000-0000-4000-8000-000000000004",
+      trackId: "00000000-0000-4000-8000-000000000002",
       startBar: 0,
       repeatCount: 2,
     },
     {
       id: "00000000-0000-4000-8000-000000000010",
       patternId: "00000000-0000-4000-8000-000000000007",
+      trackId: "00000000-0000-4000-8000-000000000003",
       startBar: 2,
       repeatCount: 1,
     },
