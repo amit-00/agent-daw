@@ -71,14 +71,15 @@ export function Arrangement(): ReactElement {
       onPointerCancel={cancelDrag} onLostPointerCapture={() => setDrag(null)}
       onKeyDown={(event) => { if (drag && event.key === "Escape") { event.preventDefault(); cancelDrag(); } }}
       onScroll={() => { if (drag) setDrag({ ...drag, toIndex: positionAt(drag.clientY) }); }}>
-      <section className="relative grid min-h-full grid-cols-[154px_minmax(730px,1fr)] content-start bg-black" aria-label="Song arrangement"
-        style={{ minWidth: 154 + bars * 92, gridTemplateRows: `39px repeat(${project.tracks.length},112px)` }}>
-        <div className="sticky left-0 z-[3] flex items-center justify-between border-r border-b border-white/10 bg-black px-3 text-[10px] tracking-widest text-zinc-500">
+      <section className="relative grid h-full min-h-[650px] grid-cols-[154px_minmax(730px,1fr)] content-start bg-black bg-[linear-gradient(90deg,rgba(255,255,255,0.12)_2px,transparent_2px),linear-gradient(90deg,rgba(255,255,255,0.055)_1px,transparent_1px)] [background-position:154px_0,154px_0]" aria-label="Song arrangement"
+        style={{ minWidth: 154 + bars * 92, gridTemplateRows: `39px repeat(${project.tracks.length},112px)`,
+          backgroundSize: `calc((100% - 154px) * 4 / ${bars}) 100%, calc((100% - 154px) / ${bars * 2}) 100%` }}>
+        <div className="sticky left-0 z-[3] flex items-center justify-between border-r border-b border-white/10 bg-black px-[11px] text-[10px] tracking-[0.12em] text-zinc-600">
           <span>TRACKS</span>
-          <button ref={addButton} type="button" aria-label="Add track" onClick={() => setAdding(true)} className="rounded px-1 text-lg text-zinc-300 hover:bg-white/10">＋</button>
+          <button ref={addButton} type="button" aria-label="Add track" onClick={() => setAdding(true)} className="border-0 bg-transparent text-[15px] text-zinc-500 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-300">＋</button>
         </div>
-        <div className="col-start-2 grid border-b border-white/10 bg-zinc-950/90 font-mono text-[10px] text-zinc-500" style={{ gridTemplateColumns: `repeat(${bars},1fr)` }}>
-          {Array.from({ length: bars }, (_, index) => <span className="border-l border-white/5 px-2 py-3" key={index}>{String(index + 1).padStart(2, "0")}</span>)}
+        <div className="col-start-2 grid border-b border-white/10 bg-zinc-950/90 font-mono text-[10px] text-zinc-600" style={{ gridTemplateColumns: `repeat(${bars},1fr)` }}>
+          {Array.from({ length: bars }, (_, index) => <span className="border-l border-white/[0.045] px-[7px] py-[13px]" key={index}>{String(index + 1).padStart(2, "0")}</span>)}
         </div>
         {project.tracks.map((track) => <TrackHeader key={track.id} row={tracks.findIndex((item) => item.id === track.id) + 2} track={track} onEdit={() => setEditingId(track.id)} onReorderStart={(event) => startDrag(event, track.id)} />)}
         {project.tracks.map((track) => <TrackLane key={track.id + "-lane"} row={tracks.findIndex((item) => item.id === track.id) + 2} track={track} bars={bars} />)}

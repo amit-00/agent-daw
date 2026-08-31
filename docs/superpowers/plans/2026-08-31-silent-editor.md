@@ -35,7 +35,9 @@ Task 1 was accepted and Tasks 2–4 were grouped inline into the next user-testa
 
 Tasks 5–10 remain pending. Clips and pattern events currently render real project content but are not editable; mixer values are real but adjustment controls remain disabled. There is no audio or persistence, and refreshing resets this demo session. The existing desktop minimum width is unchanged. Review this checkpoint before starting Task 5.
 
-Verification: 132 tests pass (106 domain/audio/migration, 26 UI), along with typechecking, lint, production build, and diff checks. The browser has no new errors since the clean reload. No dependencies, generic runtime validation infrastructure, or main-branch changes were added.
+Verification after review corrections: 134 tests pass (106 domain/audio/migration, 28 UI), along with typechecking, lint, production build, and diff checks. No dependencies, generic runtime validation infrastructure, or main-branch changes were added.
+
+Visual correction after user review: the initial integration unnecessarily restyled existing components. Restored the pre-integration (`b692f3b`) toolbar height, track palette and headers, clip treatment, sidebar/activity typography, editor proportions, and mixer channel layout while retaining working interactions. Browser measurements verify the 58px toolbar/activity offset, 9px uppercase clip labels, full-height event grid, 210px mixer strips, and 3px faders. Color identity is regression-tested across reordering. Real events/history and inactive audio indicators remain; fabricated meters/playhead and unsupported master pan do not return. Future slices must preserve this visual baseline rather than rewrite presentation alongside data wiring.
 
 ## File Map
 

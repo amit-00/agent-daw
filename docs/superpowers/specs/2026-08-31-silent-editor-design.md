@@ -27,6 +27,7 @@ Audible playback, note preview/audition, recording, looping playback, export, au
 - Use Node.js >=23.6 and pnpm 10.17.0; retain `pnpm-lock.yaml` as the only package-manager lockfile.
 - Use the existing React, Next.js, Tailwind, Zustand, and test tooling; add no dependencies without explicit approval.
 - Keep the current desktop layout and visual language; this milestone changes interactions, not the overall design.
+- Treat the pre-integration UI at `b692f3b` as the visual baseline: preserve existing component structure, sizing, spacing, typography, palette, and control placement when wiring interactions. Real project content and inactive audio indicators replace fabricated content; they do not justify restyling the surrounding UI. Compare rendered views before calling a slice complete.
 - Route committed musical edits through `ProjectService`; do not create a second editable project or history implementation.
 - Trust typed internal callers; do not add generic `isRecord`, `assertRecord`, checked-getter, or command-schema infrastructure, or repeated whole-project runtime validation.
 - Check concrete musical constraints once at the UI editing boundary; decode unknown persisted data only at a persistence boundary.

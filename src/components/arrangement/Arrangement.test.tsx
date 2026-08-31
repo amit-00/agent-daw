@@ -42,7 +42,7 @@ function startDrag(): HTMLElement {
 it("previews track order but commits only once on release, with undo", () => {
   const handle = startDrag();
   fireEvent.pointerMove(handle, { pointerId: 1, clientY: 324 });
-  expect(screen.getByRole("button", { name: "Select track Neon Kit" }).parentElement).toHaveStyle({ gridRow: "4" });
+  expect(screen.getByRole("group", { name: "Neon Kit track" })).toHaveStyle({ gridRow: "4" });
   expect(state.project).toEqual(DEMO_PROJECT);
   expect(state.history).toHaveLength(0);
   fireEvent.pointerUp(handle, { pointerId: 1, clientY: 324 });
@@ -62,7 +62,7 @@ it.each(["pointercancel", "escape", "lostcapture"])("cancels a track preview on 
   fireEvent.pointerUp(handle, { pointerId: 1, clientY: 324 });
   expect(state.project).toEqual(DEMO_PROJECT);
   expect(state.history).toHaveLength(0);
-  expect(screen.getByRole("button", { name: "Select track Neon Kit" }).parentElement).toHaveStyle({ gridRow: "2" });
+  expect(screen.getByRole("group", { name: "Neon Kit track" })).toHaveStyle({ gridRow: "2" });
 });
 
 it("accounts for scrolling and does not record a stationary drag", () => {

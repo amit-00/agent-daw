@@ -10,11 +10,14 @@ export const INSTRUMENT_NAMES: Readonly<Record<string, string>> = {
   "synth.lead": "Lead", "synth.pad": "Pad",
 };
 
-const TRACK_COLORS: readonly string[] = ["#9a69f5", "#d95fc8", "#ef6070", "#f18a4c", "#efbd52"];
+const TRACK_COLORS: ReadonlyMap<string, string> = new Map([
+  ["drums", "#9a69f5"], ["bass", "#d95fc8"], ["chords", "#ef6070"],
+  ["melody", "#f18a4c"], ["pad", "#efbd52"],
+]);
 
 export function getTrackColor(trackId: string): string {
   const index = Array.from(trackId).reduce((sum, character) => sum + character.charCodeAt(0), 0);
-  return TRACK_COLORS[index % TRACK_COLORS.length]!;
+  return TRACK_COLORS.get(trackId) ?? [...TRACK_COLORS.values()][index % TRACK_COLORS.size]!;
 }
 
 export const DEMO_PROJECT: Project = {
