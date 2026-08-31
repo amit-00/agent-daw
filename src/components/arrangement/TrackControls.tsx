@@ -4,7 +4,7 @@ import { useLayoutEffect, useRef, useState, type ReactElement, type ReactNode } 
 
 import { SOUND_CATALOG } from "@/audio/catalog";
 import { INSTRUMENT_NAMES } from "@/data/studio-data";
-import type { Track, TrackKind } from "@/project";
+import type { Track } from "@/project";
 import { useStudioStore } from "@/stores/studio-provider";
 
 function TrackDialog({ label, children, onClose }: Readonly<{
@@ -29,20 +29,15 @@ function TrackDialog({ label, children, onClose }: Readonly<{
 
 export function AddTrack({ onClose }: Readonly<{ onClose: () => void }>): ReactElement {
   const createTrack = useStudioStore((state) => state.createTrack);
-  const [kind, setKind] = useState<TrackKind>("drum");
   const [instrumentId, setInstrumentId] = useState("kit.basic");
-  const instruments = kind === "drum" ? SOUND_CATALOG.drumKits : SOUND_CATALOG.synthPresets;
+  const instruments = [...SOUND_CATALOG.drumKits, ...SOUND_CATALOG.synthPresets];
   return (
     <TrackDialog label="Add track" onClose={onClose}>
       <form className="space-y-5" onSubmit={(event) => {
         event.preventDefault();
+        const kind = SOUND_CATALOG.drumKits.some(({ id }) => id === instrumentId) ? "drum" : "synth";
         if (createTrack(kind, instrumentId) !== null) onClose();
       }}>
-        <fieldset className="flex gap-5">
-          <legend className="mb-2 text-xs text-zinc-400">Track type</legend>
-          <label className="flex gap-2"><input type="radio" name="track-kind" checked={kind === "drum"} onChange={() => { setKind("drum"); setInstrumentId("kit.basic"); }} />Drums</label>
-          <label className="flex gap-2"><input type="radio" name="track-kind" checked={kind === "synth"} onChange={() => { setKind("synth"); setInstrumentId("synth.bass"); }} />Synth</label>
-        </fieldset>
         <label className="block text-xs text-zinc-400">Instrument
           <select value={instrumentId} onChange={(event) => setInstrumentId(event.target.value)}>
             {instruments.map(({ id }) => <option key={id} value={id}>{INSTRUMENT_NAMES[id] ?? id}</option>)}
@@ -76,7 +71,7 @@ export function TrackSettings({ track, onClose, onDeleted }: Readonly<{
           <button type="button" className="text-rose-300" onClick={remove}>Confirm delete</button>
         </div>
       </div> : <div className="space-y-5">
-        <p className="text-xs text-zinc-500">{track.kind === "drum" ? "Drum" : "Synth"} track · Type cannot be changed</p>
+        <p className="text-xs text-zinc-500">Only compatible instruments are shown.</p>
         <form className="space-y-2" onSubmit={(event) => { event.preventDefault(); renameTrack(track.id, name); }}>
           <label className="block text-xs text-zinc-400">Track name
             <input required maxLength={40} value={name} onChange={(event) => setName(event.target.value)} className="mt-2 w-full rounded border border-white/15 bg-zinc-900 p-2 text-sm text-zinc-200" />

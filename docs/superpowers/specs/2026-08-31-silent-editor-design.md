@@ -152,7 +152,7 @@ Each destructive action is undoable. Cancelling confirmation does nothing. Histo
 
 | ID | Surface | Required behavior |
 | --- | --- | --- |
-| UI-1 | Track header / Add track | Add drum or synth track with an appropriate kit/preset; rename, change preset, reorder, delete. Track kind stays fixed. Offer Move up/Move down alongside drag reorder. Mixer order follows track order. |
+| UI-1 | Track header / Add track | Create a track from one instrument selector containing all kits/presets; infer its internal kind from the selected instrument without exposing a type control. Rename, change instrument, reorder, delete. Internal kind stays fixed and existing-track selectors offer compatible instruments only. Offer Move up/Move down alongside drag reorder. Mixer order follows track order. |
 | UI-2 | Pattern library | Create an unplaced drum/synth pattern; select, rename, choose 1/2/4 bars, duplicate, delete, and place on a compatible track at a bar. Sidebar drag has a Place action with track/bar inputs as an alternative. |
 | UI-3 | Empty lane | Double-click an empty bar to create a new one-bar pattern and its first clip in one history entry. Provide a keyboard/menu Create pattern here equivalent. |
 | UI-4 | Arrangement clip | Select, move by whole bars, move between compatible tracks, duplicate, delete, and Make unique. Right-edge resize changes whole-pattern repeat count, not arbitrary trimming or note stretching. Provide numeric start/repeat/track controls. |

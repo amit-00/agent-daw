@@ -27,19 +27,27 @@ describe("Studio", () => {
     expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
   });
 
-  it("creates a synth track from the add-track controls and undoes it", async () => {
+  it.each([
+    { instrumentId: "kit.basic", name: "Basic drums", incompatibleInstrument: "Bass" },
+    { instrumentId: "synth.bass", name: "Bass", incompatibleInstrument: "Basic drums" },
+  ])("creates $name from one instrument selector and undoes it", async ({ instrumentId, name, incompatibleInstrument }) => {
     const user = userEvent.setup();
     render(<Studio initialProject={EMPTY_PROJECT} />);
     await user.click(screen.getByRole("button", { name: "Add track" }));
-    await user.click(screen.getByRole("radio", { name: "Synth" }));
-    await user.selectOptions(screen.getByLabelText("Instrument"), "synth.bass");
+    const selector = screen.getByRole("combobox", { name: "Instrument" });
+    await user.selectOptions(selector, "synth.pad");
+    await user.selectOptions(selector, instrumentId);
+    expect(screen.queryByRole("group", { name: "Track type" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Create track" }));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Select track Bass" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: `Select track ${name}` })).toHaveAttribute("aria-pressed", "true");
     await user.click(screen.getByRole("button", { name: "Undo" }));
-    expect(screen.queryByRole("button", { name: "Select track Bass" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: `Select track ${name}` })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Redo" }));
-    expect(screen.getByRole("button", { name: "Select track Bass" })).toBeVisible();
+    expect(screen.getByRole("button", { name: `Select track ${name}` })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: `Edit ${name}` }));
+    expect(screen.getByRole("dialog")).not.toHaveTextContent(/type cannot be changed/i);
+    expect(screen.queryByRole("option", { name: incompatibleInstrument })).not.toBeInTheDocument();
   });
 
   it("renames, changes preset, and reorders a track in arrangement and mixer", async () => {

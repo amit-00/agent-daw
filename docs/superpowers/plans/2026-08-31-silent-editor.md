@@ -245,6 +245,8 @@ Before returning, reconcile nullable selection IDs against the newly published p
 
 **Interfaces:** Add store actions `createTrack(kind: TrackKind, instrumentId: string): string | null`, `renameTrack(trackId: string, name: string): void`, `setTrackPreset(trackId: string, instrumentId: string): void`, `reorderTrack(trackId: string, toIndex: number): void`, and `deleteTrack(trackId: string): void`. Creation returns the new ID, or `null` with `errorMessage`; other rejected actions set `errorMessage` without dispatch.
 
+UI refinement approved after review: Add track now exposes only an instrument selector listing all catalog kits/presets. Infer kind from the chosen instrument before calling the existing typed action. Track settings hide the internal type and continue to offer compatible instruments only; no model or service API changes are needed.
+
 - [x] Write a failing end-to-end component test for an empty session:
 
 ```tsx
@@ -252,7 +254,6 @@ it("creates a synth track from the add-track controls", async () => {
   const user = userEvent.setup();
   render(<Studio initialProject={EMPTY_PROJECT} />);
   await user.click(screen.getByRole("button", { name: "Add track" }));
-  await user.click(screen.getByRole("radio", { name: "Synth" }));
   await user.selectOptions(screen.getByLabelText("Instrument"), "synth.bass");
   await user.click(screen.getByRole("button", { name: "Create track" }));
   expect(screen.getByRole("button", { name: "Mute Bass" })).toBeVisible();
