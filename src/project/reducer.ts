@@ -125,6 +125,15 @@ export function reduceOperation(project: Project, operation: Operation): Reducti
         } }),
       };
     }
+    case "track.reorder": {
+      const fromIndex = project.tracks.findIndex((track) => track.id === operation.trackId);
+      if (fromIndex === operation.toIndex) return { project, changes: emptyChangeSummary() };
+      const tracks = [...project.tracks];
+      const [moved] = tracks.splice(fromIndex, 1);
+      tracks.splice(operation.toIndex, 0, moved!);
+      const candidate: Project = { ...project, tracks };
+      return { project: candidate, changes: summarizeProjectDiff(project, candidate) };
+    }
     case "pattern.create": {
       const candidate: Project = { ...project, patterns: [...project.patterns, operation.pattern] };
       return {

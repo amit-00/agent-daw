@@ -282,6 +282,51 @@ test("track.update changes mixer fields", () => {
   assert.deepEqual(result.changes.updated.trackIds, [id(10)]);
 });
 
+test("track reorder is one undoable project-order change", () => {
+  const initial: Project = {
+    ...projectWithBassAndDrums(),
+    tracks: [...projectWithBassAndDrums().tracks, ...projectWithLead().tracks],
+  };
+  const service = createTestService(initial);
+  const result = service.dispatch({
+    id: id(510), source: "manual", label: "Move Drums last", kind: "operation",
+    operation: { type: "track.reorder", trackId: id(10), toIndex: 2 },
+  });
+  assert.deepEqual(result.project.tracks.map((track) => track.id), [id(20), id(40), id(10)]);
+  assert.deepEqual(result.project.arrangement, initial.arrangement);
+  assert.deepEqual(result.changes.updated.projectIds, [initial.id]);
+  assert.deepEqual(result.changes.updated.trackIds, []);
+  assert.equal(service.getState().history.length, 1);
+  service.undo();
+  assert.deepEqual(service.getState().project, initial);
+  service.redo();
+  assert.deepEqual(service.getState().project, result.project);
+  const returned = service.dispatch({
+    id: id(511), source: "manual", label: "Move Drums first", kind: "operation",
+    operation: { type: "track.reorder", trackId: id(10), toIndex: 0 },
+  });
+  assert.deepEqual(returned.project, initial);
+  service.restore({
+    id: id(512), source: "manual", label: "Restore track order", targetEntryId: result.historyEntry!.id,
+  });
+  assert.deepEqual(service.getState().project, result.project);
+  service.undo();
+  assert.deepEqual(service.getState().project, initial);
+  assert.deepEqual(initial.tracks.map((track) => track.id), [id(10), id(20), id(40)]);
+});
+
+test("track reorder leaves an unchanged index out of history", () => {
+  const service = createTestService(projectWithBassAndDrums());
+  const before = service.getState().project;
+  const result = service.dispatch({
+    id: id(513), source: "manual", label: "Keep track order", kind: "operation",
+    operation: { type: "track.reorder", trackId: id(20), toIndex: 1 },
+  });
+  assert.equal(result.project, before);
+  assert.equal(result.changed, false);
+  assert.equal(service.getState().history.length, 0);
+});
+
 test("track.delete removes only its track and clips", () => {
   const project = projectWithBassAndDrums();
 

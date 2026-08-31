@@ -31,6 +31,7 @@ export type Operation =
       };
     }
   | { readonly type: "track.delete"; readonly trackId: string }
+  | { readonly type: "track.reorder"; readonly trackId: string; readonly toIndex: number }
   | { readonly type: "pattern.create"; readonly pattern: Pattern }
   | {
       readonly type: "pattern.duplicate";
