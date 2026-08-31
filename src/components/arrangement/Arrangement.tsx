@@ -5,6 +5,7 @@ import { useRef, useState, type PointerEvent, type ReactElement } from "react";
 import { AddTrack, TrackSettings } from "@/components/arrangement/TrackControls";
 import { TrackHeader } from "@/components/arrangement/TrackHeader";
 import { TrackLane } from "@/components/arrangement/TrackLane";
+import { ClipSettings } from "@/components/editor/PatternControls";
 import type { Track } from "@/project";
 import { useStudioStore } from "@/stores/studio-provider";
 
@@ -28,7 +29,16 @@ export function Arrangement(): ReactElement {
   const addButton = useRef<HTMLButtonElement>(null);
   const [adding, setAdding] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingClipId, setEditingClipId] = useState<string | null>(null);
   const editingTrack = project.tracks.find((track) => track.id === editingId);
+  const editingClip = project.arrangement.find((clip) => clip.id === editingClipId);
+  const editingPattern = project.patterns.find((pattern) => pattern.id === editingClip?.patternId);
+  function closeClipSettings(): void {
+    const lane = Array.from(scroller.current!.querySelectorAll<HTMLElement>("[data-track-id]"))
+      .find((element) => element.dataset.trackId === editingClip?.trackId);
+    setEditingClipId(null);
+    queueMicrotask(() => lane?.focus());
+  }
   const tracks = [...project.tracks];
   if (drag && drag.tracks === project.tracks) {
     const [moved] = tracks.splice(drag.fromIndex, 1);
@@ -82,10 +92,12 @@ export function Arrangement(): ReactElement {
           {Array.from({ length: bars }, (_, index) => <span className="border-l border-white/[0.045] px-[7px] py-[13px]" key={index}>{String(index + 1).padStart(2, "0")}</span>)}
         </div>
         {project.tracks.map((track) => <TrackHeader key={track.id} row={tracks.findIndex((item) => item.id === track.id) + 2} track={track} onEdit={() => setEditingId(track.id)} onReorderStart={(event) => startDrag(event, track.id)} />)}
-        {project.tracks.map((track) => <TrackLane key={track.id + "-lane"} row={tracks.findIndex((item) => item.id === track.id) + 2} track={track} bars={bars} />)}
+        {project.tracks.map((track) => <TrackLane key={track.id + "-lane"} row={tracks.findIndex((item) => item.id === track.id) + 2} track={track} bars={bars} onEditClip={setEditingClipId} />)}
         {project.tracks.length === 0 && <p className="col-span-2 p-6 text-xs text-zinc-500">Add a track to start arranging.</p>}
       </section>
       {adding && <AddTrack onClose={() => setAdding(false)} />}
+      {editingClip && editingPattern && <ClipSettings key={editingClip.id} clip={editingClip} pattern={editingPattern}
+        onClose={closeClipSettings} onDeleted={closeClipSettings} />}
       {editingTrack && <TrackSettings key={editingTrack.id} track={editingTrack} onClose={() => setEditingId(null)} onDeleted={() => {
         setEditingId(null);
         queueMicrotask(() => addButton.current?.focus());

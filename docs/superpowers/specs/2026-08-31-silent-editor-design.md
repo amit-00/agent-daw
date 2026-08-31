@@ -2,7 +2,7 @@
 
 Date: 2026-08-31
 
-Status: Ownership migration, project-backed UI, and track management implemented inline. The track-management checkpoint is ready for human testing; pattern/clip editing, event editors, mixer edits, and remaining history UX are still pending.
+Status: Ownership migration, project-backed UI, track management, and pattern/clip workflows implemented inline. The pattern/clip checkpoint is ready for human testing; clip gestures, event editors, mixer edits, and remaining history UX are still pending.
 
 Branch: `codex/silent-editor`, based on `b3a3463` (pnpm migration).
 

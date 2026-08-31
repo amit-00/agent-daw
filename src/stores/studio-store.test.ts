@@ -4,6 +4,106 @@ import { DEMO_PROJECT, EMPTY_PROJECT } from "@/data/studio-data";
 import { createStudioStore } from "@/stores/studio-store";
 
 describe("studio session", () => {
+  it("makes only the chosen clip unique in one undoable entry", () => {
+    const store = createStudioStore(EMPTY_PROJECT);
+    const trackId = store.getState().createTrack("drum", "kit.basic")!;
+    const clipId = store.getState().createPatternAt(trackId, 0)!;
+    expect(store.getState().history).toHaveLength(2);
+    const originalPatternId = store.getState().project.arrangement[0]!.patternId;
+    const secondId = store.getState().duplicateClip(clipId)!;
+    expect(store.getState().project.arrangement[1]).toMatchObject({ startBar: 1, patternId: originalPatternId });
+    const before = store.getState().history.length;
+    store.getState().makeClipUnique(secondId);
+    expect(store.getState().project.arrangement[0]?.patternId).toBe(originalPatternId);
+    expect(store.getState().project.arrangement[1]?.patternId).not.toBe(originalPatternId);
+    expect(store.getState().history).toHaveLength(before + 1);
+    expect(store.getState().selectedPatternId).toBe(store.getState().project.arrangement[1]?.patternId);
+    store.getState().undo();
+    expect(store.getState().project.arrangement.every((clip) => clip.patternId === originalPatternId)).toBe(true);
+  });
+
+  it("duplicates a pattern as unplaced content with fresh event IDs", () => {
+    const store = createStudioStore(DEMO_PROJECT);
+    for (const patternId of ["neon", "glasshouse"]) {
+      const id = store.getState().duplicatePattern(patternId);
+      const copy = store.getState().project.patterns.find((pattern) => pattern.id === id)!;
+      const original = DEMO_PROJECT.patterns.find((pattern) => pattern.id === patternId)!;
+      expect(copy.events).toEqual(original.events.map((event) => ({ ...event, id: expect.any(String) })));
+      expect(copy.events.every((event) => !original.events.some((source) => source.id === event.id))).toBe(true);
+      expect(new Set(copy.events.map((event) => event.id)).size).toBe(copy.events.length);
+      expect(store.getState().project.arrangement).toEqual(DEMO_PROJECT.arrangement);
+      expect(store.getState().selectedClipId).toBeNull();
+    }
+  });
+
+  it("creates standalone patterns and shares renamed content across tracks", () => {
+    const store = createStudioStore(DEMO_PROJECT);
+    const id = store.getState().createPattern("synth")!;
+    expect(store.getState().project.patterns.at(-1)).toMatchObject({ id, kind: "synth", lengthBars: 1, events: [] });
+    const first = store.getState().placePattern(id, "bass", 8)!;
+    const second = store.getState().placePattern(id, "chords", 8)!;
+    store.getState().renamePattern(id, "  Shared idea  ");
+    store.getState().setPatternLength(id, 2);
+    expect(store.getState().project.patterns.at(-1)).toMatchObject({ name: "Shared idea", lengthBars: 2 });
+    store.getState().updateClip(second, { startBar: 10, trackId: "melody", repeatCount: 2 });
+    expect(store.getState()).toMatchObject({ selectedTrackId: "melody", selectedPatternId: id });
+    store.getState().deleteClip(first);
+    expect(store.getState().project.patterns.some((pattern) => pattern.id === id)).toBe(true);
+    const third = store.getState().placePattern(id, "bass", 8)!;
+    store.getState().deletePattern(id);
+    expect(store.getState().project.arrangement.some((clip) => clip.patternId === id)).toBe(false);
+    expect(store.getState().selectedPatternId).toBeNull();
+    store.getState().undo();
+    expect(store.getState().project.arrangement.some((clip) => clip.id === second)).toBe(true);
+    expect(store.getState().project.arrangement.some((clip) => clip.id === third)).toBe(true);
+  });
+
+  it("refuses invalid placement, shrink, names, and stale targets without creating history", () => {
+    const store = createStudioStore(DEMO_PROJECT);
+    const before = store.getState();
+    expect(store.getState().createPatternAt("bass", 0)).toBeNull();
+    expect(store.getState().duplicateClip("bass-a")).toBeNull();
+    expect(store.getState().placePattern("neon", "bass", 8)).toBeNull();
+    store.getState().setPatternLength("glasshouse", 1);
+    store.getState().setPatternLength("neon", 2);
+    store.getState().updateClip("bass-a", { startBar: 1 });
+    for (const name of [" ", "x".repeat(41)]) store.getState().renamePattern("neon", name);
+    store.getState().renamePattern("neon", "Neon beat");
+    store.getState().setPatternLength("neon", 1);
+    store.getState().updateClip("bass-a", { startBar: 0 });
+    store.getState().createPatternAt("gone", 0);
+    store.getState().renamePattern("gone", "Missing");
+    store.getState().setPatternLength("gone", 1);
+    store.getState().duplicatePattern("gone");
+    store.getState().deletePattern("gone");
+    store.getState().duplicateClip("gone");
+    store.getState().updateClip("gone", { startBar: 1 });
+    store.getState().makeClipUnique("gone");
+    store.getState().deleteClip("gone");
+    expect(store.getState().project).toBe(before.project);
+    expect(store.getState().history).toBe(before.history);
+    expect(store.getState().errorMessage).toBeTruthy();
+  });
+
+  it("enforces pattern and clip caps before atomic creation or copying", () => {
+    const patterns = Array.from({ length: 128 }, (_, index) => ({ ...DEMO_PROJECT.patterns[0]!, id: `p-${index}` }));
+    const store = createStudioStore({ ...DEMO_PROJECT, patterns: [...DEMO_PROJECT.patterns, ...patterns].slice(0, 128) });
+    expect(store.getState().createPattern("synth")).toBeNull();
+    expect(store.getState().createPatternAt("bass", 8)).toBeNull();
+    expect(store.getState().duplicatePattern("neon")).toBeNull();
+    store.getState().makeClipUnique("drums-a");
+    expect(store.getState().history).toHaveLength(0);
+    expect(store.getState().project.patterns).toHaveLength(128);
+    const full = createStudioStore({ ...DEMO_PROJECT, arrangement: Array.from({ length: 512 }, (_, index) => ({
+      ...DEMO_PROJECT.arrangement[0]!, id: `clip-${index}`,
+    })) });
+    expect(full.getState().placePattern("neon", "drums", 8)).toBeNull();
+    expect(full.getState().createPatternAt("drums", 8)).toBeNull();
+    expect(full.getState().duplicateClip("clip-0")).toBeNull();
+    expect(full.getState().project.patterns).toHaveLength(DEMO_PROJECT.patterns.length);
+    expect(full.getState().history).toHaveLength(0);
+  });
+
   it("creates catalog tracks with fresh IDs and undoable defaults", () => {
     const store = createStudioStore(EMPTY_PROJECT);
     const drumId = store.getState().createTrack("drum", "kit.basic");

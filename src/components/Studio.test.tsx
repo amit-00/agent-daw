@@ -13,9 +13,104 @@ beforeEach(() => {
   HTMLDialogElement.prototype.showModal = function (): void { this.setAttribute("open", ""); };
   HTMLDialogElement.prototype.close = function (): void { this.removeAttribute("open"); };
 });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe("Studio", () => {
+  it("creates an unplaced pattern, renames it, and places it using one-based bars", async () => {
+    const user = userEvent.setup();
+    render(<Studio initialProject={DEMO_PROJECT} />);
+    await user.click(screen.getByRole("button", { name: "Add pattern" }));
+    await user.selectOptions(screen.getByLabelText("Pattern editor"), "synth");
+    await user.click(screen.getByRole("button", { name: "Create pattern" }));
+    expect(screen.getByRole("button", { name: "Select pattern New melody" })).toHaveTextContent("Unplaced");
+    await user.click(screen.getByRole("button", { name: "Edit pattern New melody" }));
+    await user.clear(screen.getByLabelText("Pattern name"));
+    await user.type(screen.getByLabelText("Pattern name"), "New phrase");
+    await user.click(screen.getByRole("button", { name: "Rename pattern" }));
+    await user.selectOptions(screen.getByLabelText("Pattern length"), "2");
+    await user.selectOptions(screen.getByLabelText("Destination track"), "bass");
+    expect(screen.queryByRole("option", { name: "Neon Kit" })).not.toBeInTheDocument();
+    await user.clear(screen.getByLabelText("Starting bar"));
+    await user.type(screen.getByLabelText("Starting bar"), "9");
+    await user.click(screen.getByRole("button", { name: "Place pattern" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(within(screen.getByRole("region", { name: "Low Orbit lane" })).getByRole("button", { name: "Select New phrase" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Select pattern New phrase" })).toHaveTextContent("1 placement");
+    await user.click(screen.getByRole("button", { name: "Undo" }));
+    expect(screen.getByRole("button", { name: "Select pattern New phrase" })).toHaveTextContent("Unplaced");
+  });
+
+  it("creates and places from an empty lane in one edit and offers numeric creation", async () => {
+    const user = userEvent.setup();
+    render(<Studio initialProject={{ ...DEMO_PROJECT, arrangement: [] }} />);
+    const lane = screen.getByRole("region", { name: "Low Orbit lane" });
+    vi.spyOn(lane, "getBoundingClientRect").mockReturnValue(new DOMRect(100, 0, 800, 112));
+    fireEvent.doubleClick(lane, { clientX: 350 });
+    expect(within(lane).getByRole("button", { name: "Edit clip New melody at bar 3" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Undo" }));
+    expect(screen.queryByRole("button", { name: "Select pattern New melody" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Edit Low Orbit" }));
+    await user.clear(screen.getByLabelText("New pattern starting bar"));
+    await user.type(screen.getByLabelText("New pattern starting bar"), "10");
+    await user.click(screen.getByRole("button", { name: "Create pattern here" }));
+    expect(within(lane).getByRole("button", { name: "Edit clip New melody at bar 10" })).toBeVisible();
+  });
+
+  it("edits clip routing and repeats, duplicates sharing, and makes only one clip unique", async () => {
+    const user = userEvent.setup();
+    render(<Studio initialProject={{ ...DEMO_PROJECT, arrangement: [DEMO_PROJECT.arrangement[2]!] }} />);
+    await user.click(screen.getByRole("button", { name: "Edit clip Low Orbit phrase at bar 1" }));
+    await user.selectOptions(screen.getByLabelText("Destination track"), "chords");
+    await user.clear(screen.getByLabelText("Starting bar"));
+    await user.type(screen.getByLabelText("Starting bar"), "3");
+    await user.clear(screen.getByLabelText("Repeat count"));
+    await user.type(screen.getByLabelText("Repeat count"), "3");
+    await user.click(screen.getByRole("button", { name: "Apply placement" }));
+    expect(within(screen.getByRole("region", { name: "Glasshouse lane" })).getByRole("button", { name: "Select Low Orbit phrase" })).toHaveTextContent("×3");
+    await user.click(screen.getByRole("button", { name: "Duplicate clip" }));
+    expect(screen.getByRole("button", { name: "Select pattern Low Orbit phrase" })).toHaveTextContent("2 placements");
+    await user.click(screen.getByRole("button", { name: "Edit clip Low Orbit phrase at bar 9" }));
+    await user.click(screen.getByRole("button", { name: "Make unique" }));
+    expect(screen.getByRole("button", { name: "Select pattern Low Orbit phrase copy" })).toHaveTextContent("1 placement");
+    await user.click(screen.getByRole("button", { name: "Delete clip" }));
+    expect(screen.getByRole("button", { name: "Select pattern Low Orbit phrase copy" })).toHaveTextContent("Unplaced");
+    expect(screen.getByRole("region", { name: "Glasshouse lane" })).toHaveFocus();
+  });
+
+  it("confirms all pattern placements before deletion and can cancel or undo", async () => {
+    const user = userEvent.setup();
+    render(<Studio initialProject={DEMO_PROJECT} />);
+    await user.click(screen.getByRole("button", { name: "Edit pattern Neon beat" }));
+    await user.click(screen.getByRole("button", { name: "Delete pattern" }));
+    expect(screen.getByRole("dialog")).toHaveTextContent("2 placements");
+    await user.click(screen.getByRole("button", { name: "Keep pattern" }));
+    expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Delete pattern" }));
+    await user.click(screen.getByRole("button", { name: "Confirm delete" }));
+    expect(screen.queryByRole("button", { name: "Select pattern Neon beat" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add pattern" })).toHaveFocus();
+    await user.click(screen.getByRole("button", { name: "Undo" }));
+    expect(screen.getAllByRole("button", { name: "Select Neon beat" })).toHaveLength(2);
+  });
+
+  it("keeps rejected clip edits unchanged and discards unapplied fields on Escape", async () => {
+    const user = userEvent.setup();
+    render(<Studio initialProject={DEMO_PROJECT} />);
+    await user.click(screen.getByRole("button", { name: "Edit clip Low Orbit phrase at bar 1" }));
+    await user.clear(screen.getByLabelText("Starting bar"));
+    await user.type(screen.getByLabelText("Starting bar"), "2");
+    await user.click(screen.getByRole("button", { name: "Apply placement" }));
+    expect(within(screen.getByRole("dialog")).getByRole("alert")).toHaveTextContent(/overlap/i);
+    expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
+    await user.clear(screen.getByLabelText("Starting bar"));
+    await user.type(screen.getByLabelText("Starting bar"), "9");
+    fireEvent(screen.getByRole("dialog"), new Event("cancel", { cancelable: true }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Edit clip Low Orbit phrase at bar 1" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
+  });
+
   it("opens track movement controls with the keyboard and cancels without history", async () => {
     const user = userEvent.setup();
     render(<Studio initialProject={DEMO_PROJECT} />);

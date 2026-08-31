@@ -33,9 +33,11 @@ The audio routing update is deliberately in the first schema slice, rather than 
 
 Task 1 was accepted and Tasks 2–4 were grouped inline into the next user-testable UI checkpoint. Track creation, rename, preset changes, drag/Move up/Move down reordering, and deletion now use real project history and Undo/Redo. Native dialogs confirm clip-affecting deletion; patterns remain reusable. Browser checks cover actual drag capture, one-entry history, deletion warnings, and focus restoration. Track dialogs live in `TrackControls.tsx`; pointer tests were added in `Arrangement.test.tsx` ahead of Task 6.
 
-Tasks 5–10 remain pending. Clips and pattern events currently render real project content but are not editable; mixer values are real but adjustment controls remain disabled. There is no audio or persistence, and refreshing resets this demo session. The existing desktop minimum width is unchanged. Review this checkpoint before starting Task 5.
+The track-management checkpoint was accepted. Task 5 is now implemented inline: library pattern creation, rename/length/duplication/deletion, compatible placement, atomic empty-lane creation, numeric clip routing/start/repeats, shared duplication, and Make unique. Open the small pattern/clip options buttons for controls; double-click empty lane space or use Track settings → Create pattern here. Pattern deletion confirms every affected placement, and removing a clip retains its pattern. The existing native track dialog was extracted into `EditorDialog.tsx` for reuse; `PatternControls.tsx` holds the new forms. Clip settings are owned by the arrangement so moving a clip across tracks does not destroy its open dialog.
 
-Verification after review corrections: 134 tests pass (106 domain/audio/migration, 28 UI), along with typechecking, lint, production build, and diff checks. No dependencies, generic runtime validation infrastructure, or main-branch changes were added.
+Tasks 6–11 remain pending. Pattern events are still read-only; clip dragging and repeat-edge resizing are not connected, and mixer adjustment controls remain disabled. There is no audio or persistence, and refreshing resets this demo session. Review the pattern/clip checkpoint before starting Task 6.
+
+Verification at this checkpoint: 166 tests pass (106 domain/audio/migration, 60 UI), along with typechecking, lint, production build, and diff checks. Browser checks in a separate session cover creation, rename/length, placement beyond eight bars, numeric cross-track movement/repeats, shared duplication, Make unique, deletion confirmation/cancellation, and deletion focus. The user's original in-memory session was preserved. No dependencies, generic runtime validation infrastructure, or main-branch changes were added.
 
 Visual correction after user review: the initial integration unnecessarily restyled existing components. Restored the pre-integration (`b692f3b`) toolbar height, track palette and headers, clip treatment, sidebar/activity typography, editor proportions, and mixer channel layout while retaining working interactions. Browser measurements verify the 58px toolbar/activity offset, 9px uppercase clip labels, full-height event grid, 210px mixer strips, and 3px faders. Color identity is regression-tested across reordering. Real events/history and inactive audio indicators remain; fabricated meters/playhead and unsupported master pan do not return. Future slices must preserve this visual baseline rather than rewrite presentation alongside data wiring.
 
@@ -272,6 +274,8 @@ it("creates a synth track from the add-track controls", async () => {
 
 ## Task 5: Implement Reusable Pattern and Clip Actions
 
+Status: Implemented inline on 2026-08-31; awaiting human review before Task 6.
+
 **Files:** Create `src/stores/studio-edits.ts`, `studio-edits.test.ts`. Modify `src/stores/studio-store.ts`, its test, `src/components/editor/PatternSidebar.tsx`, `PatternEditor.tsx`, `src/components/arrangement/TrackLane.tsx`, `Clip.tsx`, and `src/components/Studio.test.tsx`.
 
 **Interfaces:** Add these named store actions; creation methods return a new entity ID or `null`, rejected edits set `errorMessage`:
@@ -292,7 +296,7 @@ makeClipUnique(clipId: string): void;
 
 `createPatternAt` returns the new clip ID. Export `getPlacementProblem(project: Project, clip: ArrangementClip): string | null`, `getPatternLengthProblem(project: Project, patternId: string, lengthBars: PatternLengthBars): string | null`, and `getDrumKitProblem(track: Track, soundIds: readonly string[]): string | null` from `studio-edits.ts`. These check affected musical rules, not runtime shapes. The kit check resolves the track's kit from `SOUND_CATALOG` and reports the first requested sound it does not provide; reuse it for preset changes, placement, and drum edits. Count caps belong in the relevant create/duplicate action, including combined batches.
 
-- [ ] Write the shared/unique regression using the store created in Task 3:
+- [x] Write the shared/unique regression using the store created in Task 3:
 
 ```ts
 it("makes only the chosen clip unique in one undoable entry", () => {
@@ -312,8 +316,8 @@ it("makes only the chosen clip unique in one undoable entry", () => {
 });
 ```
 
-- [ ] Run `pnpm exec vitest run src/stores/studio-store.test.ts -t "makes only the chosen clip unique"`; expect missing actions. Add focused cases for one-entry create-and-place, standalone patterns, duplication with fresh event IDs, cross-track shared edits, delete cascades, no-op updates, cap refusals without orphan patterns, and kit compatibility.
-- [ ] Test placement boundaries: adjacency accepted; same-track overlap rejected; different-track overlap accepted; wrong kind/missing kit sound rejected; start/repeat integers and end cap enforced; a moving clip excludes its own old placement. Use half-open interval overlap:
+- [x] Run `pnpm exec vitest run src/stores/studio-store.test.ts -t "makes only the chosen clip unique"`; expect missing actions. Add focused cases for one-entry create-and-place, standalone patterns, duplication with fresh event IDs, cross-track shared edits, delete cascades, no-op updates, cap refusals without orphan patterns, and kit compatibility.
+- [x] Test placement boundaries: adjacency accepted; same-track overlap rejected; different-track overlap accepted; wrong kind/missing kit sound rejected; start/repeat integers and end cap enforced; a moving clip excludes its own old placement. Use half-open interval overlap:
 
 ```ts
 const overlaps = candidate.startBar < otherEndBar && other.startBar < candidateEndBar;
@@ -321,7 +325,7 @@ const overlaps = candidate.startBar < otherEndBar && other.startBar < candidateE
 
 Resolve lengths from the referenced patterns, not a cached clip width. For a pattern-length edit, build a candidate project with the proposed pattern length and check every referencing clip in that candidate project. Reject event truncation and new overlap, including two clips sharing the resized pattern.
 
-- [ ] Implement atomic create-and-place and Make unique with existing batches. The Make unique operation payload is:
+- [x] Implement atomic create-and-place and Make unique with existing batches. The Make unique operation payload is:
 
 ```ts
 const operations: readonly Operation[] = [
@@ -334,8 +338,8 @@ const operations: readonly Operation[] = [
 
 Here `pattern` and `clip` are resolved current targets and `newPatternId` is generated once before dispatch. Check caps first, then send one manual command. Clip duplication places a shared reference immediately after the source; reject collision/end overflow instead of searching a new location. Pattern duplication creates an unplaced item.
 
-- [ ] Wire the pattern library, named length/rename controls, deletion confirmation with cross-track placement count, clip menus, and empty-lane double-click. Add the equivalent Create pattern here / Place controls using labeled track/bar fields. Display one-based bars; convert to zero-based numbers at the action boundary. New patterns default to one bar and no events.
-- [ ] Run `pnpm exec vitest run src/stores/studio-edits.test.ts src/stores/studio-store.test.ts src/components/Studio.test.tsx`, `pnpm typecheck`, and `pnpm lint`; review diff, commit as `feat: add reusable pattern and clip workflows`, and request human review.
+- [x] Wire the pattern library, named length/rename controls, deletion confirmation with cross-track placement count, clip menus, and empty-lane double-click. Add the equivalent Create pattern here / Place controls using labeled track/bar fields. Display one-based bars; convert to zero-based numbers at the action boundary. New patterns default to one bar and no events.
+- [x] Run `pnpm exec vitest run src/stores/studio-edits.test.ts src/stores/studio-store.test.ts src/components/Studio.test.tsx`, `pnpm typecheck`, and `pnpm lint`; review diff, commit as `feat: add reusable pattern and clip workflows`, and request human review.
 
 ## Task 6: Add Arrangement Drag, Drop, and Repeat Resizing
 
