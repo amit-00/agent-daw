@@ -2,7 +2,7 @@
 
 Date: 2026-08-31
 
-Status: Ownership migration implemented and verified; awaiting first-slice human review. UI integration has not started.
+Status: Ownership migration, project-backed UI, and track management implemented inline. The track-management checkpoint is ready for human testing; pattern/clip editing, event editors, mixer edits, and remaining history UX are still pending.
 
 Branch: `codex/silent-editor`, based on `b3a3463` (pnpm migration).
 
@@ -59,9 +59,9 @@ One pattern may be unplaced, placed repeatedly on one track, or shared across co
 
 # 3) Current System and Implementation Boundaries
 
-The current domain has `Pattern.trackId`; clips reference only patterns. The UI has a different prototype model (`Pattern.clipId`, percentage-positioned clips, fixed track IDs) and canned activity. Grid edits, mute, and solo live outside the domain; some controls are inert or simulate playback.
+At the design baseline, the domain had `Pattern.trackId` and clips referenced only patterns. The UI used a different prototype model (`Pattern.clipId`, percentage-positioned clips, fixed track IDs) and canned activity. Tasks 1–4 have replaced those models with independent patterns, track-routed clips, one project-service session per studio, real history, and undoable track controls. Incomplete playback, event, and mixer controls are disabled or explicitly labeled.
 
-The domain already has typed operations, pure reduction, atomic command batches, no-op detection, detached snapshots, source attribution, undo/redo, and restore. Reuse these. The audio engine is present on this branch, and its timeline currently derives routing from the pattern's track.
+The domain already has typed operations, pure reduction, atomic command batches, no-op detection, detached snapshots, source attribution, undo/redo, and restore. Reuse these. The audio engine is present on this branch; Task 1 updated its timeline to use each clip's track, without enabling UI playback.
 
 | Existing area | Responsibility in this change |
 | --- | --- |

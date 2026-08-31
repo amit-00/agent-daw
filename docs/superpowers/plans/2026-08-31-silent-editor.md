@@ -29,6 +29,14 @@ When implementation is requested, use the existing worktree and perform each sli
 
 The audio routing update is deliberately in the first schema slice, rather than at the end: otherwise existing engine consumers and fixtures would stop compiling. This is a dependency-order adjustment, not playback scope expansion.
 
+### Current checkpoint — 2026-08-31
+
+Task 1 was accepted and Tasks 2–4 were grouped inline into the next user-testable UI checkpoint. Track creation, rename, preset changes, drag/Move up/Move down reordering, and deletion now use real project history and Undo/Redo. Native dialogs confirm clip-affecting deletion; patterns remain reusable. Browser checks cover actual drag capture, one-entry history, deletion warnings, and focus restoration. Track dialogs live in `TrackControls.tsx`; pointer tests were added in `Arrangement.test.tsx` ahead of Task 6.
+
+Tasks 5–10 remain pending. Clips and pattern events currently render real project content but are not editable; mixer values are real but adjustment controls remain disabled. There is no audio or persistence, and refreshing resets this demo session. The existing desktop minimum width is unchanged. Review this checkpoint before starting Task 5.
+
+Verification: 132 tests pass (106 domain/audio/migration, 26 UI), along with typechecking, lint, production build, and diff checks. The browser has no new errors since the clean reload. No dependencies, generic runtime validation infrastructure, or main-branch changes were added.
+
 ## File Map
 
 Paths below are relative to the `silent-editor` worktree. Existing files stay in place; new files have concrete responsibilities, not placeholder abstractions.
@@ -52,7 +60,7 @@ Keep catalog IDs in `src/audio/catalog.ts` authoritative. Keep literal sixteenth
 
 ## Task 1: Migrate Ownership and Existing Audio Consumers
 
-Status: Implemented inline on 2026-08-31; awaiting human review before Task 2. All 115 tests (104 domain/audio/migration and 11 UI), typechecking, lint, and production build pass. No UI or persistence integration changed, and no dependencies or generic runtime validators were added. The legacy type reuses unchanged model fields; freeze those fields separately if a future schema changes them.
+Status: Implemented inline on 2026-08-31 and accepted for continued UI work. At that checkpoint all 115 tests (104 domain/audio/migration and 11 UI), typechecking, lint, and production build passed. That slice did not change UI or persistence integration, and added no dependencies or generic runtime validators. The legacy type reuses unchanged model fields; freeze those fields separately if a future schema changes them.
 
 **Files:** Modify `src/project/model.ts`, `commands.ts`, `reducer.ts`, `index.ts`, `src/audio/timeline.ts`, `test/project.test.ts`, `test/audio-fixtures.ts`, `test/audio-timeline.test.ts`, and other audio tests with inline project fixtures. Create `src/project/migration.ts` and `test/project-migration.test.ts`.
 
@@ -140,7 +148,7 @@ Import model types at the top; do not introduce a general object-omission utilit
 
 **Interfaces:** Add `{ readonly type: "track.reorder"; readonly trackId: string; readonly toIndex: number }` to `Operation`. `toIndex` is the final zero-based index. Typed internal callers supply a valid track/index; UI checks arrive with track controls.
 
-- [ ] Add the service-level test below, plus first-to-last, last-to-first, unchanged-index no-op, unchanged clip routing, and restore-after-reorder cases:
+- [x] Add the service-level test below, plus first-to-last, last-to-first, unchanged-index no-op, unchanged clip routing, and restore-after-reorder cases:
 
 ```ts
 test("track reorder is one undoable project-order change", () => {
@@ -161,8 +169,8 @@ test("track reorder is one undoable project-order change", () => {
 });
 ```
 
-- [ ] Run `node --disable-warning=ExperimentalWarning --test --test-name-pattern="track reorder" test/project.test.ts`; expect the unsupported operation to fail.
-- [ ] Implement a local array move in the reducer, returning the original project for unchanged order. Do not mutate the input or add position fields to tracks:
+- [x] Run `node --disable-warning=ExperimentalWarning --test --test-name-pattern="track reorder" test/project.test.ts`; expect the unsupported operation to fail.
+- [x] Implement a local array move in the reducer, returning the original project for unchanged order. Do not mutate the input or add position fields to tracks:
 
 ```ts
 const fromIndex = project.tracks.findIndex((track) => track.id === operation.trackId);
@@ -176,7 +184,7 @@ return { project: candidate, changes: summarizeProjectDiff(project, candidate) }
 
 Order is a project-level change; unchanged track objects need not be falsely reported as edited. The existing snapshot mechanism handles undo/redo/restore.
 
-- [ ] Run `pnpm run test:project`, `pnpm typecheck`, and `pnpm lint`; inspect the diff, commit as `feat: add track reordering`, and request human review.
+- [x] Run `pnpm run test:project`, `pnpm typecheck`, and `pnpm lint`; inspect the diff, commit as `feat: add track reordering`, and request human review.
 
 ## Task 3: Connect the UI to One Project-Service Session
 
@@ -196,7 +204,7 @@ selectPattern(patternId: string): void;
 
 Retain the existing panel methods `toggleActivity`, `closeActivity`, and `selectEditorTab`. In `studio-provider.tsx`, export `StudioProvider` with explicit `initialProject: Project` and `children: ReactNode` props, and `useStudioStore<T>(selector: (state: StudioState) => T): T`. `Studio` takes an explicit `initialProject: Project` prop; the page passes `DEMO_PROJECT`. The provider creates its store once per mount; tests instantiate the factory or mount their own provider, never reset a hidden shared service via `getInitialState()`.
 
-- [ ] Replace prototype store tests with a failing service-bridge regression. Import `EMPTY_PROJECT` from `src/data/studio-data.ts` (a schema-2 project with empty collections and no side effects):
+- [x] Replace prototype store tests with a failing service-bridge regression. Import `EMPTY_PROJECT` from `src/data/studio-data.ts` (a schema-2 project with empty collections and no side effects):
 
 ```ts
 it("publishes committed history without leaking between studio sessions", () => {
@@ -216,8 +224,8 @@ it("publishes committed history without leaking between studio sessions", () => 
 });
 ```
 
-- [ ] Run `pnpm exec vitest run src/stores/studio-store.test.ts` and confirm the missing store factory fails. Add tests for standalone-pattern selection, clip-to-track/pattern selection, empty projects, and stale selections after a service command or restore.
-- [ ] Implement the bridge without changing service internals. Construct `ProjectService` in the store initializer with `crypto.randomUUID` and `Date.now`; spread its initial state into Zustand. The dispatch core is:
+- [x] Run `pnpm exec vitest run src/stores/studio-store.test.ts` and confirm the missing store factory fails. Add tests for standalone-pattern selection, clip-to-track/pattern selection, empty projects, and stale selections after a service command or restore.
+- [x] Implement the bridge without changing service internals. Construct `ProjectService` in the store initializer with `crypto.randomUUID` and `Date.now`; spread its initial state into Zustand. The dispatch core is:
 
 ```ts
 const result = service.dispatch(command);
@@ -227,9 +235,9 @@ return result;
 
 Before returning, reconcile nullable selection IDs against the newly published project, clearing missing references and `errorMessage` on success. Undo/redo/restore publish through the same local path; guard a pruned restore target at the UI boundary. Do not validate arbitrary command shapes here: `dispatch` is a trusted typed bridge. New named UI actions in later tasks supply valid operations.
 
-- [ ] Replace `TRACKS`, `CLIPS`, `PROJECT_PATTERNS`, `sequenceSteps`, mute/solo sets, and the inverted `Pattern.clipId` model with selectors over `state.project`. Keep a hand-authored schema-2 demo project with real events and catalog IDs; do not try to infer music from the prototype's percentages or decorative marks. Keep colors/display labels UI-only and stable when tracks reorder.
-- [ ] Render variable track/mixer counts, bar-derived clip geometry and event-derived thumbnails. Make pattern names and usage counts real; standalone patterns show no invented track. Keep existing tab/panel behaviors and connect the Undo/Redo buttons now so subsequent slices are independently undoable. Remove fake playback state, time, meters, and activity; disable incomplete controls during this integration slice rather than retaining disconnected mutations. Replace fixed snap/zoom buttons with labels if not interactive.
-- [ ] Add a page test asserting the arrangement, pattern editor, empty activity, disabled Play/Record/Loop/Export, and a visible silent/unsaved explanation. Run `pnpm run test:ui`, `pnpm typecheck`, `pnpm lint`, and `pnpm build`; inspect for lingering fixture imports, commit as `feat: connect studio to project service`, and request human review.
+- [x] Replace `TRACKS`, `CLIPS`, `PROJECT_PATTERNS`, `sequenceSteps`, mute/solo sets, and the inverted `Pattern.clipId` model with selectors over `state.project`. Keep a hand-authored schema-2 demo project with real events and catalog IDs; do not try to infer music from the prototype's percentages or decorative marks. Keep colors/display labels UI-only and stable when tracks reorder.
+- [x] Render variable track/mixer counts, bar-derived clip geometry and event-derived thumbnails. Make pattern names and usage counts real; standalone patterns show no invented track. Keep existing tab/panel behaviors and connect the Undo/Redo buttons now so subsequent slices are independently undoable. Remove fake playback state, time, meters, and activity; disable incomplete controls during this integration slice rather than retaining disconnected mutations. Replace fixed snap/zoom buttons with labels if not interactive.
+- [x] Add a page test asserting the arrangement, pattern editor, empty activity, disabled Play/Record/Loop/Export, and a visible silent/unsaved explanation. Run `pnpm run test:ui`, `pnpm typecheck`, `pnpm lint`, and `pnpm build`; inspect for lingering fixture imports, commit as `feat: connect studio to project service`, and request human review.
 
 ## Task 4: Implement Track Management
 
@@ -237,14 +245,14 @@ Before returning, reconcile nullable selection IDs against the newly published p
 
 **Interfaces:** Add store actions `createTrack(kind: TrackKind, instrumentId: string): string | null`, `renameTrack(trackId: string, name: string): void`, `setTrackPreset(trackId: string, instrumentId: string): void`, `reorderTrack(trackId: string, toIndex: number): void`, and `deleteTrack(trackId: string): void`. Creation returns the new ID, or `null` with `errorMessage`; other rejected actions set `errorMessage` without dispatch.
 
-- [ ] Write a failing end-to-end component test for an empty session:
+- [x] Write a failing end-to-end component test for an empty session:
 
 ```tsx
 it("creates a synth track from the add-track controls", async () => {
   const user = userEvent.setup();
   render(<Studio initialProject={EMPTY_PROJECT} />);
   await user.click(screen.getByRole("button", { name: "Add track" }));
-  await user.selectOptions(screen.getByLabelText("Track type"), "synth");
+  await user.click(screen.getByRole("radio", { name: "Synth" }));
   await user.selectOptions(screen.getByLabelText("Instrument"), "synth.bass");
   await user.click(screen.getByRole("button", { name: "Create track" }));
   expect(screen.getByRole("button", { name: "Mute Bass" })).toBeVisible();
@@ -253,11 +261,11 @@ it("creates a synth track from the add-track controls", async () => {
 });
 ```
 
-- [ ] Run `pnpm exec vitest run src/components/Studio.test.tsx -t "creates a synth track"`; expect missing creation controls. Add store cases for the 16-track cap, invalid/blank names, wrong-kind preset, invalid/stale reorder targets, and deletion retaining patterns. Test track/mixer order together.
-- [ ] Add native labeled controls and catalog-driven choices. Construct new tracks with fresh IDs, a readable instrument-based name, `volumeDb: 0`, `pan: 0`, `muted: false`, and `soloed: false`; emit the existing `track.create` operation. Rename validates the trimmed 1–40-character input. Keep kind immutable and check instrument membership by kind.
-- [ ] Wire Move up/Move down and pointer reorder to the same action. Preview drag order locally; dispatch once on drop. Reject out-of-range `toIndex`; a same-index move is a no-op. For kit changes, inspect all drum patterns placed on that track and reject a kit that lacks any used sound.
-- [ ] Confirm track deletion when it will remove clips, showing the affected count and that patterns remain. Confirmation cancellation leaves both project and history unchanged. Restore focus to a surviving header or Add track after deletion.
-- [ ] Run `pnpm exec vitest run src/stores/studio-store.test.ts src/components/Studio.test.tsx`, `pnpm typecheck`, and `pnpm lint`; review diff, commit as `feat: add track management controls`, and request human review.
+- [x] Run `pnpm exec vitest run src/components/Studio.test.tsx -t "creates a synth track"`; expect missing creation controls. Add store cases for the 16-track cap, invalid/blank names, wrong-kind preset, invalid/stale reorder targets, and deletion retaining patterns. Test track/mixer order together.
+- [x] Add native labeled controls and catalog-driven choices. Construct new tracks with fresh IDs, a readable instrument-based name, `volumeDb: 0`, `pan: 0`, `muted: false`, and `soloed: false`; emit the existing `track.create` operation. Rename validates the trimmed 1–40-character input. Keep kind immutable and check instrument membership by kind.
+- [x] Wire Move up/Move down and pointer reorder to the same action. Preview drag order locally; dispatch once on drop. Reject out-of-range `toIndex`; a same-index move is a no-op. For kit changes, inspect all drum patterns placed on that track and reject a kit that lacks any used sound.
+- [x] Confirm track deletion when it will remove clips, showing the affected count and that patterns remain. Confirmation cancellation leaves both project and history unchanged. Restore focus to a surviving header or Add track after deletion.
+- [x] Run `pnpm exec vitest run src/stores/studio-store.test.ts src/components/Studio.test.tsx`, `pnpm typecheck`, and `pnpm lint`; review diff, commit as `feat: add track management controls`, and request human review.
 
 ## Task 5: Implement Reusable Pattern and Clip Actions
 

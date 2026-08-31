@@ -1,6 +1,6 @@
-import { act, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { Studio } from "@/components/Studio";
 import { Transport } from "@/components/Transport";
@@ -9,9 +9,77 @@ import { DEMO_PROJECT, EMPTY_PROJECT } from "@/data/studio-data";
 import { StudioProvider, useStudioStore } from "@/stores/studio-provider";
 import type { StudioState } from "@/stores/studio-store";
 
+beforeEach(() => {
+  HTMLDialogElement.prototype.showModal = function (): void { this.setAttribute("open", ""); };
+  HTMLDialogElement.prototype.close = function (): void { this.removeAttribute("open"); };
+});
 afterEach(() => vi.unstubAllGlobals());
 
 describe("Studio", () => {
+  it("opens track movement controls with the keyboard and cancels without history", async () => {
+    const user = userEvent.setup();
+    render(<Studio initialProject={DEMO_PROJECT} />);
+    screen.getByRole("button", { name: "Reorder Neon Kit" }).focus();
+    await user.keyboard("{Enter}");
+    expect(screen.getByRole("button", { name: "Move down" })).toBeVisible();
+    fireEvent(screen.getByRole("dialog"), new Event("cancel", { cancelable: true }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
+  });
+
+  it("creates a synth track from the add-track controls and undoes it", async () => {
+    const user = userEvent.setup();
+    render(<Studio initialProject={EMPTY_PROJECT} />);
+    await user.click(screen.getByRole("button", { name: "Add track" }));
+    await user.click(screen.getByRole("radio", { name: "Synth" }));
+    await user.selectOptions(screen.getByLabelText("Instrument"), "synth.bass");
+    await user.click(screen.getByRole("button", { name: "Create track" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Select track Bass" })).toHaveAttribute("aria-pressed", "true");
+    await user.click(screen.getByRole("button", { name: "Undo" }));
+    expect(screen.queryByRole("button", { name: "Select track Bass" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Redo" }));
+    expect(screen.getByRole("button", { name: "Select track Bass" })).toBeVisible();
+  });
+
+  it("renames, changes preset, and reorders a track in arrangement and mixer", async () => {
+    const user = userEvent.setup();
+    render(<Studio initialProject={DEMO_PROJECT} />);
+    await user.click(screen.getByRole("button", { name: "Edit Low Orbit" }));
+    await user.clear(screen.getByLabelText("Track name"));
+    await user.type(screen.getByLabelText("Track name"), "Sub bass");
+    await user.click(screen.getByRole("button", { name: "Rename track" }));
+    await user.selectOptions(screen.getByLabelText("Instrument"), "synth.pad");
+    await user.click(screen.getByRole("button", { name: "Move up" }));
+    expect(screen.getByRole("button", { name: "Move up" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Close track settings" }));
+    expect(screen.getAllByRole("button", { name: /Select track / })[0]).toHaveAccessibleName("Select track Sub bass");
+    await user.click(screen.getByRole("button", { name: "Mixer" }));
+    const mixer = within(screen.getByRole("region", { name: "Mixer channels" }));
+    expect(mixer.getAllByRole("group")[0]).toHaveAccessibleName("Sub bass channel");
+    expect(mixer.getAllByRole("group")[0]).toHaveTextContent("Pad");
+    await user.click(screen.getByRole("button", { name: "Undo" }));
+    expect(mixer.getAllByRole("group")[0]).toHaveAccessibleName("Neon Kit channel");
+  });
+
+  it("confirms affected clips before deleting a track and keeps reusable patterns", async () => {
+    const user = userEvent.setup();
+    render(<Studio initialProject={DEMO_PROJECT} />);
+    await user.click(screen.getByRole("button", { name: "Edit Neon Kit" }));
+    await user.click(screen.getByRole("button", { name: "Delete track" }));
+    expect(screen.getByRole("dialog")).toHaveTextContent("2 clips");
+    expect(screen.getByRole("dialog")).toHaveTextContent("Patterns remain");
+    await user.click(screen.getByRole("button", { name: "Keep track" }));
+    expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Delete track" }));
+    await user.click(screen.getByRole("button", { name: "Confirm delete" }));
+    expect(screen.queryByRole("region", { name: "Neon Kit lane" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Select pattern Neon beat" })).toHaveTextContent("Unplaced");
+    expect(screen.getByRole("button", { name: "Add track" })).toHaveFocus();
+    await user.click(screen.getByRole("button", { name: "Undo" }));
+    expect(screen.getByRole("region", { name: "Neon Kit lane" })).toBeVisible();
+  });
+
   it("selects shared clips and unplaced patterns using project content", async () => {
     const user = userEvent.setup();
     render(<Studio initialProject={DEMO_PROJECT} />);
