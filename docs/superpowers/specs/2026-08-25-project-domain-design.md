@@ -1,5 +1,11 @@
 # AgentDAW Project Domain Design
 
+> Historical specification. The 2026-08-30 trusted-input refactor supersedes this
+> document's internal validation, catalog dependency, and structured-error design.
+> The project package now assumes valid caller-supplied data and has no runtime
+> assertions, checked lookups, or validators. External adapters own input checks;
+> they are not implemented yet. See the README's internal input contract.
+
 # 1) Goals
 
 ## 1.1 Outcomes

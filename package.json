@@ -2,13 +2,19 @@
   "name": "agent-daw",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=23.6"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "lint": "eslint .",
-    "test": "vitest run",
+    "test": "npm run test:project && npm run test:ui",
+    "test:project": "node --disable-warning=ExperimentalWarning --test test/*.test.ts",
+    "test:ui": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit && tsc --project tsconfig.project.json"
   },
   "dependencies": {
     "next": "16.3.3",
@@ -21,7 +27,7 @@
     "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.6",
-    "@types/node": "26.3.0",
+    "@types/node": "^26.3.0",
     "@types/react": "19.2.18",
     "@types/react-dom": "19.2.5",
     "eslint": "9.39.5",
