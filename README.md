@@ -56,6 +56,12 @@ Dependency build scripts are allowed only for `esbuild` and `unrs-resolver`.
 
 - [Project design](docs/design.md) — approved scope, workflows, architecture,
   data model, WebMCP tools, history, failures, testing, and delivery schedule.
+- [Silent editor design](docs/superpowers/specs/2026-08-31-silent-editor-design.md)
+  — agreed UI interactions, independent patterns, clip-to-track routing, and
+  silent-only scope; supersedes the earlier pattern ownership model.
+- [Silent editor implementation plan](docs/superpowers/plans/2026-08-31-silent-editor.md)
+  — test-first delivery slices, acceptance checks, and the separate persistence
+  integration gate. These UI changes are planned, not implemented yet.
 
 ## Status
 
