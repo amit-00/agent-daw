@@ -512,7 +512,7 @@ Rollback removes the persistence-service files and development dependency. Store
 - [ ] Test and implement the load/write barrier in both operation orderings.
 - [ ] Test and implement recovery gating.
 - [ ] Test and implement clear barrier semantics.
-- [ ] Export the service through `src/persistence/index.ts`.
+- [ ] Import the service directly from `src/persistence/service.ts`.
 
 ## Verification
 

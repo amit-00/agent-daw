@@ -8,7 +8,7 @@ import {
   type Project,
   type SoundCatalog,
 } from "../src/project/index.ts";
-import { ProjectPersistenceService } from "../src/persistence/index.ts";
+import { ProjectPersistenceService } from "../src/persistence/service.ts";
 
 const DATABASE_NAME = "agent-daw";
 const DATABASE_VERSION = 1;

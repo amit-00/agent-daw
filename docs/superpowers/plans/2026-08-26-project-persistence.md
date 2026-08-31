@@ -28,7 +28,6 @@
 | File | Responsibility |
 |---|---|
 | `src/persistence/service.ts` | Public result types, IndexedDB helpers, `ProjectPersistenceService`, debounce/write state, error mapping, and recovery gate. |
-| `src/persistence/index.ts` | Public exports from the persistence package. |
 | `test/persistence.test.ts` | Integration tests against a fresh `fake-indexeddb` factory per test. |
 | `package.json` | Add `fake-indexeddb` as a development dependency. |
 | `package-lock.json` | Lock the approved dependency version and transitive metadata. |
@@ -41,7 +40,6 @@
 - Modify: `package.json`
 - Modify: `package-lock.json`
 - Create: `src/persistence/service.ts`
-- Create: `src/persistence/index.ts`
 - Create: `test/persistence.test.ts`
 
 **Interfaces:**
@@ -73,7 +71,7 @@ import {
   type Project,
   type SoundCatalog,
 } from "../src/project/index.ts";
-import { ProjectPersistenceService } from "../src/persistence/index.ts";
+import { ProjectPersistenceService } from "../src/persistence/service.ts";
 
 const DATABASE_NAME = "agent-daw";
 const DATABASE_VERSION = 1;
@@ -180,7 +178,7 @@ Run:
 node --disable-warning=ExperimentalWarning --test test/persistence.test.ts
 ```
 
-Expected: FAIL because `src/persistence/index.ts` does not exist.
+Expected: FAIL because `src/persistence/service.ts` does not exist.
 
 - [ ] **Step 4: Implement the public load types and native IndexedDB read path**
 
@@ -377,12 +375,6 @@ private async readStoredValue(): Promise<unknown> {
   const transaction = database.transaction(STORE_NAME, "readonly");
   return requestValue(transaction.objectStore(STORE_NAME).get(RECORD_KEY));
 }
-```
-
-Create `src/persistence/index.ts`:
-
-```ts
-export * from "./service.ts";
 ```
 
 - [ ] **Step 5: Run the persistence tests and typecheck**
@@ -1028,7 +1020,6 @@ git commit -m "test: cover persistence failures"
 
 **Files:**
 - Review only: `src/persistence/service.ts`
-- Review only: `src/persistence/index.ts`
 - Review only: `test/persistence.test.ts`
 - Review only: `package.json`
 - Review only: `package-lock.json`
@@ -1070,7 +1061,7 @@ git diff --stat main...HEAD
 git diff main...HEAD -- package.json src/persistence test/persistence.test.ts
 ```
 
-Expected: one development dependency, two production files, one test file, and the approved design/plan documents; no unrelated refactor.
+Expected: one development dependency, one production file, one test file, and the approved design/plan documents; no unrelated refactor.
 
 - [ ] **Step 4: Record the verification evidence**
 
