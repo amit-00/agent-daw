@@ -45,9 +45,15 @@ IndexedDB with no application backend.
 
 ## Status
 
-Project-domain foundation implemented: typed project data, complete command
-surface, atomic batches, attributed snapshot history, undo, redo, and restore.
-Audio and editor implementation are next.
+Project-domain and audio-engine foundations are implemented. Editor and UI
+integration are next.
+
+The audio runtime exports `AudioEngine`, `Sampler`, and `Synth` classes from
+`src/audio/index.ts`. Construct them with `new AudioEngine(platform)`,
+`new Sampler(options)`, or `new Synth(options)`; these replace the previous
+`createAudioEngine`, `createSampler`, and `createSynth` factories with the same
+arguments and public methods. Wrap instance methods when passing callbacks,
+for example `() => engine.stop()`.
 
 ## Internal input contract
 
