@@ -6,5 +6,5 @@ export default defineConfig([
   ...nextVitals,
   ...nextTypeScript,
   { files: ["test/**/*.ts"], rules: { "@typescript-eslint/no-unused-vars": ["warn", { argsIgnorePattern: "^_" }] } },
-  globalIgnores([".next/**", "out/**", "next-env.d.ts"]),
+  globalIgnores([".worktrees/**", ".next/**", "out/**", "next-env.d.ts"]),
 ]);
