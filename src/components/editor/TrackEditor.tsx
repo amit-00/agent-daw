@@ -5,7 +5,7 @@ import type { ReactElement } from "react";
 import { Mixer } from "@/components/editor/Mixer";
 import { PatternEditor } from "@/components/editor/PatternEditor";
 import { Icon } from "@/components/icons";
-import { useStudioStore } from "@/stores/studio-store";
+import { useStudioStore } from "@/stores/studio-provider";
 
 export function TrackEditor(): ReactElement {
   const editorTab = useStudioStore((state) => state.editorTab);

@@ -1,54 +1,55 @@
 "use client";
 
-import type { CSSProperties, ReactElement } from "react";
+import type { ReactElement } from "react";
 
+import { BASIC_DRUM_KIT } from "@/audio/catalog";
 import { PatternSidebar } from "@/components/editor/PatternSidebar";
-import { getClip, getPattern, getTrack, SEQUENCE_NOTES } from "@/data/studio-data";
-import { useStudioStore } from "@/stores/studio-store";
+import { useStudioStore } from "@/stores/studio-provider";
 
 export function PatternEditor(): ReactElement {
-  const selectedPatternId = useStudioStore((state) => state.selectedPatternId);
-  const sequenceSteps = useStudioStore((state) => state.sequenceSteps);
-  const toggleSequenceStep = useStudioStore((state) => state.toggleSequenceStep);
-  const pattern = getPattern(selectedPatternId);
-  const clip = getClip(pattern.clipId);
-  const track = getTrack(clip.trackId);
-
+  const { project, selectedPatternId, selectedClipId } = useStudioStore((state) => state);
+  const pattern = project.patterns.find((item) => item.id === selectedPatternId);
+  const clip = project.arrangement.find((item) => item.id === selectedClipId);
+  const track = project.tracks.find((item) => item.id === clip?.trackId);
+  const uses = project.arrangement.filter((item) => item.patternId === pattern?.id).length;
+  const pitches = pattern?.kind === "synth" ? [...new Set(pattern.events.map((note) => note.midiNote))].sort((a, b) => b - a) : [];
+  const rows = pattern?.kind === "drum"
+    ? BASIC_DRUM_KIT.sounds.map((sound) => ({ id: sound.id, label: sound.id[0]!.toUpperCase() + sound.id.slice(1) }))
+    : pitches.map((pitch) => ({ id: String(pitch), label: String(pitch) }));
+  const steps = (pattern?.lengthBars ?? 1) * 16;
   return (
     <div className="grid h-[calc(100%-42px)] grid-cols-[214px_minmax(0,1fr)]">
       <PatternSidebar />
-      <section className="h-full min-w-0 px-4 pt-3.5 pb-4" aria-label={`Pattern editor for ${track.name}`} style={{ "--sequence-color": track.color } as CSSProperties}>
-        <div className="flex min-h-11 items-start justify-between">
-          <span>
-            <small className="block text-[9px] font-semibold tracking-[0.12em] text-zinc-600">SELECTED TRACK</small>
-            <strong className="mt-1 block text-[11px] font-semibold text-zinc-300">{track.name}</strong>
-            <em className="mt-[3px] block text-[10px] not-italic text-zinc-600">{clip.name} · {clip.detail}</em>
-          </span>
-          <div className="flex gap-[5px]">
-            <button className="h-[27px] cursor-pointer rounded-md border border-white/10 bg-white/[0.03] px-2.5 text-[10px] text-zinc-500 hover:bg-white/[0.06] hover:text-zinc-300" type="button">1 / 16</button>
-            <button className="h-[27px] cursor-pointer rounded-md border border-white/10 bg-white/[0.03] px-2.5 text-[10px] text-zinc-500 hover:bg-white/[0.06] hover:text-zinc-300" type="button">100%</button>
+      {pattern ? (
+        <section className="flex min-h-0 min-w-0 flex-col px-4 py-3" aria-label={`Pattern editor for ${pattern.name}`}>
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <strong className="block text-xs text-zinc-200">{pattern.name}</strong>
+              <small className="mt-1 block text-[10px] text-zinc-400">{pattern.lengthBars} bars · {pattern.events.length} {pattern.kind === "drum" ? "hits" : "notes"} · {uses === 0 ? "Unplaced" : `${uses} placements`}{track ? ` · On ${track.name}` : ""}</small>
+            </div>
+            <span className="text-[10px] text-zinc-500">1/16 · Note editing coming next</span>
           </div>
-        </div>
-        <div className="mt-3 grid h-[calc(100%-56px)] grid-cols-[38px_1fr] grid-rows-[20px_1fr] overflow-hidden rounded-[7px] border border-white/10 bg-black/50">
-          <div className="col-start-2 grid grid-cols-16 border-b border-white/10 bg-white/[0.025]">
-            {Array.from({ length: 16 }, (_, step) => <span className="grid place-items-center border-l border-white/[0.04] font-mono text-[9px] text-zinc-600" key={step}>{step + 1}</span>)}
+          <div className="mt-3 min-h-0 flex-1 overflow-auto rounded border border-white/10 bg-black/50">
+            {rows.length === 0 ? <p className="p-4 text-xs text-zinc-500">This pattern has no notes.</p> : (
+              <div style={{ minWidth: 56 + steps * 24 }}>
+                <div className="ml-14 grid h-6 text-[9px] text-zinc-500" style={{ gridTemplateColumns: `repeat(${steps},1fr)` }}>
+                  {Array.from({ length: steps }, (_, index) => <span key={index} className="border-l border-white/5 text-center">{index + 1}</span>)}
+                </div>
+                {rows.map((row) => (
+                  <div className="flex h-10 border-t border-white/5" key={row.id}>
+                    <span className="sticky left-0 z-[1] grid w-14 shrink-0 place-items-center bg-zinc-950 text-[10px] text-zinc-400">{row.label}</span>
+                    <div className="relative flex-1 bg-[linear-gradient(90deg,rgba(255,255,255,0.06)_1px,transparent_1px)]" style={{ backgroundSize: `${100 / steps}% 100%` }}>
+                      {pattern.kind === "drum"
+                        ? pattern.events.filter((hit) => hit.soundId === row.id).map((hit) => <span key={hit.id} className="absolute inset-y-2 rounded bg-violet-400/70" style={{ left: `${hit.startStep / steps * 100}%`, width: `${100 / steps}%` }} />)
+                        : pattern.events.filter((note) => String(note.midiNote) === row.id).map((note) => <span key={note.id} className="absolute inset-y-2 rounded bg-violet-400/70" style={{ left: `${note.startStep / steps * 100}%`, width: `${note.lengthSteps / steps * 100}%` }} />)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
-          <div className="row-start-2 grid grid-rows-4 border-r border-white/10 bg-zinc-950">
-            {SEQUENCE_NOTES.map((note) => <span className="grid place-items-center border-b border-white/[0.045] font-mono text-[9px] text-zinc-500" key={note}>{note}</span>)}
-          </div>
-          <div className="col-start-2 row-start-2 grid grid-cols-16 grid-rows-4">
-            {Array.from({ length: 64 }, (_, step) => {
-              const active = sequenceSteps.has(step);
-              const note = SEQUENCE_NOTES[Math.floor(step / 16)];
-              return (
-                <button className={`relative cursor-pointer border-0 border-r border-b border-white/[0.04] bg-transparent p-0 hover:bg-white/[0.035] ${(step % 16) % 4 === 0 ? "border-l border-l-white/10" : ""}`} key={step} type="button" aria-label={`${active ? "Clear" : "Add"} ${note} at step ${(step % 16) + 1}`} aria-pressed={active} onClick={() => toggleSequenceStep(step)}>
-                  {active ? <span className="absolute inset-x-[12%] inset-y-1/4 rounded-[3px]" style={{ background: "color-mix(in srgb, var(--sequence-color) 78%, transparent)" }} /> : null}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      </section>
+        </section>
+      ) : <p className="p-6 text-xs text-zinc-500">Select a pattern to view its notes or hits.</p>}
     </div>
   );
 }
