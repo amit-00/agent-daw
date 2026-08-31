@@ -1,4 +1,3 @@
-import type { DomainErrorInfo } from "./errors.ts";
 import type { ArrangementClip, DrumHit, Pattern, PatternLengthBars, Project, SynthNote, Track } from "./model.ts";
 
 export interface EntityIds {
@@ -117,7 +116,7 @@ export interface HistoryEntry {
   readonly changes: ChangeSummary;
 }
 
-export interface DispatchSuccess {
+export interface DispatchResult {
   readonly ok: true;
   readonly changed: boolean;
   readonly deduplicated: boolean;
@@ -125,14 +124,6 @@ export interface DispatchSuccess {
   readonly historyEntry?: HistoryEntry;
   readonly changes: ChangeSummary;
 }
-
-export interface DispatchFailure {
-  readonly ok: false;
-  readonly project: Project;
-  readonly error: DomainErrorInfo;
-}
-
-export type DispatchResult = DispatchSuccess | DispatchFailure;
 
 export interface HistoryControlSuccess {
   readonly ok: true;

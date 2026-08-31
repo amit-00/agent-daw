@@ -551,8 +551,7 @@ export class AudioEngine {
       throw new Error("Audio engine runtime did not initialize");
     }
 
-    let pending: Promise<PrepareResult>;
-    pending = (async (): Promise<PrepareResult> => {
+    const pending: Promise<PrepareResult> = (async (): Promise<PrepareResult> => {
       try {
         await runtimeContext.resume();
       } catch (error) {

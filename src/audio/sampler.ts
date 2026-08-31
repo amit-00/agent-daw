@@ -49,8 +49,7 @@ export class Sampler {
     }
 
     const generation = this.preparationGeneration;
-    let preparation: Promise<SamplePreparation>;
-    preparation = Promise.allSettled(
+    const preparation: Promise<SamplePreparation> = Promise.allSettled(
       unavailableSounds.map(async ({ url }) => this.options.context.decodeAudioData(
         await this.options.loadArrayBuffer(url),
       )),

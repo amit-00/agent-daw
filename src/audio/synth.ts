@@ -127,7 +127,6 @@ export class Synth {
     let stopped = false;
     let cleaned = false;
     let resolveEnded = (): void => undefined;
-    let voice: SynthVoice;
 
     const cleanup = (): void => {
       if (cleaned) {
@@ -166,7 +165,7 @@ export class Synth {
     filter.connect(gain);
     gain.connect(destination);
 
-    voice = {
+    const voice: SynthVoice = {
       key: event.key,
       trackId: event.trackId,
       startedAt: audioTime,
