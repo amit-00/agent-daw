@@ -16,18 +16,6 @@ export interface SynthOptions {
   readonly stopRampSeconds: number;
 }
 
-export interface Synth {
-  schedule(
-    event: SynthTimelineEvent,
-    audioTime: number,
-    durationSeconds: number,
-    destination: AudioNode,
-  ): SynthVoice | undefined;
-  stopAll(audioTime: number): void;
-  stopTrack(trackId: string, audioTime: number): void;
-  activeVoiceCount(): number;
-}
-
 export const midiNoteToFrequency = (note: number): number =>
   440 * 2 ** ((note - 69) / 12);
 
@@ -83,22 +71,26 @@ const holdEnvelopeAtTime = (
   parameter.setValueAtTime(value, audioTime);
 };
 
-export function createSynth(options: SynthOptions): Synth {
-  if (!Number.isInteger(options.voiceCap) || options.voiceCap <= 0) {
-    throw new RangeError(`Synth voice cap must be a positive integer; received ${options.voiceCap}`);
-  }
-  if (!Number.isFinite(options.stopRampSeconds) || options.stopRampSeconds <= 0) {
-    throw new RangeError(
-      `Synth stop ramp seconds must be finite and greater than zero; received ${options.stopRampSeconds}`,
-    );
+export class Synth {
+  private readonly options: SynthOptions;
+  private readonly activeVoices = new Set<SynthVoice>();
+
+  constructor(options: SynthOptions) {
+    if (!Number.isInteger(options.voiceCap) || options.voiceCap <= 0) {
+      throw new RangeError(`Synth voice cap must be a positive integer; received ${options.voiceCap}`);
+    }
+    if (!Number.isFinite(options.stopRampSeconds) || options.stopRampSeconds <= 0) {
+      throw new RangeError(
+        `Synth stop ramp seconds must be finite and greater than zero; received ${options.stopRampSeconds}`,
+      );
+    }
+    this.options = options;
   }
 
-  const activeVoices = new Set<SynthVoice>();
-
-  const stopOldestVoice = (trackId: string, audioTime: number): void => {
+  private stopOldestVoice(trackId: string, audioTime: number): void {
     let oldestOnTrack: SynthVoice | undefined;
     let oldest: SynthVoice | undefined;
-    for (const voice of activeVoices) {
+    for (const voice of this.activeVoices) {
       if (oldest === undefined || voice.startedAt < oldest.startedAt) {
         oldest = voice;
       }
@@ -110,115 +102,113 @@ export function createSynth(options: SynthOptions): Synth {
       }
     }
     (oldestOnTrack ?? oldest)?.stop(audioTime);
-  };
+  }
 
-  return {
-    schedule(
-      event: SynthTimelineEvent,
-      audioTime: number,
-      durationSeconds: number,
-      destination: AudioNode,
-    ): SynthVoice | undefined {
-      const preset = findPreset(options.presets, event.instrumentId);
-      if (preset === undefined) {
-        return undefined;
+  schedule(
+    event: SynthTimelineEvent,
+    audioTime: number,
+    durationSeconds: number,
+    destination: AudioNode,
+  ): SynthVoice | undefined {
+    const preset = findPreset(this.options.presets, event.instrumentId);
+    if (preset === undefined) {
+      return undefined;
+    }
+    if (this.activeVoices.size >= this.options.voiceCap) {
+      this.stopOldestVoice(event.trackId, audioTime);
+    }
+
+    const oscillator = this.options.context.createOscillator();
+    const filter = this.options.context.createBiquadFilter();
+    const gain = this.options.context.createGain();
+    const releaseEnd = Math.round(
+      (audioTime + durationSeconds + preset.releaseSeconds) * 1_000_000_000,
+    ) / 1_000_000_000;
+    let stopped = false;
+    let cleaned = false;
+    let resolveEnded = (): void => undefined;
+    let voice: SynthVoice;
+
+    const cleanup = (): void => {
+      if (cleaned) {
+        return;
       }
-      if (activeVoices.size >= options.voiceCap) {
-        stopOldestVoice(event.trackId, audioTime);
-      }
+      cleaned = true;
+      this.activeVoices.delete(voice);
+      oscillator.disconnect();
+      filter.disconnect();
+      gain.disconnect();
+      resolveEnded();
+    };
 
-      const oscillator = options.context.createOscillator();
-      const filter = options.context.createBiquadFilter();
-      const gain = options.context.createGain();
-      const releaseEnd = Math.round(
-        (audioTime + durationSeconds + preset.releaseSeconds) * 1_000_000_000,
-      ) / 1_000_000_000;
-      let stopped = false;
-      let cleaned = false;
-      let resolveEnded = (): void => undefined;
-      let voice: SynthVoice;
+    const ended = new Promise<void>((resolve) => {
+      resolveEnded = resolve;
+    });
 
-      const cleanup = (): void => {
-        if (cleaned) {
+    oscillator.type = preset.oscillator;
+    oscillator.frequency.setValueAtTime(midiNoteToFrequency(event.midiNote), audioTime);
+    filter.type = "lowpass";
+    filter.frequency.setValueAtTime(preset.filterCutoffHz, audioTime);
+    filter.Q.setValueAtTime(preset.filterQ, audioTime);
+    gain.gain.setValueAtTime(0, audioTime);
+    gain.gain.linearRampToValueAtTime(preset.peakGain, audioTime + preset.attackSeconds);
+    gain.gain.linearRampToValueAtTime(
+      preset.peakGain * preset.sustainGain,
+      audioTime + preset.attackSeconds + preset.decaySeconds,
+    );
+    holdEnvelopeAtTime(
+      gain.gain,
+      audioTime + durationSeconds,
+      envelopeValueAtTime(preset, audioTime, durationSeconds, audioTime + durationSeconds),
+    );
+    gain.gain.linearRampToValueAtTime(0, releaseEnd);
+    oscillator.connect(filter);
+    filter.connect(gain);
+    gain.connect(destination);
+
+    voice = {
+      key: event.key,
+      trackId: event.trackId,
+      startedAt: audioTime,
+      ended,
+      stop: (stopAudioTime: number): void => {
+        if (stopped || cleaned) {
           return;
         }
-        cleaned = true;
-        activeVoices.delete(voice);
-        oscillator.disconnect();
-        filter.disconnect();
-        gain.disconnect();
-        resolveEnded();
-      };
+        stopped = true;
+        this.activeVoices.delete(voice);
+        holdEnvelopeAtTime(
+          gain.gain,
+          stopAudioTime,
+          envelopeValueAtTime(preset, audioTime, durationSeconds, stopAudioTime),
+        );
+        const stopEnd = Math.round((stopAudioTime + this.options.stopRampSeconds) * 1_000_000_000) / 1_000_000_000;
+        gain.gain.linearRampToValueAtTime(0, stopEnd);
+        oscillator.stop(stopEnd);
+      },
+    };
+    oscillator.onended = cleanup;
+    this.activeVoices.add(voice);
+    oscillator.start(audioTime);
+    oscillator.stop(releaseEnd);
+    return voice;
+  }
 
-      const ended = new Promise<void>((resolve) => {
-        resolveEnded = resolve;
-      });
+  stopAll(audioTime: number): void {
+    for (const voice of [...this.activeVoices]) {
+      voice.stop(audioTime);
+    }
+  }
 
-      oscillator.type = preset.oscillator;
-      oscillator.frequency.setValueAtTime(midiNoteToFrequency(event.midiNote), audioTime);
-      filter.type = "lowpass";
-      filter.frequency.setValueAtTime(preset.filterCutoffHz, audioTime);
-      filter.Q.setValueAtTime(preset.filterQ, audioTime);
-      gain.gain.setValueAtTime(0, audioTime);
-      gain.gain.linearRampToValueAtTime(preset.peakGain, audioTime + preset.attackSeconds);
-      gain.gain.linearRampToValueAtTime(
-        preset.peakGain * preset.sustainGain,
-        audioTime + preset.attackSeconds + preset.decaySeconds,
-      );
-      holdEnvelopeAtTime(
-        gain.gain,
-        audioTime + durationSeconds,
-        envelopeValueAtTime(preset, audioTime, durationSeconds, audioTime + durationSeconds),
-      );
-      gain.gain.linearRampToValueAtTime(0, releaseEnd);
-      oscillator.connect(filter);
-      filter.connect(gain);
-      gain.connect(destination);
-
-      voice = {
-        key: event.key,
-        trackId: event.trackId,
-        startedAt: audioTime,
-        ended,
-        stop(stopAudioTime: number): void {
-          if (stopped || cleaned) {
-            return;
-          }
-          stopped = true;
-          activeVoices.delete(voice);
-          holdEnvelopeAtTime(
-            gain.gain,
-            stopAudioTime,
-            envelopeValueAtTime(preset, audioTime, durationSeconds, stopAudioTime),
-          );
-          const stopEnd = Math.round((stopAudioTime + options.stopRampSeconds) * 1_000_000_000) / 1_000_000_000;
-          gain.gain.linearRampToValueAtTime(0, stopEnd);
-          oscillator.stop(stopEnd);
-        },
-      };
-      oscillator.onended = cleanup;
-      activeVoices.add(voice);
-      oscillator.start(audioTime);
-      oscillator.stop(releaseEnd);
-      return voice;
-    },
-
-    stopAll(audioTime: number): void {
-      for (const voice of [...activeVoices]) {
+  stopTrack(trackId: string, audioTime: number): void {
+    for (const voice of [...this.activeVoices]) {
+      if (voice.trackId === trackId) {
         voice.stop(audioTime);
       }
-    },
+    }
+  }
 
-    stopTrack(trackId: string, audioTime: number): void {
-      for (const voice of [...activeVoices]) {
-        if (voice.trackId === trackId) {
-          voice.stop(audioTime);
-        }
-      }
-    },
-
-    activeVoiceCount(): number {
-      return activeVoices.size;
-    },
-  };
+  activeVoiceCount(): number {
+    return this.activeVoices.size;
+  }
 }

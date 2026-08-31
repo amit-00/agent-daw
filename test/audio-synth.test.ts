@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { SYNTH_PRESETS, createSynth, midiNoteToFrequency } from "../src/audio/index.ts";
+import { SYNTH_PRESETS, Synth, midiNoteToFrequency } from "../src/audio/index.ts";
 import {
   disableCancelAndHoldAtTime,
   FakeAudioContext,
@@ -25,7 +25,7 @@ test("MIDI note conversion uses A4 as 440 Hz", () => {
 
 test("synth schedules the approved oscillator, filter, and envelope", () => {
   const context = new FakeAudioContext();
-  const synth = createSynth({
+  const synth = new Synth({
     context: context.asAudioContext(),
     presets: SYNTH_PRESETS,
     voiceCap: 64,
@@ -48,7 +48,7 @@ test("synth schedules the approved oscillator, filter, and envelope", () => {
 
 test("voice cap evicts the oldest voice on the requesting track first", () => {
   const context = new FakeAudioContext();
-  const synth = createSynth({
+  const synth = new Synth({
     context: context.asAudioContext(),
     presets: SYNTH_PRESETS,
     voiceCap: 2,
@@ -65,7 +65,7 @@ test("voice cap evicts the oldest voice on the requesting track first", () => {
 
 test("unknown preset is skipped and stopAll is idempotent", async () => {
   const context = new FakeAudioContext();
-  const synth = createSynth({
+  const synth = new Synth({
     context: context.asAudioContext(),
     presets: SYNTH_PRESETS,
     voiceCap: 64,
@@ -85,7 +85,7 @@ test("unknown preset is skipped and stopAll is idempotent", async () => {
 
 test("forced stop holds the envelope before its five millisecond fade", () => {
   const context = new FakeAudioContext();
-  const synth = createSynth({
+  const synth = new Synth({
     context: context.asAudioContext(),
     presets: SYNTH_PRESETS,
     voiceCap: 64,
@@ -107,7 +107,7 @@ test("forced stop holds the envelope before its five millisecond fade", () => {
 
 test("short pad note holds its envelope at note end before release", () => {
   const context = new FakeAudioContext();
-  const synth = createSynth({
+  const synth = new Synth({
     context: context.asAudioContext(),
     presets: SYNTH_PRESETS,
     voiceCap: 64,
@@ -133,7 +133,7 @@ test("synth fallback computes note-end and forced-stop envelope values", () => {
     disableCancelAndHoldAtTime(node.gain);
     return node;
   };
-  const synth = createSynth({
+  const synth = new Synth({
     context: context.asAudioContext(),
     presets: SYNTH_PRESETS,
     voiceCap: 64,
@@ -161,7 +161,7 @@ test("synth fallback computes note-end and forced-stop envelope values", () => {
 
 test("voice cap evicts the earliest requesting-track voice when scheduled out of order", () => {
   const context = new FakeAudioContext();
-  const synth = createSynth({
+  const synth = new Synth({
     context: context.asAudioContext(),
     presets: SYNTH_PRESETS,
     voiceCap: 2,
@@ -179,7 +179,7 @@ test("synth rejects non-finite and fractional caps and non-finite ramps", () => 
   const context = new FakeAudioContext();
   for (const voiceCap of [Number.NaN, Number.POSITIVE_INFINITY, 1.5]) {
     assert.throws(
-      () => createSynth({
+      () => new Synth({
         context: context.asAudioContext(),
         presets: SYNTH_PRESETS,
         voiceCap,
@@ -190,7 +190,7 @@ test("synth rejects non-finite and fractional caps and non-finite ramps", () => 
   }
   for (const stopRampSeconds of [Number.NaN, Number.POSITIVE_INFINITY]) {
     assert.throws(
-      () => createSynth({
+      () => new Synth({
         context: context.asAudioContext(),
         presets: SYNTH_PRESETS,
         voiceCap: 64,

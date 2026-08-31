@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { BASIC_DRUM_KIT, createSampler } from "../src/audio/index.ts";
+import { BASIC_DRUM_KIT, Sampler } from "../src/audio/index.ts";
 import { FakeAudioContext, FakeAudioNode } from "./audio-fakes.ts";
 
 test("sampler loads each sound once and reuses decoded buffers", async () => {
   const context = new FakeAudioContext();
   const loaded: string[] = [];
-  const sampler = createSampler({
+  const sampler = new Sampler({
     context: context.asAudioContext(),
     kit: BASIC_DRUM_KIT,
     loadArrayBuffer: async (url) => {
@@ -30,7 +30,7 @@ test("sampler loads each sound once and reuses decoded buffers", async () => {
 test("sampler degrades one failed sample without blocking siblings", async () => {
   const context = new FakeAudioContext();
   let failSnare = true;
-  const sampler = createSampler({
+  const sampler = new Sampler({
     context: context.asAudioContext(),
     kit: BASIC_DRUM_KIT,
     loadArrayBuffer: async (url) => {
@@ -69,7 +69,7 @@ test("sampler degrades one failed sample without blocking siblings", async () =>
 test("sampler reports decode failure without dropping decoded siblings", async () => {
   const context = new FakeAudioContext();
   context.decodeFailures = 1;
-  const sampler = createSampler({
+  const sampler = new Sampler({
     context: context.asAudioContext(),
     kit: BASIC_DRUM_KIT,
     loadArrayBuffer: async () => new ArrayBuffer(8),
@@ -84,7 +84,7 @@ test("clear prevents an earlier preparation from restoring decoded buffers", asy
   const loaded: string[] = [];
   const pendingLoads: Array<(value: ArrayBuffer) => void> = [];
   let holdLoads = true;
-  const sampler = createSampler({
+  const sampler = new Sampler({
     context: context.asAudioContext(),
     kit: BASIC_DRUM_KIT,
     loadArrayBuffer: async (url) => {
@@ -118,7 +118,7 @@ test("clear prevents an earlier preparation from restoring decoded buffers", asy
 test("scheduled drum source starts, stops once, and resolves cleanup", async () => {
   const context = new FakeAudioContext();
   const destination = new FakeAudioNode();
-  const sampler = createSampler({
+  const sampler = new Sampler({
     context: context.asAudioContext(),
     kit: BASIC_DRUM_KIT,
     loadArrayBuffer: async () => new ArrayBuffer(8),

@@ -1,9 +1,9 @@
 import type { Project, Track } from "../project/index.ts";
 import { BASIC_DRUM_KIT, SYNTH_PRESETS } from "./catalog.ts";
-import type { DrumSource, LoadArrayBuffer, Sampler } from "./sampler.ts";
-import { createSampler } from "./sampler.ts";
-import type { Synth, SynthVoice } from "./synth.ts";
-import { createSynth } from "./synth.ts";
+import type { DrumSource, LoadArrayBuffer } from "./sampler.ts";
+import { Sampler } from "./sampler.ts";
+import type { SynthVoice } from "./synth.ts";
+import { Synth } from "./synth.ts";
 import {
   arrangementEndStep,
   audioTimeForStep,
@@ -63,17 +63,6 @@ export interface AudioEnginePlatform {
   readonly clearInterval: (handle: unknown) => void;
 }
 
-export interface AudioEngine {
-  prepare(): Promise<PrepareResult>;
-  replaceProject(project: Project): void;
-  play(startStep: number): Promise<AudioControlResult>;
-  pause(): AudioControlResult;
-  seek(step: number): AudioControlResult;
-  stop(): AudioControlResult;
-  getSnapshot(): AudioEngineSnapshot;
-  dispose(): Promise<void>;
-}
-
 interface TrackBus {
   readonly gain: GainNode;
   readonly panner: StereoPannerNode;
@@ -104,110 +93,145 @@ const dbToGain = (decibels: number): number => 10 ** (decibels / 20);
 const isAutoplayPolicyError = (error: unknown): boolean =>
   error instanceof DOMException && error.name === "NotAllowedError";
 
-export function createAudioEngine(platform: AudioEnginePlatform): AudioEngine {
-  let context: AudioContext | undefined;
-  let sampler: Sampler | undefined;
-  let synth: Synth | undefined;
-  let master: GainNode | undefined;
-  let project: Project | undefined;
-  let projectFingerprint = "";
-  let projectArrangementEndStep = 0;
-  let status: AudioEngineStatus = "stopped";
-  let unavailableSoundIds: readonly string[] = [];
-  let lastIssue: AudioIssue | undefined;
-  let preparation: Promise<PrepareResult> | undefined;
-  let disposal: Promise<void> | undefined;
-  let positionStep = 0;
-  let anchorStep = 0;
-  let anchorAudioTime = 0;
-  let generation = 0;
-  let playIntentRevision = 0;
-  let scheduledHorizonAudioTime: number | undefined;
-  let schedulerTimer: { readonly handle: unknown } | undefined;
-  let lateWakeups = 0;
-  const trackBuses = new Map<string, TrackBus>();
-  const pendingSources = new Map<string, RetainedSource>();
-  const eventTombstones = new Map<string, EventTombstone>();
-  const mixerRamps = new WeakMap<AudioParam, MixerRamp>();
+const targetGain = (track: Track, hasSolo: boolean): number =>
+  track.muted || (hasSolo && !track.soloed) ? 0 : dbToGain(track.volumeDb);
 
-  const clampStep = (step: number): number => Math.min(
-    Math.max(Number.isNaN(step) ? 0 : step, 0),
-    projectArrangementEndStep,
-  );
+const blockedResult = (): {
+  readonly ok: false;
+  readonly code: "blocked";
+  readonly message: string;
+} => ({
+  ok: false,
+  code: "blocked",
+  message: "Audio context is suspended; retry from a user gesture",
+});
 
-  const currentPositionStep = (): number => {
-    if (status !== "playing" || context === undefined || project === undefined) {
-      return positionStep;
+const closedResult = (): {
+  readonly ok: false;
+  readonly code: "closed";
+  readonly message: string;
+} => ({
+  ok: false,
+  code: "closed",
+  message: "Audio engine is closed; create a new engine",
+});
+
+export class AudioEngine {
+  private readonly platform: AudioEnginePlatform;
+  private context: AudioContext | undefined;
+  private sampler: Sampler | undefined;
+  private synth: Synth | undefined;
+  private master: GainNode | undefined;
+  private project: Project | undefined;
+  private projectFingerprint: string = "";
+  private projectArrangementEndStep: number = 0;
+  private status: AudioEngineStatus = "stopped";
+  private unavailableSoundIds: readonly string[] = [];
+  private lastIssue: AudioIssue | undefined;
+  private preparation: Promise<PrepareResult> | undefined;
+  private disposal: Promise<void> | undefined;
+  private positionStep: number = 0;
+  private anchorStep: number = 0;
+  private anchorAudioTime: number = 0;
+  private generation: number = 0;
+  private playIntentRevision: number = 0;
+  private scheduledHorizonAudioTime: number | undefined;
+  private schedulerTimer: { readonly handle: unknown } | undefined;
+  private lateWakeups: number = 0;
+  private readonly trackBuses = new Map<string, TrackBus>();
+  private readonly pendingSources = new Map<string, RetainedSource>();
+  private readonly eventTombstones = new Map<string, EventTombstone>();
+  private readonly mixerRamps = new WeakMap<AudioParam, MixerRamp>();
+
+  constructor(platform: AudioEnginePlatform) {
+    this.platform = platform;
+  }
+
+  private clampStep(step: number): number {
+    return Math.min(
+      Math.max(Number.isNaN(step) ? 0 : step, 0),
+      this.projectArrangementEndStep,
+    );
+  }
+
+  private currentPositionStep(): number {
+    if (this.status !== "playing" || this.context === undefined || this.project === undefined) {
+      return this.positionStep;
     }
-    return clampStep(positionAtAudioTime(anchorStep, anchorAudioTime, context.currentTime, project.bpm));
-  };
+    return this.clampStep(positionAtAudioTime(
+      this.anchorStep,
+      this.anchorAudioTime,
+      this.context.currentTime,
+      this.project.bpm,
+    ));
+  }
 
-  const clearSchedulerTimer = (): void => {
-    if (schedulerTimer === undefined) {
+  private clearSchedulerTimer(): void {
+    if (this.schedulerTimer === undefined) {
       return;
     }
-    platform.clearInterval(schedulerTimer.handle);
-    schedulerTimer = undefined;
-  };
+    this.platform.clearInterval(this.schedulerTimer.handle);
+    this.schedulerTimer = undefined;
+  }
 
-  const stopPendingSources = (audioTime: number): void => {
-    for (const { source } of pendingSources.values()) {
+  private stopPendingSources(audioTime: number): void {
+    for (const { source } of this.pendingSources.values()) {
       source.stop(audioTime);
     }
-    pendingSources.clear();
-    eventTombstones.clear();
-  };
+    this.pendingSources.clear();
+    this.eventTombstones.clear();
+  }
 
-  const cancelPlayback = (): void => {
-    clearSchedulerTimer();
-    scheduledHorizonAudioTime = undefined;
-    if (context !== undefined) {
-      stopPendingSources(context.currentTime);
+  private cancelPlayback(): void {
+    this.clearSchedulerTimer();
+    this.scheduledHorizonAudioTime = undefined;
+    if (this.context !== undefined) {
+      this.stopPendingSources(this.context.currentTime);
     } else {
-      pendingSources.clear();
-      eventTombstones.clear();
+      this.pendingSources.clear();
+      this.eventTombstones.clear();
     }
-  };
+  }
 
-  const closeEngine = (closeContext: boolean): Promise<void> => {
-    if (disposal !== undefined) {
-      return disposal;
+  private closeEngine(closeContext: boolean): Promise<void> {
+    if (this.disposal !== undefined) {
+      return this.disposal;
     }
-    playIntentRevision += 1;
-    status = "closed";
-    preparation = undefined;
-    cancelPlayback();
-    positionStep = 0;
-    sampler?.clear();
-    synth?.stopAll(context?.currentTime ?? 0);
-    for (const bus of trackBuses.values()) {
+    this.playIntentRevision += 1;
+    this.status = "closed";
+    this.preparation = undefined;
+    this.cancelPlayback();
+    this.positionStep = 0;
+    this.sampler?.clear();
+    this.synth?.stopAll(this.context?.currentTime ?? 0);
+    for (const bus of this.trackBuses.values()) {
       bus.gain.disconnect();
       bus.panner.disconnect();
     }
-    trackBuses.clear();
-    master?.disconnect();
-    disposal = closeContext && context !== undefined && context.state !== "closed"
-      ? context.close()
+    this.trackBuses.clear();
+    this.master?.disconnect();
+    this.disposal = closeContext && this.context !== undefined && this.context.state !== "closed"
+      ? this.context.close()
       : Promise.resolve();
-    return disposal;
-  };
+    return this.disposal;
+  }
 
-  const stopTrackSources = (trackId: string, audioTime: number): void => {
-    for (const [eventKey, retained] of pendingSources) {
+  private stopTrackSources(trackId: string, audioTime: number): void {
+    for (const [eventKey, retained] of this.pendingSources) {
       if (retained.trackId !== trackId) {
         continue;
       }
       retained.source.stop(audioTime);
-      pendingSources.delete(eventKey);
+      this.pendingSources.delete(eventKey);
     }
-  };
+  }
 
-  const ramp = (parameter: AudioParam, value: number): void => {
-    const currentTime = context?.currentTime;
+  private ramp(parameter: AudioParam, value: number): void {
+    const currentTime = this.context?.currentTime;
     if (currentTime === undefined) {
       return;
     }
-    const previousRamp = mixerRamps.get(parameter);
+    const previousRamp = this.mixerRamps.get(parameter);
     const currentValue = previousRamp === undefined || currentTime >= previousRamp.endTime
       ? previousRamp?.endValue ?? parameter.value
       : previousRamp.startValue +
@@ -221,86 +245,83 @@ export function createAudioEngine(platform: AudioEnginePlatform): AudioEngine {
     }
     const endTime = currentTime + MIXER_RAMP_SECONDS;
     parameter.linearRampToValueAtTime(value, endTime);
-    mixerRamps.set(parameter, {
+    this.mixerRamps.set(parameter, {
       startTime: currentTime,
       startValue: currentValue,
       endTime,
       endValue: value,
     });
-  };
+  }
 
-  const targetGain = (track: Track, hasSolo: boolean): number =>
-    track.muted || (hasSolo && !track.soloed) ? 0 : dbToGain(track.volumeDb);
-
-  const synchronizeMixer = (): void => {
-    if (context === undefined || master === undefined || project === undefined) {
+  private synchronizeMixer(): void {
+    if (this.context === undefined || this.master === undefined || this.project === undefined) {
       return;
     }
 
-    const currentTrackIds = new Set(project.tracks.map(({ id }) => id));
-    for (const [trackId, bus] of trackBuses) {
+    const currentTrackIds = new Set(this.project.tracks.map(({ id }) => id));
+    for (const [trackId, bus] of this.trackBuses) {
       if (currentTrackIds.has(trackId)) {
         continue;
       }
-      synth?.stopTrack(trackId, context.currentTime);
-      stopTrackSources(trackId, context.currentTime);
+      this.synth?.stopTrack(trackId, this.context.currentTime);
+      this.stopTrackSources(trackId, this.context.currentTime);
       bus.gain.disconnect();
       bus.panner.disconnect();
-      trackBuses.delete(trackId);
+      this.trackBuses.delete(trackId);
     }
 
-    const hasSolo = project.tracks.some(({ soloed }) => soloed);
-    ramp(master.gain, dbToGain(project.masterVolumeDb));
-    for (const track of project.tracks) {
-      let bus = trackBuses.get(track.id);
+    const hasSolo = this.project.tracks.some(({ soloed }) => soloed);
+    this.ramp(this.master.gain, dbToGain(this.project.masterVolumeDb));
+    for (const track of this.project.tracks) {
+      let bus = this.trackBuses.get(track.id);
       if (bus === undefined) {
-        const gain = context.createGain();
-        const panner = context.createStereoPanner();
+        const gain = this.context.createGain();
+        const panner = this.context.createStereoPanner();
         gain.connect(panner);
-        panner.connect(master);
+        panner.connect(this.master);
         bus = { gain, panner };
-        trackBuses.set(track.id, bus);
+        this.trackBuses.set(track.id, bus);
       }
-      ramp(bus.gain.gain, targetGain(track, hasSolo));
-      ramp(bus.panner.pan, track.pan);
+      this.ramp(bus.gain.gain, targetGain(track, hasSolo));
+      this.ramp(bus.panner.pan, track.pan);
     }
-  };
+  }
 
-  const initializeRuntime = (): void => {
-    if (context !== undefined) {
+  private initializeRuntime(): void {
+    if (this.context !== undefined) {
       return;
     }
-    context = platform.createContext();
-    master = context.createGain();
-    master.connect(context.destination);
-    sampler = createSampler({
-      context,
+    this.context = this.platform.createContext();
+    this.master = this.context.createGain();
+    this.master.connect(this.context.destination);
+    this.sampler = new Sampler({
+      context: this.context,
       kit: BASIC_DRUM_KIT,
-      loadArrayBuffer: platform.loadArrayBuffer,
+      loadArrayBuffer: this.platform.loadArrayBuffer,
     });
-    synth = createSynth({
-      context,
+    this.synth = new Synth({
+      context: this.context,
       presets: SYNTH_PRESETS,
       voiceCap: 64,
       stopRampSeconds: MIXER_RAMP_SECONDS,
     });
-  };
+  }
 
-  const scheduleRange = (startStep: number, endStep: number): void => {
+  private scheduleRange(startStep: number, endStep: number): void {
     if (
-      project === undefined ||
-      context === undefined ||
-      sampler === undefined ||
-      synth === undefined ||
+      this.project === undefined ||
+      this.context === undefined ||
+      this.sampler === undefined ||
+      this.synth === undefined ||
       endStep <= startStep
     ) {
       return;
     }
 
-    const expansion = expandTimeline(project, startStep, endStep);
+    const expansion = expandTimeline(this.project, startStep, endStep);
     for (const issue of expansion.issues) {
       if (issue.code === "missing_pattern" || issue.code === "missing_track") {
-        lastIssue = {
+        this.lastIssue = {
           code: issue.code,
           message: issue.message,
           ...(issue.relatedId === undefined ? {} : { relatedId: issue.relatedId }),
@@ -309,12 +330,12 @@ export function createAudioEngine(platform: AudioEnginePlatform): AudioEngine {
     }
 
     for (const event of expansion.events) {
-      if (eventTombstones.get(event.key)?.generation === generation) {
+      if (this.eventTombstones.get(event.key)?.generation === this.generation) {
         continue;
       }
-      const bus = trackBuses.get(event.trackId);
+      const bus = this.trackBuses.get(event.trackId);
       if (bus === undefined) {
-        lastIssue = {
+        this.lastIssue = {
           code: "missing_track",
           message: "Timeline event references a missing mixer track",
           relatedId: event.trackId,
@@ -326,23 +347,23 @@ export function createAudioEngine(platform: AudioEnginePlatform): AudioEngine {
       try {
         const audioTime = audioTimeForStep(
           event.startStep,
-          anchorStep,
-          anchorAudioTime,
-          project.bpm,
+          this.anchorStep,
+          this.anchorAudioTime,
+          this.project.bpm,
         );
         source = event.kind === "drum"
-          ? sampler.schedule(event, audioTime, bus.gain)
-          : synth.schedule(
+          ? this.sampler.schedule(event, audioTime, bus.gain)
+          : this.synth.schedule(
             event,
             audioTime,
-            event.durationSteps * secondsPerStep(project.bpm),
+            event.durationSteps * secondsPerStep(this.project.bpm),
             bus.gain,
           );
       } catch (error) {
         if (!(error instanceof DOMException)) {
           throw error;
         }
-        lastIssue = {
+        this.lastIssue = {
           code: "source_failed",
           message: "Audio source could not be scheduled",
           relatedId: event.key,
@@ -351,7 +372,7 @@ export function createAudioEngine(platform: AudioEnginePlatform): AudioEngine {
       }
 
       if (source === undefined) {
-        lastIssue = event.kind === "drum"
+        this.lastIssue = event.kind === "drum"
           ? {
             code: "missing_sample",
             message: "Drum sample is unavailable",
@@ -369,381 +390,360 @@ export function createAudioEngine(platform: AudioEnginePlatform): AudioEngine {
         trackId: event.trackId,
         source,
       };
-      pendingSources.set(event.key, retained);
-      eventTombstones.set(event.key, {
-        generation,
+      this.pendingSources.set(event.key, retained);
+      this.eventTombstones.set(event.key, {
+        generation: this.generation,
         endStep: event.kind === "synth"
           ? event.startStep + event.durationSteps
           : event.startStep,
       });
       void source.ended.then(() => {
-        if (pendingSources.get(event.key)?.source === source) {
-          pendingSources.delete(event.key);
+        if (this.pendingSources.get(event.key)?.source === source) {
+          this.pendingSources.delete(event.key);
         }
       });
     }
-  };
+  }
 
-  const finishArrangement = (): void => {
-    clearSchedulerTimer();
-    scheduledHorizonAudioTime = undefined;
-    positionStep = projectArrangementEndStep;
-    status = "stopped";
-  };
+  private finishArrangement(): void {
+    this.clearSchedulerTimer();
+    this.scheduledHorizonAudioTime = undefined;
+    this.positionStep = this.projectArrangementEndStep;
+    this.status = "stopped";
+  }
 
-  const enterBlockedState = (): void => {
-    positionStep = currentPositionStep();
-    cancelPlayback();
-    status = "blocked";
-  };
+  private enterBlockedState(): void {
+    this.positionStep = this.currentPositionStep();
+    this.cancelPlayback();
+    this.status = "blocked";
+  }
 
-  const enterNonRunningContextState = (): "blocked" | "closed" => {
-    if (context?.state === "closed") {
-      closeEngine(false);
+  private enterNonRunningContextState(): "blocked" | "closed" {
+    if (this.context?.state === "closed") {
+      this.closeEngine(false);
       return "closed";
     }
-    enterBlockedState();
+    this.enterBlockedState();
     return "blocked";
-  };
+  }
 
-  const pruneEventTombstones = (currentStep: number): void => {
-    for (const [eventKey, { endStep }] of eventTombstones) {
+  private pruneEventTombstones(currentStep: number): void {
+    for (const [eventKey, { endStep }] of this.eventTombstones) {
       if (endStep < currentStep) {
-        eventTombstones.delete(eventKey);
+        this.eventTombstones.delete(eventKey);
       }
     }
-  };
+  }
 
-  const schedulerTick = (): void => {
-    if (status !== "playing" || context === undefined || project === undefined) {
+  private schedulerTick(): void {
+    if (this.status !== "playing" || this.context === undefined || this.project === undefined) {
       return;
     }
-    if (context.state !== "running") {
-      enterNonRunningContextState();
+    if (this.context.state !== "running") {
+      this.enterNonRunningContextState();
       return;
     }
 
-    let currentStep = positionStep;
+    let currentStep = this.positionStep;
     try {
-      const currentAudioTime = context.currentTime;
-      currentStep = currentPositionStep();
-      positionStep = currentStep;
-      pruneEventTombstones(currentStep);
-      if (currentStep >= projectArrangementEndStep) {
-        finishArrangement();
+      const currentAudioTime = this.context.currentTime;
+      currentStep = this.currentPositionStep();
+      this.positionStep = currentStep;
+      this.pruneEventTombstones(currentStep);
+      if (currentStep >= this.projectArrangementEndStep) {
+        this.finishArrangement();
         return;
       }
 
       const endStep = positionAtAudioTime(
-        anchorStep,
-        anchorAudioTime,
+        this.anchorStep,
+        this.anchorAudioTime,
         currentAudioTime + SCHEDULER_LOOKAHEAD_SECONDS,
-        project.bpm,
+        this.project.bpm,
       );
       if (
-        scheduledHorizonAudioTime !== undefined &&
-        currentAudioTime > scheduledHorizonAudioTime
+        this.scheduledHorizonAudioTime !== undefined &&
+        currentAudioTime > this.scheduledHorizonAudioTime
       ) {
-        lateWakeups += 1;
-        lastIssue = {
+        this.lateWakeups += 1;
+        this.lastIssue = {
           code: "late_scheduler",
           message: "Scheduler woke after its look-ahead horizon",
         };
-        stopPendingSources(currentAudioTime);
-        generation += 1;
-        scheduleRange(currentStep, endStep);
-        scheduledHorizonAudioTime = currentAudioTime + SCHEDULER_LOOKAHEAD_SECONDS;
+        this.stopPendingSources(currentAudioTime);
+        this.generation += 1;
+        this.scheduleRange(currentStep, endStep);
+        this.scheduledHorizonAudioTime = currentAudioTime + SCHEDULER_LOOKAHEAD_SECONDS;
         return;
       }
 
-      scheduleRange(currentStep, endStep);
-      scheduledHorizonAudioTime = Math.max(
-        scheduledHorizonAudioTime ?? 0,
+      this.scheduleRange(currentStep, endStep);
+      this.scheduledHorizonAudioTime = Math.max(
+        this.scheduledHorizonAudioTime ?? 0,
         currentAudioTime + SCHEDULER_LOOKAHEAD_SECONDS,
       );
     } catch (error) {
-      positionStep = currentStep;
-      cancelPlayback();
-      status = "stopped";
+      this.positionStep = currentStep;
+      this.cancelPlayback();
+      this.status = "stopped";
       throw error;
     }
-  };
+  }
 
-  const startPlayback = (requestedStep: number): void => {
-    if (context === undefined || project === undefined) {
+  private startPlayback(requestedStep: number): void {
+    if (this.context === undefined || this.project === undefined) {
       throw new Error("Audio engine runtime did not initialize");
     }
-    cancelPlayback();
-    positionStep = clampStep(requestedStep);
-    anchorStep = positionStep;
-    anchorAudioTime = context.currentTime + PLAYBACK_START_LEAD_SECONDS;
-    generation += 1;
-    status = "playing";
+    this.cancelPlayback();
+    this.positionStep = this.clampStep(requestedStep);
+    this.anchorStep = this.positionStep;
+    this.anchorAudioTime = this.context.currentTime + PLAYBACK_START_LEAD_SECONDS;
+    this.generation += 1;
+    this.status = "playing";
     try {
-      scheduleRange(
-        positionStep,
-        positionStep + SCHEDULER_LOOKAHEAD_SECONDS / secondsPerStep(project.bpm),
+      this.scheduleRange(
+        this.positionStep,
+        this.positionStep + SCHEDULER_LOOKAHEAD_SECONDS / secondsPerStep(this.project.bpm),
       );
-      scheduledHorizonAudioTime = anchorAudioTime + SCHEDULER_LOOKAHEAD_SECONDS;
-      schedulerTimer = {
-        handle: platform.setInterval(schedulerTick, SCHEDULER_TICK_MILLISECONDS),
+      this.scheduledHorizonAudioTime = this.anchorAudioTime + SCHEDULER_LOOKAHEAD_SECONDS;
+      this.schedulerTimer = {
+        handle: this.platform.setInterval(() => this.schedulerTick(), SCHEDULER_TICK_MILLISECONDS),
       };
     } catch (error) {
-      cancelPlayback();
-      status = "stopped";
+      this.cancelPlayback();
+      this.status = "stopped";
       throw error;
     }
-  };
+  }
 
-  const blockedResult = (): {
-    readonly ok: false;
-    readonly code: "blocked";
-    readonly message: string;
-  } => ({
-    ok: false,
-    code: "blocked",
-    message: "Audio context is suspended; retry from a user gesture",
-  });
-
-  const closedResult = (): {
-    readonly ok: false;
-    readonly code: "closed";
-    readonly message: string;
-  } => ({
-    ok: false,
-    code: "closed",
-    message: "Audio engine is closed; create a new engine",
-  });
-
-  const controlSuccess = (
+  private controlSuccess(
     successStatus: "playing" | "paused" | "stopped",
-  ): AudioControlResult => ({
-    ok: true,
-    status: successStatus,
-    positionStep: currentPositionStep(),
-  });
+  ): AudioControlResult {
+    return {
+      ok: true,
+      status: successStatus,
+      positionStep: this.currentPositionStep(),
+    };
+  }
 
-  const currentControlResult = (): AudioControlResult => {
-    if (status === "closed") {
+  private currentControlResult(): AudioControlResult {
+    if (this.status === "closed") {
       return closedResult();
     }
-    if (status === "blocked") {
+    if (this.status === "blocked") {
       return blockedResult();
     }
-    return controlSuccess(status);
-  };
+    return this.controlSuccess(this.status);
+  }
 
-  const engine: AudioEngine = {
-    prepare(): Promise<PrepareResult> {
-      if (status === "closed") {
-        return Promise.resolve(closedResult());
-      }
-      if (preparation !== undefined) {
-        return preparation;
-      }
+  prepare(): Promise<PrepareResult> {
+    if (this.status === "closed") {
+      return Promise.resolve(closedResult());
+    }
+    if (this.preparation !== undefined) {
+      return this.preparation;
+    }
 
-      initializeRuntime();
-      const runtimeContext = context;
-      const runtimeSampler = sampler;
-      if (runtimeContext === undefined || runtimeSampler === undefined) {
-        throw new Error("Audio engine runtime did not initialize");
-      }
+    this.initializeRuntime();
+    const runtimeContext = this.context;
+    const runtimeSampler = this.sampler;
+    if (runtimeContext === undefined || runtimeSampler === undefined) {
+      throw new Error("Audio engine runtime did not initialize");
+    }
 
-      let pending: Promise<PrepareResult>;
-      pending = (async (): Promise<PrepareResult> => {
-        try {
-          await runtimeContext.resume();
-        } catch (error) {
-          if (disposal !== undefined) {
-            return closedResult();
-          }
-          if (runtimeContext.state === "closed") {
-            closeEngine(false);
-            return closedResult();
-          }
-          if (!isAutoplayPolicyError(error)) {
-            throw error;
-          }
-          enterBlockedState();
-          return blockedResult();
-        }
-        if (disposal !== undefined) {
+    let pending: Promise<PrepareResult>;
+    pending = (async (): Promise<PrepareResult> => {
+      try {
+        await runtimeContext.resume();
+      } catch (error) {
+        if (this.disposal !== undefined) {
           return closedResult();
         }
-        if (runtimeContext.state !== "running") {
-          return enterNonRunningContextState() === "closed"
-            ? closedResult()
-            : blockedResult();
-        }
-
-        const samplePreparation = await runtimeSampler.prepare();
-        if (disposal !== undefined) {
+        if (runtimeContext.state === "closed") {
+          this.closeEngine(false);
           return closedResult();
         }
-        if (runtimeContext.state !== "running") {
-          return enterNonRunningContextState() === "closed"
-            ? closedResult()
-            : blockedResult();
+        if (!isAutoplayPolicyError(error)) {
+          throw error;
         }
-        unavailableSoundIds = [...samplePreparation.unavailableSoundIds];
-        lastIssue = unavailableSoundIds[0] === undefined
-          ? undefined
-          : {
-            code: "missing_sample",
-            message: "Drum sample is unavailable",
-            relatedId: unavailableSoundIds[0],
-          };
-        if (status === "blocked") {
-          status = "stopped";
-        }
-        synchronizeMixer();
-        return {
-          ok: true,
-          status: unavailableSoundIds.length === 0 ? "ready" : "degraded",
-          unavailableSoundIds: [...unavailableSoundIds],
-        };
-      })().finally(() => {
-        if (preparation === pending) {
-          preparation = undefined;
-        }
-      });
-      preparation = pending;
-      return pending;
-    },
-
-    replaceProject(nextProject: Project): void {
-      if (status === "closed") {
-        return;
-      }
-      const nextFingerprint = playbackFingerprint(nextProject);
-      const compositionChanged = nextFingerprint !== projectFingerprint;
-      const restartStep = status === "playing" && compositionChanged
-        ? currentPositionStep()
-        : undefined;
-      if (restartStep !== undefined) {
-        cancelPlayback();
-      }
-      project = nextProject;
-      projectFingerprint = nextFingerprint;
-      projectArrangementEndStep = arrangementEndStep(nextProject);
-      positionStep = clampStep(restartStep ?? positionStep);
-      synchronizeMixer();
-      if (restartStep === undefined) {
-        return;
-      }
-      if (positionStep >= projectArrangementEndStep) {
-        status = "stopped";
-        return;
-      }
-      startPlayback(positionStep);
-    },
-
-    async play(startStep: number): Promise<AudioControlResult> {
-      const intentRevision = ++playIntentRevision;
-      if (status === "closed") {
-        return closedResult();
-      }
-      if (project === undefined) {
-        return {
-          ok: false,
-          code: "no_project",
-          message: "No project is loaded",
-        };
-      }
-      if (project.arrangement.length === 0) {
-        return {
-          ok: false,
-          code: "nothing_to_play",
-          message: "Project arrangement is empty",
-        };
-      }
-
-      const prepared = await engine.prepare();
-      if (intentRevision !== playIntentRevision) {
-        return currentControlResult();
-      }
-      if (!prepared.ok) {
-        return prepared;
-      }
-      if (project.arrangement.length === 0) {
-        return {
-          ok: false,
-          code: "nothing_to_play",
-          message: "Project arrangement is empty",
-        };
-      }
-      startPlayback(startStep);
-      return controlSuccess("playing");
-    },
-
-    pause(): AudioControlResult {
-      playIntentRevision += 1;
-      if (status === "closed") {
-        return closedResult();
-      }
-      if (status === "blocked") {
+        this.enterBlockedState();
         return blockedResult();
       }
-      if (status !== "playing") {
-        return controlSuccess(status);
-      }
-      positionStep = currentPositionStep();
-      cancelPlayback();
-      status = "paused";
-      return controlSuccess("paused");
-    },
-
-    seek(step: number): AudioControlResult {
-      playIntentRevision += 1;
-      if (status === "closed") {
+      if (this.disposal !== undefined) {
         return closedResult();
       }
-      if (status === "blocked") {
-        return blockedResult();
+      if (runtimeContext.state !== "running") {
+        return this.enterNonRunningContextState() === "closed"
+          ? closedResult()
+          : blockedResult();
       }
-      const wasPlaying = status === "playing";
-      positionStep = clampStep(step);
-      if (wasPlaying) {
-        startPlayback(positionStep);
-      }
-      return controlSuccess(wasPlaying ? "playing" : status);
-    },
 
-    stop(): AudioControlResult {
-      playIntentRevision += 1;
-      if (status === "closed") {
+      const samplePreparation = await runtimeSampler.prepare();
+      if (this.disposal !== undefined) {
         return closedResult();
       }
-      if (status === "stopped" && positionStep === 0 && pendingSources.size === 0) {
-        return controlSuccess("stopped");
+      if (runtimeContext.state !== "running") {
+        return this.enterNonRunningContextState() === "closed"
+          ? closedResult()
+          : blockedResult();
       }
-      cancelPlayback();
-      positionStep = 0;
-      status = "stopped";
-      return controlSuccess("stopped");
-    },
-
-    getSnapshot(): AudioEngineSnapshot {
-      const issue = lastIssue === undefined ? undefined : { ...lastIssue };
+      this.unavailableSoundIds = [...samplePreparation.unavailableSoundIds];
+      this.lastIssue = this.unavailableSoundIds[0] === undefined
+        ? undefined
+        : {
+          code: "missing_sample",
+          message: "Drum sample is unavailable",
+          relatedId: this.unavailableSoundIds[0],
+        };
+      if (this.status === "blocked") {
+        this.status = "stopped";
+      }
+      this.synchronizeMixer();
       return {
-        status,
-        positionStep: currentPositionStep(),
-        arrangementEndStep: projectArrangementEndStep,
-        unavailableSoundIds: [...unavailableSoundIds],
-        activeVoices: synth?.activeVoiceCount() ?? 0,
-        pendingSources: pendingSources.size,
-        lateWakeups,
-        trackBusCount: trackBuses.size,
-        ...(issue === undefined ? {} : { lastIssue: issue }),
+        ok: true,
+        status: this.unavailableSoundIds.length === 0 ? "ready" : "degraded",
+        unavailableSoundIds: [...this.unavailableSoundIds],
       };
-    },
-
-    dispose(): Promise<void> {
-      if (disposal !== undefined) {
-        return disposal;
+    })().finally(() => {
+      if (this.preparation === pending) {
+        this.preparation = undefined;
       }
-      return closeEngine(true);
-    },
-  };
-  return engine;
+    });
+    this.preparation = pending;
+    return pending;
+  }
+
+  replaceProject(nextProject: Project): void {
+    if (this.status === "closed") {
+      return;
+    }
+    const nextFingerprint = playbackFingerprint(nextProject);
+    const compositionChanged = nextFingerprint !== this.projectFingerprint;
+    const restartStep = this.status === "playing" && compositionChanged
+      ? this.currentPositionStep()
+      : undefined;
+    if (restartStep !== undefined) {
+      this.cancelPlayback();
+    }
+    this.project = nextProject;
+    this.projectFingerprint = nextFingerprint;
+    this.projectArrangementEndStep = arrangementEndStep(nextProject);
+    this.positionStep = this.clampStep(restartStep ?? this.positionStep);
+    this.synchronizeMixer();
+    if (restartStep === undefined) {
+      return;
+    }
+    if (this.positionStep >= this.projectArrangementEndStep) {
+      this.status = "stopped";
+      return;
+    }
+    this.startPlayback(this.positionStep);
+  }
+
+  async play(startStep: number): Promise<AudioControlResult> {
+    const intentRevision = ++this.playIntentRevision;
+    if (this.status === "closed") {
+      return closedResult();
+    }
+    if (this.project === undefined) {
+      return {
+        ok: false,
+        code: "no_project",
+        message: "No project is loaded",
+      };
+    }
+    if (this.project.arrangement.length === 0) {
+      return {
+        ok: false,
+        code: "nothing_to_play",
+        message: "Project arrangement is empty",
+      };
+    }
+
+    const prepared = await this.prepare();
+    if (intentRevision !== this.playIntentRevision) {
+      return this.currentControlResult();
+    }
+    if (!prepared.ok) {
+      return prepared;
+    }
+    if (this.project.arrangement.length === 0) {
+      return {
+        ok: false,
+        code: "nothing_to_play",
+        message: "Project arrangement is empty",
+      };
+    }
+    this.startPlayback(startStep);
+    return this.controlSuccess("playing");
+  }
+
+  pause(): AudioControlResult {
+    this.playIntentRevision += 1;
+    if (this.status === "closed") {
+      return closedResult();
+    }
+    if (this.status === "blocked") {
+      return blockedResult();
+    }
+    if (this.status !== "playing") {
+      return this.controlSuccess(this.status);
+    }
+    this.positionStep = this.currentPositionStep();
+    this.cancelPlayback();
+    this.status = "paused";
+    return this.controlSuccess("paused");
+  }
+
+  seek(step: number): AudioControlResult {
+    this.playIntentRevision += 1;
+    if (this.status === "closed") {
+      return closedResult();
+    }
+    if (this.status === "blocked") {
+      return blockedResult();
+    }
+    const wasPlaying = this.status === "playing";
+    this.positionStep = this.clampStep(step);
+    if (wasPlaying) {
+      this.startPlayback(this.positionStep);
+    }
+    return this.controlSuccess(wasPlaying ? "playing" : this.status);
+  }
+
+  stop(): AudioControlResult {
+    this.playIntentRevision += 1;
+    if (this.status === "closed") {
+      return closedResult();
+    }
+    if (this.status === "stopped" && this.positionStep === 0 && this.pendingSources.size === 0) {
+      return this.controlSuccess("stopped");
+    }
+    this.cancelPlayback();
+    this.positionStep = 0;
+    this.status = "stopped";
+    return this.controlSuccess("stopped");
+  }
+
+  getSnapshot(): AudioEngineSnapshot {
+    const issue = this.lastIssue === undefined ? undefined : { ...this.lastIssue };
+    return {
+      status: this.status,
+      positionStep: this.currentPositionStep(),
+      arrangementEndStep: this.projectArrangementEndStep,
+      unavailableSoundIds: [...this.unavailableSoundIds],
+      activeVoices: this.synth?.activeVoiceCount() ?? 0,
+      pendingSources: this.pendingSources.size,
+      lateWakeups: this.lateWakeups,
+      trackBusCount: this.trackBuses.size,
+      ...(issue === undefined ? {} : { lastIssue: issue }),
+    };
+  }
+
+  dispose(): Promise<void> {
+    if (this.disposal !== undefined) {
+      return this.disposal;
+    }
+    return this.closeEngine(true);
+  }
 }

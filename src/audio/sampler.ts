@@ -20,16 +20,6 @@ export interface SamplerOptions {
   readonly loadArrayBuffer: LoadArrayBuffer;
 }
 
-export interface Sampler {
-  prepare(): Promise<SamplePreparation>;
-  schedule(
-    event: DrumTimelineEvent,
-    audioTime: number,
-    destination: AudioNode,
-  ): DrumSource | undefined;
-  clear(): void;
-}
-
 const samplePreparation = (
   kit: DrumKitDefinition,
   buffers: ReadonlyMap<DrumSoundId, AudioBuffer>,
@@ -38,91 +28,94 @@ const samplePreparation = (
   unavailableSoundIds: kit.sounds.filter(({ id }) => !buffers.has(id)).map(({ id }) => id),
 });
 
-export function createSampler(options: SamplerOptions): Sampler {
-  const buffers = new Map<DrumSoundId, AudioBuffer>();
-  let pendingPreparation: Promise<SamplePreparation> | undefined;
-  let preparationGeneration = 0;
+export class Sampler {
+  private readonly options: SamplerOptions;
+  private readonly buffers = new Map<DrumSoundId, AudioBuffer>();
+  private pendingPreparation: Promise<SamplePreparation> | undefined;
+  private preparationGeneration: number = 0;
 
-  return {
-    prepare(): Promise<SamplePreparation> {
-      if (pendingPreparation !== undefined) {
-        return pendingPreparation;
-      }
+  constructor(options: SamplerOptions) {
+    this.options = options;
+  }
 
-      const unavailableSounds = options.kit.sounds.filter(({ id }) => !buffers.has(id));
-      if (unavailableSounds.length === 0) {
-        return Promise.resolve(samplePreparation(options.kit, buffers));
-      }
+  prepare(): Promise<SamplePreparation> {
+    if (this.pendingPreparation !== undefined) {
+      return this.pendingPreparation;
+    }
 
-      const generation = preparationGeneration;
-      let preparation: Promise<SamplePreparation>;
-      preparation = Promise.allSettled(
-        unavailableSounds.map(async ({ url }) => options.context.decodeAudioData(
-          await options.loadArrayBuffer(url),
-        )),
-      ).then((results) => {
-        for (const [index, result] of results.entries()) {
-          if (generation === preparationGeneration && result.status === "fulfilled") {
-            const sound = unavailableSounds[index];
-            if (sound !== undefined) {
-              buffers.set(sound.id, result.value);
-            }
+    const unavailableSounds = this.options.kit.sounds.filter(({ id }) => !this.buffers.has(id));
+    if (unavailableSounds.length === 0) {
+      return Promise.resolve(samplePreparation(this.options.kit, this.buffers));
+    }
+
+    const generation = this.preparationGeneration;
+    let preparation: Promise<SamplePreparation>;
+    preparation = Promise.allSettled(
+      unavailableSounds.map(async ({ url }) => this.options.context.decodeAudioData(
+        await this.options.loadArrayBuffer(url),
+      )),
+    ).then((results) => {
+      for (const [index, result] of results.entries()) {
+        if (generation === this.preparationGeneration && result.status === "fulfilled") {
+          const sound = unavailableSounds[index];
+          if (sound !== undefined) {
+            this.buffers.set(sound.id, result.value);
           }
         }
-        return samplePreparation(options.kit, buffers);
-      }).finally(() => {
-        if (pendingPreparation === preparation) {
-          pendingPreparation = undefined;
-        }
-      });
-      pendingPreparation = preparation;
-      return preparation;
-    },
-
-    schedule(event: DrumTimelineEvent, audioTime: number, destination: AudioNode): DrumSource | undefined {
-      const buffer = buffers.get(event.soundId as DrumSoundId);
-      if (buffer === undefined) {
-        return undefined;
       }
+      return samplePreparation(this.options.kit, this.buffers);
+    }).finally(() => {
+      if (this.pendingPreparation === preparation) {
+        this.pendingPreparation = undefined;
+      }
+    });
+    this.pendingPreparation = preparation;
+    return preparation;
+  }
 
-      const node = options.context.createBufferSource();
-      let stopped = false;
-      let cleaned = false;
-      let resolveEnded: () => void;
-      const ended = new Promise<void>((resolve) => {
-        resolveEnded = resolve;
-      });
-      const cleanup = (): void => {
-        if (cleaned) {
+  schedule(event: DrumTimelineEvent, audioTime: number, destination: AudioNode): DrumSource | undefined {
+    const buffer = this.buffers.get(event.soundId as DrumSoundId);
+    if (buffer === undefined) {
+      return undefined;
+    }
+
+    const node = this.options.context.createBufferSource();
+    let stopped = false;
+    let cleaned = false;
+    let resolveEnded: () => void;
+    const ended = new Promise<void>((resolve) => {
+      resolveEnded = resolve;
+    });
+    const cleanup = (): void => {
+      if (cleaned) {
+        return;
+      }
+      cleaned = true;
+      node.disconnect();
+      resolveEnded();
+    };
+
+    node.buffer = buffer;
+    node.onended = cleanup;
+    node.connect(destination);
+    node.start(audioTime);
+
+    return {
+      key: event.key,
+      ended,
+      stop(stopAudioTime: number): void {
+        if (stopped || cleaned) {
           return;
         }
-        cleaned = true;
-        node.disconnect();
-        resolveEnded();
-      };
+        stopped = true;
+        node.stop(stopAudioTime);
+      },
+    };
+  }
 
-      node.buffer = buffer;
-      node.onended = cleanup;
-      node.connect(destination);
-      node.start(audioTime);
-
-      return {
-        key: event.key,
-        ended,
-        stop(stopAudioTime: number): void {
-          if (stopped || cleaned) {
-            return;
-          }
-          stopped = true;
-          node.stop(stopAudioTime);
-        },
-      };
-    },
-
-    clear(): void {
-      buffers.clear();
-      pendingPreparation = undefined;
-      preparationGeneration += 1;
-    },
-  };
+  clear(): void {
+    this.buffers.clear();
+    this.pendingPreparation = undefined;
+    this.preparationGeneration += 1;
+  }
 }
