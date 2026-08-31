@@ -7,7 +7,7 @@
 1. A beginner can start a blank desktop-browser project and create an instrumental song without importing audio.
 2. A user can program reusable drum and melodic patterns, arrange them, mix the tracks, play the result, and export WAV.
 3. An external agent can inspect and edit the same project through WebMCP, from full-song composition down to exact notes and drum hits.
-4. Manual and agent edits pass through one validated command service and are attributed in chronological history.
+4. Manual and agent edits pass through one command service after input-boundary validation and are attributed in chronological history.
 5. The user can undo, redo, or restore an earlier version without erasing history.
 6. The complete workflow is stable by September 1, leaving September 2–3 for submission and fixes.
 
@@ -115,7 +115,7 @@ src/
   app/                 # route, start screen, editor shell
   components/          # transport, arranger, sequencers, mixer, history
   audio/               # scheduler, sampler, synth, offline renderer
-  project/             # entities, commands, validation, reducer, history
+  project/             # entities, commands, reducer, history
   persistence/         # IndexedDB load and save
   webmcp/              # tool schemas, registration, adapters
 public/demo/           # demo project and bundled drum samples
@@ -140,7 +140,7 @@ flowchart LR
 
 ### 4.1 Mutation flow
 
-A completed manual gesture or WebMCP call produces a typed command. The command service validates identifiers, musical ranges, relationships, and caps before the reducer creates the next immutable state. Only a valid result commits, so UI and agent behavior cannot bypass attribution or history.
+A completed manual gesture or WebMCP call produces a typed command. Input adapters own validation of identifiers, musical ranges, relationships, and caps. The internal command service and reducer trust that data and create the next immutable state without repeating checks. Both paths share attribution and history. Input adapters are planned, not yet implemented.
 
 ### 4.2 Playback flow
 
@@ -152,7 +152,7 @@ Committed project and history state saves asynchronously to IndexedDB. WAV expor
 
 ## 5) WebMCP integration
 
-AgentDAW registers semantic tools with the WebMCP API in the challenge-supported browser. The integration requires no OAuth, key, webhook, or server. Inputs are untrusted and use the same validation as manual actions.
+AgentDAW registers semantic tools with the WebMCP API in the challenge-supported browser. The integration requires no OAuth, key, webhook, or server. Inputs are untrusted and must be validated at the WebMCP boundary before reaching the trusted project package.
 
 The UI displays registration status so unsupported browser setup is distinguishable from a project error. Exact registration syntax follows the challenge-supported WebMCP version during implementation; the contracts in Section 10 remain stable.
 
@@ -168,8 +168,8 @@ The UI displays registration status so unsupported browser setup is distinguisha
 
 | Failure | Behavior | Recovery |
 |---|---|---|
-| Invalid command | Reject without mutation. | Return an actionable field error. |
-| Invalid batch member | Reject the entire batch. | Correct the named operation. |
+| Invalid external command or batch | Input adapter rejects before dispatch. | Return an actionable field error from the adapter. |
+| Internal execution error | Propagate the exception without committing project or history. | Fix the caller or failing dependency. |
 | Duplicate command ID | Return the prior result. | Continue from current state. |
 
 Commits are synchronous and deterministic. Duplicate IDs are idempotent; JavaScript serialization prevents concurrent reducer writes.
@@ -413,16 +413,16 @@ Deletion rejects when dependencies remain unless the same batch removes them fir
 
 ### 10.3 Batch mutation
 
-`apply_operations` accepts a label and ordered list of the same direct operations. It validates against temporary state, then commits one agent entry. Unknown operations, invalid references, invalid dependencies, or more than 100 operations reject the full transaction.
+`apply_operations` accepts a label and ordered list of the same direct operations. Its API adapter must validate the whole batch against successive temporary states, including operation types, references, dependencies, and the 100-operation limit. The internal command service applies the trusted operations in order and commits one agent entry without revalidating them.
 
 ## 11) Security and privacy
 
 - No API keys or secrets.
 - Project data remains in-browser unless WAV is exported.
-- WebMCP inputs receive strict schema and domain validation.
+- WebMCP inputs receive strict schema and domain validation at the API boundary, not in the internal project package.
 - Text renders as text, never interpreted HTML.
-- IDs and numeric ranges validate before lookup, scheduling, or allocation.
-- Hard caps limit agent-generated CPU, memory, and storage use.
+- Input adapters validate IDs and numeric ranges before dispatch, scheduling, or allocation.
+- Input adapters enforce product caps; the project service only enforces history and command-cache retention.
 - Tool results contain metadata, never raw audio.
 - Agent changes are visible and reversible.
 - No authentication because there is no server or shared data.
@@ -512,7 +512,7 @@ Pull requests run installation, unit tests, typecheck, lint, and production buil
 
 ### 16.1 Automated checks
 
-- Command range, identifier, ownership, overlap, and dependency validation.
+- Input-adapter range, identifier, ownership, overlap, and dependency validation when those adapters are implemented.
 - Pattern and note editing.
 - Batch success and rollback at every failing position.
 - Attribution, history labels, undo, redo, restore, and redo invalidation.
@@ -532,7 +532,7 @@ Pull requests run installation, unit tests, typecheck, lint, and production buil
 ### Foundation
 
 - [ ] Bootstrap strict TypeScript and minimal tests.
-- [ ] Implement entities, caps, validation, reducer, and command service.
+- [ ] Implement entities, caps, reducer, and command service with trusted typed inputs.
 - [ ] Implement history grouping, undo, redo, and restore.
 
 ### Audio and UI
@@ -562,7 +562,7 @@ Pull requests run installation, unit tests, typecheck, lint, and production buil
 - Reusable drum and synth patterns feed a bar-aligned arrangement.
 - One preset synth covers bass, chords, leads, and pads.
 - Basic mixer, autosave, and WAV export complete the song workflow.
-- One command service enforces validation, attribution, and history.
+- Input adapters enforce validation; one trusted command service owns attribution and history.
 - Direct agent tools stay discoverable; batches stay atomic.
 - Undo, redo, restore, and compensating edits preserve user control.
 - Browser-only and local-first, with no model or backend.
