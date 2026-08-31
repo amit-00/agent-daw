@@ -42,6 +42,7 @@ export interface Track {
   readonly pan: number;
   readonly muted: boolean;
   readonly soloed: boolean;
+  readonly color?: string;
 }
 
 export interface ArrangementClip {

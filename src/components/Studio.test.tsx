@@ -16,6 +16,18 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe("Studio", () => {
+  it("uses a track's assigned color for its clips and pattern notes", async () => {
+    const user = userEvent.setup();
+    render(<Studio initialProject={{ ...DEMO_PROJECT,
+      tracks: DEMO_PROJECT.tracks.map((track) => track.id === "bass" ? { ...track, color: "#70bd72" } : track),
+    }} />);
+    const clip = within(screen.getByRole("region", { name: "Low Orbit lane" })).getAllByRole("button", { name: "Select Low Orbit phrase" })[0]!;
+    expect(clip).toHaveStyle({ background: "color-mix(in srgb, color-mix(in srgb, #70bd72 88%, white) 80%, transparent)" });
+    await user.click(clip);
+    const editor = screen.getByRole("region", { name: "Pattern editor for Low Orbit phrase" });
+    expect(editor.querySelector("span[style]")).toHaveStyle({ background: "color-mix(in srgb, #70bd72 78%, transparent)" });
+  });
+
   it("creates an unplaced pattern, renames it, and places it using one-based bars", async () => {
     const user = userEvent.setup();
     render(<Studio initialProject={DEMO_PROJECT} />);

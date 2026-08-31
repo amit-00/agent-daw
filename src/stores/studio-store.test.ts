@@ -4,6 +4,36 @@ import { DEMO_PROJECT, EMPTY_PROJECT } from "@/data/studio-data";
 import { createStudioStore } from "@/stores/studio-store";
 
 describe("studio session", () => {
+  it("assigns new tracks successive wheel colors and wraps to purple", () => {
+    const store = createStudioStore(EMPTY_PROJECT);
+    for (let index = 0; index < 9; index += 1) store.getState().createTrack("synth", "synth.pad");
+    expect(store.getState().project.tracks.map((track) => track.color)).toEqual([
+      "#9a69f5", "#d95fc8", "#ef6070", "#f18a4c", "#efbd52", "#70bd72", "#50b8b1", "#598fe3", "#9a69f5",
+    ]);
+    expect(store.getState().history).toHaveLength(9);
+  });
+
+  it("uses the current bottom track color and preserves assignments through edits and history", () => {
+    const store = createStudioStore(DEMO_PROJECT);
+    const greenId = store.getState().createTrack("synth", "synth.pad")!;
+    expect(store.getState().project.tracks.at(-1)?.color).toBe("#70bd72");
+    store.getState().renameTrack(greenId, "Layer");
+    store.getState().setTrackPreset(greenId, "synth.bass");
+    store.getState().reorderTrack("drums", 5);
+    const pinkId = store.getState().createTrack("drum", "kit.basic")!;
+    expect(store.getState().project.tracks.at(-1)).toMatchObject({ id: pinkId, color: "#d95fc8" });
+    expect(store.getState().project.tracks.find((track) => track.id === greenId)?.color).toBe("#70bd72");
+    store.getState().undo();
+    expect(store.getState().project.tracks.some((track) => track.id === pinkId)).toBe(false);
+    store.getState().redo();
+    expect(store.getState().project.tracks.at(-1)).toMatchObject({ id: pinkId, color: "#d95fc8" });
+    store.getState().deleteTrack(pinkId);
+    store.getState().createTrack("synth", "synth.lead");
+    expect(store.getState().project.tracks.at(-1)?.color).toBe("#d95fc8");
+    expect(store.getState().project.tracks.filter((track) => DEMO_PROJECT.tracks.some((original) => original.id === track.id)))
+      .toEqual([...DEMO_PROJECT.tracks.slice(1), DEMO_PROJECT.tracks[0]]);
+  });
+
   it("makes only the chosen clip unique in one undoable entry", () => {
     const store = createStudioStore(EMPTY_PROJECT);
     const trackId = store.getState().createTrack("drum", "kit.basic")!;
@@ -112,7 +142,7 @@ describe("studio session", () => {
     expect(bassId).not.toBe(drumId);
     expect(store.getState().project.tracks[1]).toEqual({
       id: bassId, name: "Bass", kind: "synth", instrumentId: "synth.bass",
-      volumeDb: 0, pan: 0, muted: false, soloed: false,
+      volumeDb: 0, pan: 0, muted: false, soloed: false, color: "#d95fc8",
     });
     expect(store.getState().selectedTrackId).toBe(bassId);
     expect(store.getState().history).toHaveLength(2);

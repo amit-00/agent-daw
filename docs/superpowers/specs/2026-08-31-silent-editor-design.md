@@ -108,7 +108,9 @@ Each mounted workstation owns its store/service instance, avoiding cross-instanc
 
 Selection consists of nullable track, pattern, and clip IDs plus editor-local selected note IDs. Selecting a clip selects its pattern and track. Selecting a pattern from the library clears clip-specific context; it may be edited without any placement. Clear references that disappear after delete/undo/restore, and show an empty-state prompt instead of using unchecked prototype getters.
 
-Track colors and friendly preset labels are presentation metadata, not new musical fields. Derive clip labels, event thumbnails, positions, and widths from the current project. The displayed arrangement must scroll to cover placements through the 256-bar cap rather than hiding everything after the prototype's eight bars. Show pattern usage counts and, when relevant, the selected clip's instrument context.
+Track colors and friendly preset labels are presentation metadata, not musical parameters. The approved color refinement records an optional `Track.color` on creation so existing project history preserves it. New tracks append after the current bottom track and take the next color in the wheel: purple → pink → coral → orange → yellow → green → teal → blue → purple. An empty project starts with purple. Assignment does not skip used colors, and rename, instrument changes, reordering, and undo/redo do not recolor existing tracks. Tracks without a recorded color retain the original identity-based colors; no schema conversion or recoloring of older projects is required. Clips and editor notes use the destination track's color.
+
+Derive clip labels, event thumbnails, positions, and widths from the current project. The displayed arrangement must scroll to cover placements through the 256-bar cap rather than hiding everything after the prototype's eight bars. Show pattern usage counts and, when relevant, the selected clip's instrument context.
 
 ## 4.3 Editing boundary
 
@@ -123,7 +125,7 @@ Validate actual text/numeric input and the affected musical relationships: exist
 | Entity | Fields | Change |
 | --- | --- | --- |
 | Project | `schemaVersion: 2`, `id`, `name`, `bpm`, `masterVolumeDb`, ordered `tracks`, `patterns`, `arrangement` | Bump schema version; collections remain arrays. |
-| Track | `id`, `name`, `kind`, `instrumentId`, `volumeDb`, `pan`, `muted`, `soloed` | No added fields. Array order controls arrangement and mixer order. |
+| Track | `id`, `name`, `kind`, `instrumentId`, `volumeDb`, `pan`, `muted`, `soloed`, optional `color` | Array order controls arrangement and mixer order. Color is assigned once for newly created UI tracks. |
 | Drum pattern | `id`, `name`, `kind: "drum"`, `lengthBars`, `events: DrumHit[]` | Remove `trackId`. |
 | Synth pattern | `id`, `name`, `kind: "synth"`, `lengthBars`, `events: SynthNote[]` | Remove `trackId`. |
 | Clip | `id`, `patternId`, `trackId`, `startBar`, `repeatCount` | Add required `trackId`. |

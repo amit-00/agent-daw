@@ -11,9 +11,10 @@ export function Clip({ clip, pattern, bars, onEdit }: Readonly<{
 }>): ReactElement {
   const selected = useStudioStore((state) => state.selectedClipId === clip.id);
   const selectClip = useStudioStore((state) => state.selectClip);
+  const track = useStudioStore((state) => state.project.tracks.find((item) => item.id === clip.trackId)!);
   const marksId = useId();
   const steps = pattern.lengthBars * 16;
-  const color = getTrackColor(clip.trackId);
+  const color = getTrackColor(track);
   return (
     <>
     <button type="button" aria-label={`Select ${pattern.name}`} aria-pressed={selected} onClick={() => selectClip(clip.id)}

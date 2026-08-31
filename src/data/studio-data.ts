@@ -1,4 +1,4 @@
-import type { Project } from "@/project";
+import type { Project, Track } from "@/project";
 
 export const EMPTY_PROJECT: Project = {
   schemaVersion: 2, id: "session", name: "Untitled", bpm: 120, masterVolumeDb: 0,
@@ -15,9 +15,14 @@ const TRACK_COLORS: ReadonlyMap<string, string> = new Map([
   ["melody", "#f18a4c"], ["pad", "#efbd52"],
 ]);
 
-export function getTrackColor(trackId: string): string {
-  const index = Array.from(trackId).reduce((sum, character) => sum + character.charCodeAt(0), 0);
-  return TRACK_COLORS.get(trackId) ?? [...TRACK_COLORS.values()][index % TRACK_COLORS.size]!;
+export const TRACK_COLOR_WHEEL: readonly string[] = [
+  ...TRACK_COLORS.values(), "#70bd72", "#50b8b1", "#598fe3",
+];
+
+export function getTrackColor(track: Pick<Track, "id" | "color">): string {
+  if (track.color) return track.color;
+  const index = Array.from(track.id).reduce((sum, character) => sum + character.charCodeAt(0), 0);
+  return TRACK_COLORS.get(track.id) ?? [...TRACK_COLORS.values()][index % TRACK_COLORS.size]!;
 }
 
 export const DEMO_PROJECT: Project = {

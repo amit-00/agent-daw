@@ -21,7 +21,8 @@ export function PatternEditor(): ReactElement {
     : pitches.map((pitch) => ({ id: String(pitch), label: `${NOTE_NAMES[pitch % 12]}${Math.floor(pitch / 12) - 1}` }));
   const steps = (pattern?.lengthBars ?? 1) * 16;
   const colorTrackId = track?.id ?? project.arrangement.find((item) => item.patternId === pattern?.id)?.trackId;
-  const color = getTrackColor(colorTrackId ?? pattern?.id ?? "");
+  const colorTrack = project.tracks.find((item) => item.id === colorTrackId);
+  const color = getTrackColor(colorTrack ?? pattern ?? { id: "" });
   return (
     <div className="grid h-[calc(100%-42px)] grid-cols-[214px_minmax(0,1fr)]">
       <PatternSidebar />

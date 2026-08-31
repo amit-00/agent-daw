@@ -1,7 +1,7 @@
 import { createStore, type StoreApi } from "zustand/vanilla";
 
 import { SOUND_CATALOG } from "@/audio/catalog";
-import { INSTRUMENT_NAMES } from "@/data/studio-data";
+import { getTrackColor, INSTRUMENT_NAMES, TRACK_COLOR_WHEEL } from "@/data/studio-data";
 import { PROJECT_CAPS, ProjectService, type Command, type DispatchResult, type Operation, type Pattern, type PatternLengthBars, type Project, type ProjectServiceState, type TrackKind } from "@/project";
 import { getDrumKitProblem, getPatternLengthProblem, getPlacementProblem } from "@/stores/studio-edits";
 import type { EditorTab } from "@/types/studio";
@@ -136,8 +136,11 @@ export function createStudioStore(initialProject: Project): StoreApi<StudioState
         }
         const id = crypto.randomUUID();
         const name = INSTRUMENT_NAMES[instrumentId] ?? instrumentId;
+        const lastTrack = get().project.tracks.at(-1);
+        const colorIndex = lastTrack ? (TRACK_COLOR_WHEEL.indexOf(getTrackColor(lastTrack)) + 1) % TRACK_COLOR_WHEEL.length : 0;
         commit(`Create ${name}`, { type: "track.create", track: {
           id, name, kind, instrumentId, volumeDb: 0, pan: 0, muted: false, soloed: false,
+          color: TRACK_COLOR_WHEEL[colorIndex]!,
         } });
         get().selectTrack(id);
         return id;
