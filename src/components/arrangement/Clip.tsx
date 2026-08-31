@@ -17,9 +17,9 @@ export function Clip({ clip, pattern, bars, onEdit }: Readonly<{
   const color = getTrackColor(track);
   return (
     <>
-    <button type="button" aria-label={`Select ${pattern.name}`} aria-pressed={selected} onClick={() => selectClip(clip.id)}
+    <button type="button" data-clip-id={clip.id} aria-label={`Select ${pattern.name}`} aria-pressed={selected} onClick={() => selectClip(clip.id)}
       onContextMenu={(event) => { event.preventDefault(); selectClip(clip.id); onEdit(); }}
-      className="absolute top-0 h-full cursor-pointer overflow-hidden rounded-[3px] border p-0 text-left text-[rgba(20,12,24,0.72)] transition-[filter,transform] duration-150 hover:-translate-y-px hover:brightness-110 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-300"
+      className="absolute top-0 h-full touch-none cursor-grab overflow-hidden rounded-[3px] border p-0 text-left text-[rgba(20,12,24,0.72)] transition-[filter,transform] duration-150 hover:-translate-y-px hover:brightness-110 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-300"
       style={{ left: `${clip.startBar / bars * 100}%`, width: `calc(${pattern.lengthBars * clip.repeatCount / bars * 100}% - 2px)`,
         background: `color-mix(in srgb, color-mix(in srgb, ${color} 88%, white) 80%, transparent)`,
         borderColor: selected ? "rgba(255, 255, 255, 0.85)" : `color-mix(in srgb, ${color}, #fff 8%)` }}>
@@ -38,6 +38,11 @@ export function Clip({ clip, pattern, bars, onEdit }: Readonly<{
     <button type="button" aria-label={`Edit clip ${pattern.name} at bar ${clip.startBar + 1}`} onClick={() => { selectClip(clip.id); onEdit(); }}
       className="absolute top-1 z-[2] rounded px-1 py-0.5 text-[9px] text-black/60 hover:bg-white/20 focus-visible:outline-2 focus-visible:outline-violet-300"
       style={{ right: `calc(${100 - (clip.startBar + pattern.lengthBars * clip.repeatCount) / bars * 100}% + 5px)` }}>•••</button>
+    <button type="button" data-resize-clip-id={clip.id} aria-label={`Resize repeats for ${pattern.name} at bar ${clip.startBar + 1}`}
+      title="Drag to repeat the pattern. Activate to edit the repeat count."
+      onClick={() => { selectClip(clip.id); onEdit(); }}
+      className="absolute inset-y-0 z-[3] w-2 touch-none cursor-ew-resize rounded-r-[3px] focus-visible:outline-2 focus-visible:outline-violet-300"
+      style={{ right: `calc(${100 - (clip.startBar + pattern.lengthBars * clip.repeatCount) / bars * 100}% + 2px)` }} />
     </>
   );
 }

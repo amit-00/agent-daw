@@ -24,8 +24,8 @@ export function PatternSidebar(): ReactElement {
           const active = selectedPatternId === pattern.id;
           return (
             <div key={pattern.id} className="relative min-w-0">
-            <button type="button" aria-label={`Select pattern ${pattern.name}`} aria-pressed={active} onClick={() => selectPattern(pattern.id)}
-              className={`w-full min-w-0 cursor-pointer rounded-md border px-[9px] py-2 pr-6 text-left ${active ? "border-violet-400/40 bg-violet-400/15 text-violet-100" : "border-transparent bg-transparent text-zinc-500 hover:bg-white/[0.045] hover:text-zinc-300"}`}>
+            <button type="button" data-pattern-id={pattern.id} aria-label={`Select pattern ${pattern.name}`} aria-pressed={active} onClick={() => selectPattern(pattern.id)}
+              className={`w-full min-w-0 touch-none cursor-grab rounded-md border px-[9px] py-2 pr-6 text-left ${active ? "border-violet-400/40 bg-violet-400/15 text-violet-100" : "border-transparent bg-transparent text-zinc-500 hover:bg-white/[0.045] hover:text-zinc-300"}`}>
               <strong className="block overflow-hidden text-[10px] font-semibold text-ellipsis whitespace-nowrap">{pattern.name}</strong>
               <small className={`mt-[3px] block overflow-hidden text-[9px] text-ellipsis whitespace-nowrap ${active ? "text-violet-300/75" : "text-zinc-600"}`}>{pattern.lengthBars} {pattern.lengthBars === 1 ? "bar" : "bars"} · {uses === 0 ? "Unplaced" : `${uses} ${uses === 1 ? "placement" : "placements"}`}</small>
             </button>

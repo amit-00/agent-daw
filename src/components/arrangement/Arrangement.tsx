@@ -68,7 +68,7 @@ export function Arrangement(): ReactElement {
     return Math.max(end, clip.startBar + (pattern?.lengthBars ?? 0) * clip.repeatCount);
   }, 8);
   return (
-    <div ref={scroller} className="min-h-0 overflow-auto [scrollbar-color:#29292e_transparent] [scrollbar-width:thin]"
+    <div ref={scroller} data-arrangement-scroll className="min-h-0 overflow-auto [scrollbar-color:#29292e_transparent] [scrollbar-width:thin]"
       onPointerMove={(event) => {
         if (drag && event.pointerId === drag.pointerId) setDrag({ ...drag, clientY: event.clientY, toIndex: positionAt(event.clientY) });
       }}
@@ -81,7 +81,7 @@ export function Arrangement(): ReactElement {
       onPointerCancel={cancelDrag} onLostPointerCapture={() => setDrag(null)}
       onKeyDown={(event) => { if (drag && event.key === "Escape") { event.preventDefault(); cancelDrag(); } }}
       onScroll={() => { if (drag) setDrag({ ...drag, toIndex: positionAt(drag.clientY) }); }}>
-      <section className="relative grid h-full min-h-[650px] grid-cols-[154px_minmax(730px,1fr)] content-start bg-black bg-[linear-gradient(90deg,rgba(255,255,255,0.12)_2px,transparent_2px),linear-gradient(90deg,rgba(255,255,255,0.055)_1px,transparent_1px)] [background-position:154px_0,154px_0]" aria-label="Song arrangement"
+      <section data-bars={bars} className="relative grid h-full min-h-[650px] grid-cols-[154px_minmax(730px,1fr)] content-start bg-black bg-[linear-gradient(90deg,rgba(255,255,255,0.12)_2px,transparent_2px),linear-gradient(90deg,rgba(255,255,255,0.055)_1px,transparent_1px)] [background-position:154px_0,154px_0]" aria-label="Song arrangement"
         style={{ minWidth: 154 + bars * 92, gridTemplateRows: `39px repeat(${project.tracks.length},112px)`,
           backgroundSize: `calc((100% - 154px) * 4 / ${bars}) 100%, calc((100% - 154px) / ${bars * 2}) 100%` }}>
         <div className="sticky left-0 z-[3] flex items-center justify-between border-r border-b border-white/10 bg-black px-[11px] text-[10px] tracking-[0.12em] text-zinc-600">

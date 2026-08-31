@@ -35,9 +35,13 @@ Task 1 was accepted and Tasks 2–4 were grouped inline into the next user-testa
 
 The track-management checkpoint was accepted. Task 5 is now implemented inline: library pattern creation, rename/length/duplication/deletion, compatible placement, atomic empty-lane creation, numeric clip routing/start/repeats, shared duplication, and Make unique. Open the small pattern/clip options buttons for controls; double-click empty lane space or use Track settings → Create pattern here. Pattern deletion confirms every affected placement, and removing a clip retains its pattern. The existing native track dialog was extracted into `EditorDialog.tsx` for reuse; `PatternControls.tsx` holds the new forms. Clip settings are owned by the arrangement so moving a clip across tracks does not destroy its open dialog.
 
-Tasks 6–11 remain pending. Pattern events are still read-only; clip dragging and repeat-edge resizing are not connected, and mixer adjustment controls remain disabled. There is no audio or persistence, and refreshing resets this demo session. Review the pattern/clip checkpoint before starting Task 6.
+The pattern/clip and color checkpoints were accepted. Task 6 is now implemented inline: bar-snapped clip movement, compatible cross-track dragging, library drag-to-place, and whole-pattern repeat-edge resizing. Gestures preview locally and commit once; cancellation and rejected drops do not edit project/history. The existing numeric placement controls remain available. Task 6 is ready for human review before starting Task 7.
 
-Verification after the color refinement: 170 tests pass (106 domain/audio/migration, 64 UI), along with typechecking, lint, production build, and diff checks. Browser checks in a separate session cover creation, rename/length, placement beyond eight bars, numeric cross-track movement/repeats, shared duplication, Make unique, deletion confirmation/cancellation, and deletion focus. The user's original in-memory session was preserved. No dependencies, generic runtime validation infrastructure, or main-branch changes were added.
+Tasks 7–11 remain pending. Pattern events are still read-only, and mixer adjustment controls remain disabled. There is no audio or persistence, and refreshing resets this demo session.
+
+Verification after Task 6: 194 tests pass (106 domain/audio/migration, 88 UI), along with typechecking, lint, production build, and diff checks. The 24 new gesture tests cover snapping/grab offsets, scrolling, stale/deleted targets, newly introduced collisions, pointer cancellation/Escape/lost capture, repeat limits, final-bar overflow, and focus. Browser checks in a separate session confirm native pointer capture for resize/movement/library placement, cross-track movement, one-entry history, incompatible/outside-lane refusal, and horizontal scrolling through bars 16–17. Earlier checks cover creation, rename/length, numeric cross-track movement/repeats, shared duplication, Make unique, deletion confirmation/cancellation, and deletion focus. The user's original in-memory session was preserved. No dependencies, generic runtime validation infrastructure, or main-branch changes were added.
+
+Task 6 implementation detail: `ArrangementGestures.tsx` owns local gesture state on the existing shared arrangement/editor container. This keeps capture alive when a clip changes lanes and connects sidebar placement without a global drag store or new service actions. The original grid classes remain unchanged; a temporary ghost/status appears only while dragging or reporting an outside-lane drop. Drag focus uses `preventScroll` so partially visible clips do not shift the viewport. Full-studio tests live in `ArrangementGestures.test.tsx`; existing track-reorder tests remain in `Arrangement.test.tsx`.
 
 Approved color refinement: newly created tracks record an optional `color`, chosen once from the next wheel entry after the current bottom track (purple → pink → coral → orange → yellow → green → teal → blue → purple). Empty projects start purple. Existing tracks retain their colors, including after reorder, rename, instrument changes, deletion undo, and creation redo; clips and pattern notes honor the assignment. Tests cover the whole cycle and wrap, reordered bottom tracks, deletion, and history. Browser checks confirm green after the demo's yellow track, teal after green, and stable colors through undo/redo. Existing dev tabs need a refresh to replace their old store actions; warn that this discards unsaved edits rather than refreshing the user's session automatically.
 
@@ -276,7 +280,7 @@ it("creates a synth track from the add-track controls", async () => {
 
 ## Task 5: Implement Reusable Pattern and Clip Actions
 
-Status: Implemented inline on 2026-08-31; awaiting human review before Task 6.
+Status: Implemented inline on 2026-08-31 and accepted, including the color refinement.
 
 **Files:** Create `src/stores/studio-edits.ts`, `studio-edits.test.ts`. Modify `src/stores/studio-store.ts`, its test, `src/components/editor/PatternSidebar.tsx`, `PatternEditor.tsx`, `src/components/arrangement/TrackLane.tsx`, `Clip.tsx`, and `src/components/Studio.test.tsx`.
 
@@ -345,11 +349,13 @@ Here `pattern` and `clip` are resolved current targets and `newPatternId` is gen
 
 ## Task 6: Add Arrangement Drag, Drop, and Repeat Resizing
 
-**Files:** Modify `src/components/arrangement/Arrangement.tsx`, `TrackLane.tsx`, `Clip.tsx`, and `src/components/editor/PatternSidebar.tsx`. Create `src/components/arrangement/Arrangement.test.tsx`.
+Status: Implemented and verified inline on 2026-08-31; awaiting human review before Task 7.
+
+**Files:** Modify `src/components/arrangement/Arrangement.tsx`, `Clip.tsx`, `src/components/editor/PatternSidebar.tsx`, and `src/components/Studio.tsx` / its test. Create `src/components/arrangement/ArrangementGestures.tsx` and its full-studio gesture test. Reuse `TrackLane.tsx` geometry/creation and the existing `Arrangement.test.tsx` track-reorder checks unchanged.
 
 **Interfaces:** Reuse `placePattern`, `updateClip`, and `reorderTrack`; do not add project mutation paths. Clip movement supplies `{ startBar, trackId }`; right-edge resize supplies `{ repeatCount }`. Local React state holds gesture origin and preview.
 
-- [ ] Write a failing pointer test with a deterministic mocked lane rectangle. Import `act`, `fireEvent`, `render`, and `screen` from Testing Library; `it`, `expect`, and `vi` from Vitest; the provider/hook, `StudioState`, `Arrangement`, and `EMPTY_PROJECT` from their mapped files. Use a local probe instead of exposing a production store-injection API:
+- [x] Write a failing pointer test with a deterministic mocked lane rectangle. Import `act`, `fireEvent`, `render`, and `screen` from Testing Library; `it`, `expect`, and `vi` from Vitest; the provider/hook, `StudioState`, `Arrangement`, and `EMPTY_PROJECT` from their mapped files. Use a local probe instead of exposing a production store-injection API:
 
 ```tsx
 it("commits a bar-snapped clip drag only on release", () => {
@@ -382,11 +388,11 @@ it("commits a bar-snapped clip drag only on release", () => {
 
 Give each lane its track-name region label. Eight displayed bars across this 800-pixel lane make 100 pixels per bar. Read the lane geometry when the gesture starts so the mocked rectangle is authoritative. Restore test spies after each test. Test-only capture stubs do not replace the later real-browser capture check.
 
-- [ ] Run `pnpm exec vitest run src/components/arrangement/Arrangement.test.tsx`; expect no movement/commit before handlers exist. Add cases for scrolled coordinates and grab offsets, compatible cross-track moves, pattern sidebar placement, repeat changes, pointercancel/Escape/lost capture, invalid drop, no movement, and a target deleted during a drag.
-- [ ] Implement pointer capture and local previews. Calculate snapped moves from the original start plus `Math.round(deltaX / pixelsPerBar)`. Compute repeat count from the proposed total width divided by `pixelsPerBar * pattern.lengthBars`, bounded to 1–64. Use current grid geometry and scroll deltas; do not dispatch on pointermove or allow negative starts.
-- [ ] Recheck current-project validity through the existing actions on release, commit once, clear preview, and prevent the subsequent click/lost-capture event from duplicating an action. Offer start-bar, target-track, and repeat-count fields alongside drag. Sidebar placement and empty-lane creation use the same bar mapping and current-project checks.
-- [ ] Ensure the timeline displays at least eight bars and grows/scrolls with actual clip extent up to 256; allow users to place at later bars through the explicit placement control. Do not introduce zoom or auto-scroll infrastructure unless needed to make those documented placements reachable.
-- [ ] Run `pnpm exec vitest run src/components/arrangement/Arrangement.test.tsx src/stores/studio-edits.test.ts`, `pnpm typecheck`, and `pnpm lint`; inspect in a browser for real pointer capture/scrolling, review diff, commit as `feat: add arrangement gestures`, and request human review.
+- [x] Run the focused gesture tests (`ArrangementGestures.test.tsx`); expect no movement/commit before handlers exist. Add cases for scrolled coordinates and grab offsets, compatible cross-track moves, pattern sidebar placement, repeat changes, pointercancel/Escape/lost capture, invalid drop, no movement, and a target deleted during a drag.
+- [x] Implement pointer capture and local previews. Calculate snapped moves from the original start plus `Math.round(deltaX / pixelsPerBar)`. Compute repeat count from the proposed total width divided by `pixelsPerBar * pattern.lengthBars`, bounded to 1–64. Use current grid geometry and scroll deltas; do not dispatch on pointermove or allow negative starts.
+- [x] Recheck current-project validity through the existing actions on release, commit once, clear preview, and prevent the subsequent click/lost-capture event from duplicating an action. Offer start-bar, target-track, and repeat-count fields alongside drag. Sidebar placement and empty-lane creation use the same bar mapping and current-project checks.
+- [x] Ensure the timeline displays at least eight bars and grows/scrolls with actual clip extent up to 256; allow users to place at later bars through the explicit placement control. Do not introduce zoom or auto-scroll infrastructure unless needed to make those documented placements reachable.
+- [x] Run the focused gesture/reorder/placement tests, `pnpm typecheck`, and `pnpm lint`; inspect in a browser for real pointer capture/scrolling, review diff, commit as `feat: add arrangement gestures`, and request human review.
 
 ## Task 7: Implement the Drum Editor
 

@@ -10,6 +10,9 @@ import { StudioProvider, useStudioStore } from "@/stores/studio-provider";
 import type { StudioState } from "@/stores/studio-store";
 
 beforeEach(() => {
+  HTMLDivElement.prototype.setPointerCapture = vi.fn();
+  HTMLDivElement.prototype.hasPointerCapture = () => false;
+  HTMLDivElement.prototype.releasePointerCapture = vi.fn();
   HTMLDialogElement.prototype.showModal = function (): void { this.setAttribute("open", ""); };
   HTMLDialogElement.prototype.close = function (): void { this.removeAttribute("open"); };
 });
