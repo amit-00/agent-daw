@@ -317,4 +317,65 @@ describe("Studio", () => {
     await user.click(screen.getByRole("button", { name: "Redo" }));
     expect(screen.getByText("Named song")).toBeVisible();
   });
+
+  it("confirms restore from real attributed history and makes it undoable", async () => {
+    let state: StudioState | undefined;
+    function Probe(): null {
+      state = useStudioStore((value) => value);
+      return null;
+    }
+    const user = userEvent.setup();
+    render(<StudioProvider initialProject={EMPTY_PROJECT}><Transport /><ActivityPanel /><Probe /></StudioProvider>);
+    act(() => state!.dispatch({
+      id: "rename", source: "agent", label: "Agent named song", kind: "operation",
+      operation: { type: "project.update", changes: { name: "Named song" } },
+    }));
+    act(() => state!.createTrack("synth", "synth.bass"));
+    expect(screen.getByText(/Agent ·/)).toBeVisible();
+    expect(screen.getByText("Create Bass").closest("li")).toHaveAttribute("aria-current", "step");
+
+    await user.click(screen.getByRole("button", { name: "Restore Agent named song" }));
+    expect(screen.getByRole("dialog", { name: "Restore Agent named song" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Keep current project" }));
+    expect(state!.project.tracks).toHaveLength(1);
+
+    await user.click(screen.getByRole("button", { name: "Restore Agent named song" }));
+    await user.click(screen.getByRole("button", { name: "Confirm restore" }));
+    expect(state!.project.tracks).toHaveLength(0);
+    expect(state!.history.at(-1)?.action.kind).toBe("restore");
+    await user.click(screen.getByRole("button", { name: "Undo" }));
+    expect(state!.project.tracks).toHaveLength(1);
+  });
+
+  it("handles undo and redo shortcuts outside editable fields and dialogs", async () => {
+    const user = userEvent.setup();
+    render(<Studio initialProject={DEMO_PROJECT} />);
+    const track = screen.getByRole("group", { name: "Low Orbit track" });
+    await user.click(within(track).getByRole("button", { name: "Mute Low Orbit" }));
+    await user.click(screen.getByRole("button", { name: "Edit Low Orbit" }));
+    const name = screen.getByRole("textbox", { name: "Track name" });
+    fireEvent.keyDown(name, { key: "z", metaKey: true });
+    expect(within(track).getByRole("button", { name: "Unmute Low Orbit" })).toBeVisible();
+    fireEvent(screen.getByRole("dialog"), new Event("cancel", { cancelable: true }));
+
+    const studio = screen.getByRole("main");
+    fireEvent.keyDown(studio, { key: "z", metaKey: true });
+    expect(within(track).getByRole("button", { name: "Mute Low Orbit" })).toBeVisible();
+    fireEvent.keyDown(studio, { key: "z", metaKey: true, shiftKey: true });
+    expect(within(track).getByRole("button", { name: "Unmute Low Orbit" })).toBeVisible();
+    fireEvent.keyDown(studio, { key: "y", ctrlKey: true });
+    expect(within(track).getByRole("button", { name: "Unmute Low Orbit" })).toBeVisible();
+  });
+
+  it("deletes only the focused arrangement clip", async () => {
+    const user = userEvent.setup();
+    render(<Studio initialProject={DEMO_PROJECT} />);
+    const lane = screen.getByRole("region", { name: "Low Orbit lane" });
+    const clips = within(lane).getAllByRole("button", { name: "Select Low Orbit phrase" });
+    clips[0]!.focus();
+    fireEvent.keyDown(clips[0]!, { key: "Delete" });
+    expect(within(lane).getAllByRole("button", { name: "Select Low Orbit phrase" })).toHaveLength(1);
+    await user.click(screen.getByRole("button", { name: "Undo" }));
+    expect(within(lane).getAllByRole("button", { name: "Select Low Orbit phrase" })).toHaveLength(2);
+  });
 });

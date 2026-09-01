@@ -39,7 +39,9 @@ The pattern/clip, color, and arrangement-gesture checkpoints were accepted. Task
 
 Task 8 is implemented inline: synth patterns use a scrollable MIDI 24–96 piano roll with note creation, selection, snapped move/resize gestures, duplication, deletion, and labeled numeric alternatives. Chords and shared patterns are supported, cancelled or invalid gestures do not commit, and each completed edit creates one history entry. The background is one coordinate-mapped grid rather than thousands of empty controls; numeric add/edit fields provide the keyboard path.
 
-Task 9 is now implemented inline: mixer and track-header controls edit project-backed track/master volume, pan, mute, and solo values. Range gestures preview locally and commit once; numeric fields commit on Enter/blur and cancel on Escape. Mixer controls stay synchronized with track headers and Undo. Tasks 10–11 remain pending.
+Task 9 is now implemented inline: mixer and track-header controls edit project-backed track/master volume, pan, mute, and solo values. Range gestures preview locally and commit once; numeric fields commit on Enter/blur and cancel on Escape. Mixer controls stay synchronized with track headers and Undo.
+
+Task 10 is implemented inline: the activity panel renders retained manual/agent history, marks the cursor and undone branch, and confirms undoable restores. Global undo/redo shortcuts avoid editable fields and open dialogs, while Delete/Backspace applies only to the focused arrangement clip. Existing store checks cover stale targets, rejected edits, history branching, limits, and selection reconciliation. Task 11 remains pending.
 
 There is no audio or persistence, and refreshing resets this demo session.
 
@@ -504,7 +506,7 @@ it("stores mixer values in the project and restores them with undo", () => {
 
 **Interfaces:** Reuse `dispatch`, `undo`, `redo`, and `restore` from Task 3; display `history`, `historyCursor`, and `errorMessage`. Command source stays the existing `"manual" | "agent"` union. Keyboard handlers call existing named actions, never reduce state themselves.
 
-- [ ] Add a failing real-history UI test and a store restore test. For source attribution, supply an actual typed agent command through the trusted bridge, rather than hardcoding an activity row:
+- [x] Add a failing real-history UI test and a store restore test. For source attribution, supply an actual typed agent command through the trusted bridge, rather than hardcoding an activity row:
 
 ```ts
 it("retains command attribution and makes restore undoable", () => {
@@ -524,11 +526,11 @@ it("retains command attribution and makes restore undoable", () => {
 });
 ```
 
-- [ ] Run `pnpm exec vitest run src/stores/studio-store.test.ts -t "retains command attribution"` and the new activity component test before changing the UI. Add tests for cursor styling, disabled undo/redo, restore confirmation, pruned targets, selection clearing, and new edits discarding redo history.
-- [ ] Render actual labels/source/time from retained history; indicate undone entries and the current cursor. Confirm Restore before replacing current work. Extend the existing Undo/Redo buttons with Ctrl/Cmd+Z, Ctrl/Cmd+Shift+Z, plus Ctrl+Y where appropriate. Selection-only activity never creates history.
-- [ ] Restrict destructive/edit shortcuts to the focused editing surface. A target in `input`, `textarea`, `select`, a contenteditable region, or an active dialog keeps native behavior. Escape cancels the current preview/dialog; Delete/Backspace applies only to the focused clip/note selection. Stop duplicate event propagation between nested surfaces.
-- [ ] Finish accessible status messages for overlap, missing/stale targets, limits, kit incompatibility, and note bounds. Verify each refused action preserves both project and history. Keep visible silent/in-memory status, disabled playback/record/loop/export, and truthful project name/BPM. No saved badge, fake time, or sample-loading side effects.
-- [ ] Run `pnpm test`, `pnpm typecheck`, `pnpm lint`, and `pnpm build`; review diff, commit as `feat: finish silent editor history and keyboard UX`, and request human review.
+- [x] Run `pnpm exec vitest run src/stores/studio-store.test.ts -t "retains command attribution"` and the new activity component test before changing the UI. Add tests for cursor styling, disabled undo/redo, restore confirmation, pruned targets, selection clearing, and new edits discarding redo history.
+- [x] Render actual labels/source/time from retained history; indicate undone entries and the current cursor. Confirm Restore before replacing current work. Extend the existing Undo/Redo buttons with Ctrl/Cmd+Z, Ctrl/Cmd+Shift+Z, plus Ctrl+Y where appropriate. Selection-only activity never creates history.
+- [x] Restrict destructive/edit shortcuts to the focused editing surface. A target in `input`, `textarea`, `select`, a contenteditable region, or an active dialog keeps native behavior. Escape cancels the current preview/dialog; Delete/Backspace applies only to the focused clip/note selection. Stop duplicate event propagation between nested surfaces.
+- [x] Finish accessible status messages for overlap, missing/stale targets, limits, kit incompatibility, and note bounds. Verify each refused action preserves both project and history. Keep visible silent/in-memory status, disabled playback/record/loop/export, and truthful project name/BPM. No saved badge, fake time, or sample-loading side effects.
+- [x] Run `pnpm test`, `pnpm typecheck`, `pnpm lint`, and `pnpm build`; review diff, commit as `feat: finish silent editor history and keyboard UX`, and request human review.
 
 ## Task 11: Verify the Complete Silent Workflow and Record Compatibility Gates
 

@@ -32,7 +32,7 @@ interface PlacementDrag {
 }
 
 export function ArrangementGestures({ children }: Readonly<{ children: ReactNode }>): ReactElement {
-  const { project, updateClip, placePattern, selectClip, selectPattern } = useStudioStore((state) => state);
+  const { project, updateClip, placePattern, deleteClip, selectClip, selectPattern } = useStudioStore((state) => state);
   const surface = useRef<HTMLDivElement>(null);
   const drag = useRef<PlacementDrag | null>(null);
   const [preview, setPreview] = useState<PlacementPreview | null>(null);
@@ -123,7 +123,14 @@ export function ArrangementGestures({ children }: Readonly<{ children: ReactNode
     }} onPointerUp={finish}
     onPointerCancel={(event) => { if (event.pointerId === drag.current?.pointerId) cancel(); }}
     onLostPointerCapture={(event) => { if (event.pointerId === drag.current?.pointerId) cancel(); }}
-    onKeyDown={(event) => { if (event.key === "Escape" && drag.current) { event.preventDefault(); cancel(); } }}
+    onKeyDown={(event) => {
+      if (event.key === "Escape" && drag.current) { event.preventDefault(); cancel(); return; }
+      if (event.key !== "Delete" && event.key !== "Backspace") return;
+      const button = event.target instanceof Element
+        ? event.target.closest<HTMLButtonElement>("button[data-clip-id], button[data-resize-clip-id]") : null;
+      const clipId = button?.dataset.clipId ?? button?.dataset.resizeClipId;
+      if (clipId) { event.preventDefault(); deleteClip(clipId); }
+    }}
     onScrollCapture={() => { if (drag.current) move(drag.current.clientX, drag.current.clientY); }}>
     {children}
     {preview?.lane?.isConnected && pattern && track && createPortal(
