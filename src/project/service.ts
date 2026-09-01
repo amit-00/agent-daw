@@ -1,7 +1,6 @@
 import {
   type ChangeSummary,
   type Command,
-  type DispatchFailure,
   type DispatchResult,
   emptyChangeSummary,
   type HistoryAction,
@@ -11,8 +10,7 @@ import {
   type Operation,
   type RestoreCommand,
 } from "./commands.ts";
-import { ConflictError, DomainError, InvalidInputError, LimitExceededError, NotFoundError } from "./errors.ts";
-import { assertUuid, PROJECT_CAPS, type Project, type SoundCatalog, validateProject } from "./model.ts";
+import { PROJECT_CAPS, type Project } from "./model.ts";
 import { reduceOperation, summarizeProjectDiff } from "./reducer.ts";
 
 export interface ProjectServiceState {
@@ -23,7 +21,6 @@ export interface ProjectServiceState {
 
 export interface ProjectServiceOptions {
   readonly initialProject: Project;
-  readonly catalog: SoundCatalog;
   readonly createHistoryId: () => string;
   readonly now: () => number;
 }
@@ -34,196 +31,11 @@ interface SuccessfulOutcome {
   readonly changes: ChangeSummary;
 }
 
-const invalidCommand = (path: string, message: string): never => {
-  throw new InvalidInputError({ path, message });
-};
-
-type UnknownRecord = Readonly<Record<string, unknown>>;
-
-const operationTypes: ReadonlySet<Operation["type"]> = new Set([
-  "project.update",
-  "track.create", "track.update", "track.delete",
-  "pattern.create", "pattern.duplicate", "pattern.update", "pattern.delete",
-  "arrangement.place", "arrangement.update", "arrangement.delete",
-  "drum-hits.add", "drum-hits.update", "drum-hits.delete",
-  "synth-notes.add", "synth-notes.update", "synth-notes.delete",
-]);
-
-const validateOperation = (operation: unknown, path: string): void => {
-  if (typeof operation !== "object" || operation === null || Array.isArray(operation)) {
-    invalidCommand(path, "must be an object");
-  }
-  const record = operation as UnknownRecord;
-  if (typeof record.type !== "string" || !operationTypes.has(record.type as Operation["type"])) {
-    invalidCommand(path, "must be a supported operation");
-  }
-  switch (record.type) {
-    case "project.update":
-    case "track.update":
-    case "pattern.update":
-    case "arrangement.update":
-      if (typeof record.changes !== "object" || record.changes === null
-        || Array.isArray(record.changes)) {
-        invalidCommand(`${path}.changes`, "must be an object");
-      }
-      return;
-    case "track.create":
-      if (typeof record.track !== "object" || record.track === null || Array.isArray(record.track)) {
-        invalidCommand(`${path}.track`, "must be an object");
-      }
-      return;
-    case "pattern.create":
-      if (typeof record.pattern !== "object" || record.pattern === null
-        || Array.isArray(record.pattern)) {
-        invalidCommand(`${path}.pattern`, "must be an object");
-      }
-      return;
-    case "arrangement.place":
-      if (typeof record.clip !== "object" || record.clip === null || Array.isArray(record.clip)) {
-        invalidCommand(`${path}.clip`, "must be an object");
-      }
-      return;
-    case "pattern.duplicate":
-      if (!Array.isArray(record.duplicateEventIds)) {
-        invalidCommand(`${path}.duplicateEventIds`, "must be an array");
-      }
-      return;
-    case "drum-hits.add": {
-      const hits = record.hits;
-      if (!Array.isArray(hits)) {
-        invalidCommand(`${path}.hits`, "must be an array");
-      }
-      (hits as readonly unknown[]).forEach((entry: unknown, index: number) => {
-        if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
-          invalidCommand(`${path}.hits[${index}]`, "must be an object");
-        }
-      });
-      return;
-    }
-    case "drum-hits.update":
-    case "synth-notes.update": {
-      const updates = record.updates;
-      if (!Array.isArray(updates)) {
-        invalidCommand(`${path}.updates`, "must be an array");
-      }
-      (updates as readonly unknown[]).forEach((entry: unknown, index: number) => {
-        if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
-          invalidCommand(`${path}.updates[${index}]`, "must be an object");
-        }
-        const update = entry as UnknownRecord;
-        if (typeof update.changes !== "object" || update.changes === null
-          || Array.isArray(update.changes)) {
-          invalidCommand(`${path}.updates[${index}].changes`, "must be an object");
-        }
-      });
-      return;
-    }
-    case "synth-notes.add": {
-      const notes = record.notes;
-      if (!Array.isArray(notes)) {
-        invalidCommand(`${path}.notes`, "must be an array");
-      }
-      (notes as readonly unknown[]).forEach((entry: unknown, index: number) => {
-        if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
-          invalidCommand(`${path}.notes[${index}]`, "must be an object");
-        }
-      });
-      return;
-    }
-    case "drum-hits.delete":
-      if (!Array.isArray(record.hitIds)) invalidCommand(`${path}.hitIds`, "must be an array");
-      return;
-    case "synth-notes.delete":
-      if (!Array.isArray(record.noteIds)) invalidCommand(`${path}.noteIds`, "must be an array");
-      return;
-    case "track.delete":
-    case "pattern.delete":
-      return;
-  }
-};
-
-const commandIdFor = (command: Command | RestoreCommand): string => {
-  if (typeof command !== "object" || command === null || Array.isArray(command)) {
-    invalidCommand("command", "must be an object");
-  }
-  const record = command as unknown as UnknownRecord;
-  return typeof record.id === "string" && record.id.length > 0
-    ? record.id
-    : invalidCommand("command.id", "must be a non-empty string");
-};
-
-const validateCommandMetadata = (command: unknown): Readonly<Record<string, unknown>> => {
-  if (typeof command !== "object" || command === null || Array.isArray(command)) {
-    invalidCommand("command", "must be an object");
-  }
-  const record = command as UnknownRecord;
-  if (record.source !== "manual" && record.source !== "agent") {
-    invalidCommand("command.source", "must be manual or agent");
-  }
-  if (typeof record.label !== "string" || record.label.trim().length === 0) {
-    invalidCommand("command.label", "must be a non-empty string");
-  }
-  return record;
-};
-
-const validateCommand = (command: Command): void => {
-  const record = validateCommandMetadata(command);
-  if (record.kind === "operation") {
-    return;
-  }
-  if (record.kind === "batch") {
-    if (!Array.isArray(record.operations)) {
-      invalidCommand("command.operations", "must be an array");
-    }
-    return;
-  }
-  invalidCommand("command.kind", "must be operation or batch");
-};
-
-const operationsFor = (command: Command): readonly Operation[] => {
-  if (command.kind === "operation") return [command.operation];
-  if (command.operations.length === 0) {
-    invalidCommand("command.operations", "must contain at least one operation");
-  }
-  if (command.operations.length > PROJECT_CAPS.maxOperationsPerBatch) {
-    throw new LimitExceededError({
-      path: "command.operations",
-      message: `must contain at most ${PROJECT_CAPS.maxOperationsPerBatch} operations`,
-    });
-  }
-  return command.operations;
-};
-
-const cloneJson = <T>(value: unknown, path: string): T => {
-  let serialized: string | undefined;
-  try {
-    serialized = JSON.stringify(structuredClone(value));
-  } catch {
-    return invalidCommand(path, "must be structured-cloneable and JSON-serializable");
-  }
-  return serialized === undefined
-    ? invalidCommand(path, "must be JSON-serializable")
-    : JSON.parse(serialized) as T;
-};
-
-const cloneOperation = (operation: unknown, path: string): Operation =>
-  cloneJson<Operation>(operation, path);
+const cloneJson = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 
 const actionFor = (kind: Command["kind"], operations: readonly Operation[]): HistoryAction => kind === "operation"
   ? { kind: "operation", operation: operations[0]! }
   : { kind: "batch", operations };
-
-const failure = (project: Project, error: DomainError): DispatchFailure => ({
-  ok: false,
-  project,
-  error: error.info,
-});
-
-const failureAtBatchIndex = (project: Project, error: DomainError, batchIndex: number): DispatchFailure => ({
-  ok: false,
-  project,
-  error: { ...error.info, batchIndex },
-});
 
 export class ProjectService {
   private project: Project;
@@ -233,10 +45,8 @@ export class ProjectService {
   private readonly options: ProjectServiceOptions;
 
   constructor(options: ProjectServiceOptions) {
-    const initialProject = cloneJson<Project>(options.initialProject, "initialProject");
-    validateProject(initialProject, options.catalog);
     this.options = options;
-    this.project = initialProject;
+    this.project = cloneJson(options.initialProject);
     this.getState = this.getState.bind(this);
     this.dispatch = this.dispatch.bind(this);
     this.undo = this.undo.bind(this);
@@ -253,68 +63,42 @@ export class ProjectService {
   }
 
   dispatch(command: Command): DispatchResult {
-    try {
-      const commandId = commandIdFor(command);
-      const existing = this.successfulOutcomes.get(commandId);
-      if (existing !== undefined) {
-        return {
-          ok: true,
-          deduplicated: true,
-          project: this.project,
-          ...existing,
-        };
-      }
-
-      assertUuid(commandId, "command.id");
-      validateCommand(command);
-      const operations = operationsFor(command);
-      let nextProject = this.project;
-      const changeSummaries: ChangeSummary[] = [];
-      const historyOperations: Operation[] = [];
-      for (const [batchIndex, operation] of operations.entries()) {
-        try {
-          const path = command.kind === "batch" ? `command.operations[${batchIndex}]` : "command.operation";
-          validateOperation(operation, path);
-          const historyOperation = cloneOperation(operation, path);
-          const reduction = reduceOperation(nextProject, historyOperation, this.options.catalog);
-          nextProject = reduction.project;
-          changeSummaries.push(reduction.changes);
-          historyOperations.push(historyOperation);
-        } catch (error: unknown) {
-          if (error instanceof DomainError) {
-            return command.kind === "batch"
-              ? failureAtBatchIndex(this.project, error, batchIndex)
-              : failure(this.project, error);
-          }
-          throw error;
-        }
-      }
-
-      const changes = mergeChangeSummaries(changeSummaries);
-      const changed = nextProject !== this.project;
-      let historyEntry: HistoryEntry | undefined;
-      if (changed) {
-        historyEntry = this.commit(
-          commandId,
-          command.source,
-          command.label,
-          actionFor(command.kind, historyOperations),
-          nextProject,
-          changes,
-        );
-      }
-
-      const outcome: SuccessfulOutcome = {
-        changed,
-        ...(historyEntry === undefined ? {} : { historyEntry }),
-        changes,
-      };
-      this.remember(commandId, outcome);
-      return { ok: true, deduplicated: false, project: this.project, ...outcome };
-    } catch (error: unknown) {
-      if (error instanceof DomainError) return failure(this.project, error);
-      throw error;
+    const existing = this.successfulOutcomes.get(command.id);
+    if (existing !== undefined) {
+      return { ok: true, deduplicated: true, project: this.project, ...existing };
     }
+
+    const operations = command.kind === "operation" ? [command.operation] : command.operations;
+    let nextProject = this.project;
+    const changeSummaries: ChangeSummary[] = [];
+    const historyOperations: Operation[] = [];
+    for (const operation of operations) {
+      const historyOperation = cloneJson(operation);
+      const reduction = reduceOperation(nextProject, historyOperation);
+      nextProject = reduction.project;
+      changeSummaries.push(reduction.changes);
+      historyOperations.push(historyOperation);
+    }
+
+    const changes = mergeChangeSummaries(changeSummaries);
+    const changed = nextProject !== this.project;
+    const historyEntry = changed
+      ? this.commit(
+        command.id,
+        command.source,
+        command.label,
+        actionFor(command.kind, historyOperations),
+        nextProject,
+        changes,
+      )
+      : undefined;
+    const outcome: SuccessfulOutcome = {
+      changed,
+      ...(historyEntry === undefined ? {} : { historyEntry }),
+      changes,
+    };
+    this.remember(command.id, outcome);
+    return { ok: true, deduplicated: false, project: this.project, ...outcome };
   }
 
   undo(): HistoryControlResult {
@@ -334,52 +118,31 @@ export class ProjectService {
   }
 
   restore(command: RestoreCommand): DispatchResult {
-    try {
-      const commandId = commandIdFor(command);
-      const existing = this.successfulOutcomes.get(commandId);
-      if (existing !== undefined) {
-        return { ok: true, deduplicated: true, project: this.project, ...existing };
-      }
-
-      assertUuid(commandId, "command.id");
-      const record = validateCommandMetadata(command);
-      const targetEntryId = typeof record.targetEntryId === "string"
-        && record.targetEntryId.length > 0
-        ? record.targetEntryId
-        : invalidCommand("command.targetEntryId", "must be a non-empty string");
-      assertUuid(targetEntryId, "command.targetEntryId");
-      const target = this.history.find((entry) => entry.id === targetEntryId);
-      if (target === undefined) {
-        throw new NotFoundError({
-          path: "command.targetEntryId",
-          message: "must reference a retained history entry",
-        });
-      }
-      validateProject(target.after, this.options.catalog);
-
-      const changed = JSON.stringify(target.after) !== JSON.stringify(this.project);
-      const changes = changed ? summarizeProjectDiff(this.project, target.after) : emptyChangeSummary();
-      const historyEntry = changed
-        ? this.commit(
-          commandId,
-          command.source,
-          command.label,
-          { kind: "restore", targetEntryId: target.id },
-          target.after,
-          changes,
-        )
-        : undefined;
-      const outcome: SuccessfulOutcome = {
-        changed,
-        ...(historyEntry === undefined ? {} : { historyEntry }),
-        changes,
-      };
-      this.remember(commandId, outcome);
-      return { ok: true, deduplicated: false, project: this.project, ...outcome };
-    } catch (error: unknown) {
-      if (error instanceof DomainError) return failure(this.project, error);
-      throw error;
+    const existing = this.successfulOutcomes.get(command.id);
+    if (existing !== undefined) {
+      return { ok: true, deduplicated: true, project: this.project, ...existing };
     }
+
+    const target = this.history.find((entry) => entry.id === command.targetEntryId)!;
+    const changed = JSON.stringify(target.after) !== JSON.stringify(this.project);
+    const changes = changed ? summarizeProjectDiff(this.project, target.after) : emptyChangeSummary();
+    const historyEntry = changed
+      ? this.commit(
+        command.id,
+        command.source,
+        command.label,
+        { kind: "restore", targetEntryId: target.id },
+        target.after,
+        changes,
+      )
+      : undefined;
+    const outcome: SuccessfulOutcome = {
+      changed,
+      ...(historyEntry === undefined ? {} : { historyEntry }),
+      changes,
+    };
+    this.remember(command.id, outcome);
+    return { ok: true, deduplicated: false, project: this.project, ...outcome };
   }
 
   private remember(commandId: string, outcome: SuccessfulOutcome): void {
@@ -397,25 +160,12 @@ export class ProjectService {
     nextProject: Project,
     changes: ChangeSummary,
   ): HistoryEntry {
-    const historyId = this.options.createHistoryId();
-    assertUuid(historyId, "historyEntry.id");
-    if (this.history.some((entry) => entry.id === historyId)) {
-      throw new ConflictError({
-        path: "historyEntry.id",
-        message: "must be unique among retained history entries",
-        relatedIds: [historyId],
-      });
-    }
-    const createdAt = this.options.now();
-    if (!Number.isInteger(createdAt) || createdAt < 0) {
-      invalidCommand("historyEntry.createdAt", "must be a finite non-negative integer");
-    }
     const historyEntry: HistoryEntry = {
-      id: historyId,
+      id: this.options.createHistoryId(),
       commandId,
       source,
       label,
-      createdAt,
+      createdAt: this.options.now(),
       action,
       before: this.project,
       after: nextProject,

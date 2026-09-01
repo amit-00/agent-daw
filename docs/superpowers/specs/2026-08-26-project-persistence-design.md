@@ -7,7 +7,7 @@
 1. Restore the latest successfully saved local project after a reload, window close, or browser restart.
 2. Persist only the current `Project` snapshot in browser IndexedDB; history remains session-local.
 3. Debounce rapid changes and serialize writes so an older transaction cannot overwrite newer state.
-4. Validate every loaded and queued project with the existing project-domain validation.
+4. Validate the stored record envelope and project schema before loading it.
 5. Preserve corrupt or unsupported stored data until the user explicitly clears it.
 6. Keep persistence independent of React, audio, WebMCP, and the project command service.
 7. Expose explicit load, save, flush, and clear results with actionable failures.
@@ -28,7 +28,7 @@
 - The production target is a current desktop browser with IndexedDB and `structuredClone`.
 - One `ProjectPersistenceService` instance exists per application tab.
 - All project mutations remain serialized through the existing `ProjectService`.
-- The application supplies the same `SoundCatalog` used by `ProjectService` so loaded data receives identical validation.
+- The project domain treats typed `Project` values as trusted; persistence validates only the untrusted storage envelope and schema version.
 - This design narrows the earlier `docs/design.md` persistence scope: cross-reload history persistence is deferred.
 - Project caps in `src/project/model.ts` bound snapshot size.
 - The application awaits `clear` before enabling edits to a replacement blank or demo project.
@@ -40,7 +40,7 @@
 | Term | Meaning |
 |---|---|
 | Current project | The single project open in AgentDAW and the only project persisted by this milestone. |
-| Pending snapshot | The newest validated project waiting for the debounce timer or an active write to finish. |
+| Pending snapshot | The newest cloned project waiting for the debounce timer or an active write to finish. |
 | In-flight write | The one IndexedDB write transaction currently executing. |
 | Recovery gate | Service state that blocks writes after corrupt or unsupported data is loaded. |
 | Coalescing | Replacing multiple not-yet-written snapshots with only the newest snapshot. |
@@ -69,10 +69,9 @@
 
 ```text
 src/
-  project/                  # Existing domain model, validation, commands, and history
+  project/                  # Existing domain model, commands, and history
   persistence/
     service.ts              # API, IndexedDB access, debounce, ordering, and recovery
-    index.ts                # Public persistence exports
 test/
   project.test.ts           # Existing domain tests
   persistence.test.ts       # Persistence integration tests using fake-indexeddb
@@ -86,25 +85,24 @@ Types and persistence errors remain in `service.ts`; separate abstractions are n
 flowchart TD
     A[ProjectService state change] --> B[Application orchestration]
     B --> C[ProjectPersistenceService]
-    C --> D[Validate with validateProject]
-    D --> E[structuredClone]
-    E --> F[500 ms debounce and coalescing]
-    F --> G[Serialized IndexedDB transaction]
+    C --> D[structuredClone]
+    D --> E[500 ms debounce and coalescing]
+    E --> G[Serialized IndexedDB transaction]
     G --> H[(current-project / current)]
     H --> I[load at application startup]
-    I --> D
-    D --> J[Construct ProjectService]
-    D -->|corrupt or unsupported| K[Recovery gate]
+    I --> M[Validate record and schema]
+    M --> J[Construct ProjectService]
+    M -->|corrupt or unsupported| K[Recovery gate]
     K --> L[Explicit clear]
 ```
 
 ## 4.1 Startup load
 
-Application startup creates the persistence service and calls `load` before constructing `ProjectService`. The service reads the fixed current-project record without modifying it, validates the record shape and project schema, then delegates full domain validation to `validateProject`. A missing record reports an empty result so the application can choose its normal blank or demo startup behavior.
+Application startup creates the persistence service and calls `load` before constructing `ProjectService`. The service reads the fixed current-project record without modifying it and validates the record shape and project schema. A missing record reports an empty result so the application can choose its normal blank or demo startup behavior.
 
 ## 4.2 Autosave scheduling
 
-Application orchestration schedules a save after every current-project change, including successful dispatch, undo, redo, restore, and whole-project replacement. The service validates and clones the snapshot before it can replace valid pending work. A 500 ms debounce coalesces rapid changes into the newest complete snapshot.
+Application orchestration schedules a save after every current-project change, including successful dispatch, undo, redo, restore, and whole-project replacement. The service clones the snapshot before it can replace pending work. A 500 ms debounce coalesces rapid changes into the newest complete snapshot.
 
 ## 4.3 Ordered persistence
 
@@ -137,7 +135,6 @@ The service is one concrete class because its operations share lifecycle state. 
 ## 6.2 Inputs
 
 - Native `IDBFactory` supplied by the application.
-- Existing read-only `SoundCatalog` used for project validation.
 - Clock function used to create deterministic `updatedAt` values.
 - Explicit debounce duration; the application uses 500 ms.
 - Complete `Project` snapshots after current state changes.
@@ -155,13 +152,13 @@ The service is one concrete class because its operations share lifecycle state. 
 |---|---|---|
 | IndexedDB unavailable | Return `storage_unavailable`; keep the in-memory project usable. | Warn the user and retry after browser storage becomes available. |
 | Quota exceeded | Return `quota_exceeded`; preserve the previous record and in-memory state. | Free browser storage or explicitly clear, then retry. |
-| Malformed record or invalid project | Return `corrupt_record`, preserve the record, and enter the recovery gate. | User explicitly clears the record. |
+| Malformed record or invalid project schema | Return `corrupt_record`, preserve the record, and enter the recovery gate. | User explicitly clears the record. |
 | Unsupported `Project.schemaVersion` | Return `unsupported_schema`, preserve the record, and enter the recovery gate. | Run future compatible code or explicitly clear. |
 | IndexedDB transaction abort or unknown storage failure | Return `transaction_failed`; preserve the last completed record. | Retry the latest in-memory project. |
 | Save requested while recovery-gated | Return `recovery_required` without opening a write transaction. | Call `clear` successfully first. |
 | Clear cancels a pending save | Complete that scheduled save as `cancelled_by_clear`. | Schedule the replacement project only after clear completes. |
 | Save requested while clear is active | Complete it as `cancelled_by_clear` without queueing work. | Await clear, then schedule the replacement project. |
-| Invalid outbound project | Existing `validateProject` error propagates before pending state changes. | Fix the caller; valid queued work remains intact. |
+| Non-cloneable outbound project | Native `structuredClone` error propagates before pending state changes. | Fix the caller; queued work remains intact. |
 
 Expected browser-storage failures use typed results. Unexpected programming failures are not caught and relabeled as storage errors.
 
@@ -169,7 +166,7 @@ Expected browser-storage failures use typed results. Unexpected programming fail
 
 - **Atomicity:** One IndexedDB transaction replaces or deletes the full record.
 - **Ordering:** At most one write transaction is active, and no pending write is promoted until all unresolved loads finish; newer pending state writes afterward.
-- **Idempotency:** Re-saving the same valid project safely replaces the same fixed key.
+- **Idempotency:** Re-saving the same project safely replaces the same fixed key.
 - **Isolation:** Each queued project is a structured clone.
 - **Latency:** Normal saves become ready 500 ms after the latest schedule request; `flush` makes them ready immediately, subject to the load/write barrier.
 - **Bounded memory:** The service holds at most one in-flight snapshot and one newest pending snapshot.
@@ -182,7 +179,7 @@ The one record contains the latest durable domain project and its save time.
 
 | Field | Type | Nullable | Notes |
 |---|---|---|---|
-| `project` | `Project` | no | Complete validated current project. |
+| `project` | `Project` | no | Complete current project. |
 | `updatedAt` | integer | no | Non-negative Unix milliseconds from the supplied clock. |
 
 **Primary key:** Out-of-line fixed key `current`.
@@ -203,7 +200,7 @@ The one record contains the latest durable domain project and its save time.
 |---|---|
 | `storage_unavailable` | IndexedDB cannot be opened or used in the current environment. |
 | `quota_exceeded` | The browser refused the write due to storage quota. |
-| `corrupt_record` | Stored data is malformed or fails current domain validation. |
+| `corrupt_record` | Stored data or its project schema marker is malformed. |
 | `unsupported_schema` | Stored project schema is not supported by this application version. |
 | `transaction_failed` | An IndexedDB operation aborted or failed for another expected storage reason. |
 | `recovery_required` | Writes are blocked to preserve a failed loaded record. |
@@ -233,7 +230,6 @@ Restore the latest durable local project without mutating stored data.
 ### Inputs
 
 - IndexedDB factory.
-- Sound catalog.
 
 ### Procedure
 
@@ -243,10 +239,9 @@ Restore the latest durable local project without mutating stored data.
 4. Return `empty` when no record exists.
 5. Validate the record container and `updatedAt`.
 6. Distinguish an unsupported project schema from other malformed data.
-7. Run `validateProject` with the supplied sound catalog.
-8. Return the loaded project and update time.
-9. On corrupt or unsupported data, retain the original record and activate the recovery gate.
-10. Leave the load barrier; only the final completing load may promote pending work.
+7. Return the loaded project and update time.
+8. On corrupt or unsupported data, retain the original record and activate the recovery gate.
+9. Leave the load barrier; only the final completing load may promote pending work.
 
 ### Error handling
 
@@ -274,14 +269,13 @@ Coalesce rapid current-project changes while providing a durability result to ca
 ### Procedure
 
 1. Reject immediately when the recovery gate is active.
-2. Validate the project with `validateProject`.
-3. Clone the project with `structuredClone`.
-4. Replace the not-yet-written pending snapshot with the clone.
-5. Reuse one shared completion promise for callers covered by that pending flush.
-6. Restart the 500 ms debounce timer.
-7. When the timer fires, wait for unresolved loads and any active transaction, then atomically store the newest pending snapshot.
-8. If a newer snapshot arrived while writing, repeat the write loop once the active transaction completes.
-9. Complete each shared save result only when its snapshot or a newer coalesced snapshot is durable.
+2. Clone the project with `structuredClone`.
+3. Replace the not-yet-written pending snapshot with the clone.
+4. Reuse one shared completion promise for callers covered by that pending flush.
+5. Restart the 500 ms debounce timer.
+6. When the timer fires, wait for unresolved loads and any active transaction, then atomically store the newest pending snapshot.
+7. If a newer snapshot arrived while writing, repeat the write loop once the active transaction completes.
+8. Complete each shared save result only when its snapshot or a newer coalesced snapshot is durable.
 
 ### Configurable parameters
 
@@ -293,7 +287,7 @@ Coalesce rapid current-project changes while providing a durability result to ca
 
 | Failure | Behavior | Recovery |
 |---|---|---|
-| Validation fails | Keep the previous valid pending snapshot unchanged. | Fix the caller. |
+| Cloning fails | Keep the previous pending snapshot unchanged. | Fix the caller. |
 | Write fails | Return the mapped failure and retain the in-memory project. | A newer queued save still attempts independently. |
 | Clear begins before write | Cancel pending work as `cancelled_by_clear`. | Await clear before scheduling replacement state. |
 
@@ -347,7 +341,7 @@ Clearing an absent record succeeds. Repeated clear calls leave storage empty.
 
 ## 10.1 Construction
 
-The application constructs one service with an explicit IndexedDB factory, sound catalog, clock, and debounce duration. Required dependencies avoid hidden globals and keep tests deterministic.
+The application constructs one service with an explicit IndexedDB factory, clock, and debounce duration. Required dependencies avoid hidden globals and keep tests deterministic.
 
 ## 10.2 `load`
 
@@ -506,7 +500,7 @@ Rollback removes the persistence-service files and development dependency. Store
 
 - [ ] Define result and error types in `src/persistence/service.ts`.
 - [ ] Test and implement database opening and version-1 store creation.
-- [ ] Test and implement read-only load with domain validation.
+- [ ] Test and implement read-only load with envelope and schema validation.
 - [ ] Test and implement debounced save coalescing and structured cloning.
 - [ ] Test and implement serialized writes and flush.
 - [ ] Test and implement the load/write barrier in both operation orderings.
@@ -519,15 +513,15 @@ Rollback removes the persistence-service files and development dependency. Store
 - [ ] Add `fake-indexeddb` as a development dependency.
 - [ ] Cover all Section 14 scenarios with `node:test`.
 - [ ] Verify rollback with real aborted fake-indexeddb transactions and fresh connection opening after unexpected close.
-- [ ] Run `npm test`.
-- [ ] Run `npm run typecheck`.
+- [ ] Run `pnpm test`.
+- [ ] Run `pnpm run typecheck`.
 - [ ] Inspect `git diff` for unintended changes.
 - [ ] Run the manual browser reload check when an application shell is available.
 
 # 17) Summary
 
 - One service persists one latest project in IndexedDB.
-- The existing project model and validator remain authoritative.
+- The existing project model remains authoritative for trusted application state.
 - History and command deduplication remain session-local.
 - Autosave coalesces changes over 500 ms and serializes transactions.
 - Complete snapshots avoid patch dependencies and invalidation between writes.

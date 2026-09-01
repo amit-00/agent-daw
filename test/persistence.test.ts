@@ -3,11 +3,7 @@ import test from "node:test";
 
 import { forceCloseDatabase, IDBFactory } from "fake-indexeddb";
 
-import {
-  InvalidInputError,
-  type Project,
-  type SoundCatalog,
-} from "../src/project/index.ts";
+import { type Project } from "../src/project/index.ts";
 import { ProjectPersistenceService } from "../src/persistence/service.ts";
 
 const DATABASE_NAME = "agent-daw";
@@ -18,11 +14,6 @@ const forceClose = forceCloseDatabase as unknown as (database: IDBDatabase) => v
 
 const id = (value: number): string =>
   `00000000-0000-4000-8000-${value.toString().padStart(12, "0")}`;
-
-const catalog: SoundCatalog = {
-  drumKits: [{ id: "kit.basic", soundIds: ["kick", "snare", "hat"] }],
-  synthPresets: [{ id: "synth.bass" }],
-};
 
 const blankProject = (): Project => ({
   schemaVersion: 1,
@@ -158,7 +149,6 @@ const observingOpenFactory = (
 const createService = (indexedDB: IDBFactory): ProjectPersistenceService =>
   new ProjectPersistenceService({
     indexedDB,
-    catalog,
     now: () => 1_700_000_000_000,
     debounceMs: 500,
   });
@@ -262,15 +252,18 @@ test("scheduleSave clones the queued project", async () => {
   assert.equal(loaded.status === "loaded" ? loaded.project.name : undefined, "Untitled");
 });
 
-test("an invalid project cannot replace valid pending work", async () => {
+test("a non-cloneable project cannot replace valid pending work", async () => {
   const indexedDB = new IDBFactory();
   const service = createService(indexedDB);
   service.scheduleSave({ ...blankProject(), name: "Valid" });
+  const nonCloneable = {
+    ...blankProject(),
+    unsupported: () => undefined,
+  } as unknown as Project;
 
   assert.throws(
-    () => service.scheduleSave({ ...blankProject(), bpm: Number.NaN }),
-    (error: unknown) =>
-      error instanceof InvalidInputError && error.info.path === "project.bpm",
+    () => service.scheduleSave(nonCloneable),
+    (error: unknown) => error instanceof DOMException && error.name === "DataCloneError",
   );
 
   await service.flush();

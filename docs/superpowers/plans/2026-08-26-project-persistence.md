@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Persist and restore one latest validated AgentDAW project through a debounced, ordered IndexedDB service with explicit recovery and clear behavior.
+**Goal:** Persist and restore the latest AgentDAW project through a debounced, ordered IndexedDB service with explicit recovery and clear behavior.
 
-**Architecture:** Add one concrete `ProjectPersistenceService` outside the project domain. It validates complete snapshots with `validateProject`, keeps at most one active and one pending write, and stores one `{ project, updatedAt }` record under a fixed IndexedDB key. An unresolved-load barrier prevents pending writes from becoming active until recovery validation finishes. Browser storage failures return typed results; corrupt or unsupported loads block writes until explicit clear succeeds.
+**Architecture:** Add one concrete `ProjectPersistenceService` outside the project domain. It clones complete snapshots before queue mutation, keeps at most one active and one pending write, and stores one `{ project, updatedAt }` record under a fixed IndexedDB key. An unresolved-load barrier prevents pending writes from becoming active until storage validation finishes. Browser storage failures return typed results; corrupt or unsupported loads block writes until explicit clear succeeds.
 
 **Tech Stack:** Strict TypeScript, browser-native IndexedDB, native `structuredClone`, Node's built-in test runner, and `fake-indexeddb` 6.2.5 for Node integration tests.
 
@@ -17,11 +17,11 @@
 - Persist only the latest `Project`; history and successful-command outcomes remain memory-only.
 - Use one concrete class in `src/persistence/service.ts`; do not add a repository interface, factory, migration framework, or runtime dependency.
 - Keep database name `agent-daw`, version `1`, object store `current-project`, record key `current`, and autosave debounce `500` ms.
-- Reuse `validateProject`, `Project`, `SoundCatalog`, `DomainError`, and `InvalidInputError` from `src/project`.
+- Reuse `Project` from `src/project` and trust typed application snapshots as the project domain does.
 - Treat IndexedDB values as untrusted and preserve corrupt or unsupported values until `clear()` succeeds.
 - Add only the explicitly approved development dependency `fake-indexeddb@6.2.5`.
 - Follow TDD: run each named failing test before adding its implementation.
-- Run `npm test` and `npm run typecheck` before completion.
+- Run `pnpm test` and `pnpm run typecheck` before completion.
 
 ## File map
 
@@ -30,20 +30,20 @@
 | `src/persistence/service.ts` | Public result types, IndexedDB helpers, `ProjectPersistenceService`, debounce/write state, error mapping, and recovery gate. |
 | `test/persistence.test.ts` | Integration tests against a fresh `fake-indexeddb` factory per test. |
 | `package.json` | Add `fake-indexeddb` as a development dependency. |
-| `package-lock.json` | Lock the approved dependency version and transitive metadata. |
+| `pnpm-lock.yaml` | Lock the approved dependency version and transitive metadata. |
 
 ---
 
-### Task 1: Load and validate the current IndexedDB record
+### Task 1: Load and validate the current IndexedDB envelope
 
 **Files:**
 - Modify: `package.json`
-- Modify: `package-lock.json`
+- Modify: `pnpm-lock.yaml`
 - Create: `src/persistence/service.ts`
 - Create: `test/persistence.test.ts`
 
 **Interfaces:**
-- Consumes: `Project`, `SoundCatalog`, `DomainError`, and `validateProject` from `src/project/index.ts`.
+- Consumes: `Project` from `src/project/index.ts`.
 - Produces: `PersistenceError`, `LoadResult`, `ProjectPersistenceOptions`, and `ProjectPersistenceService.load(): Promise<LoadResult>`.
 
 - [ ] **Step 1: Add the approved test dependency**
@@ -51,7 +51,7 @@
 Run:
 
 ```bash
-npm install --save-dev fake-indexeddb@6.2.5
+pnpm add --save-dev fake-indexeddb@6.2.5
 ```
 
 Expected: `package.json` contains `"fake-indexeddb": "^6.2.5"`; no runtime dependency is added.
@@ -66,11 +66,7 @@ import test from "node:test";
 
 import { IDBFactory } from "fake-indexeddb";
 
-import {
-  InvalidInputError,
-  type Project,
-  type SoundCatalog,
-} from "../src/project/index.ts";
+import { type Project } from "../src/project/index.ts";
 import { ProjectPersistenceService } from "../src/persistence/service.ts";
 
 const DATABASE_NAME = "agent-daw";
@@ -80,11 +76,6 @@ const RECORD_KEY = "current";
 
 const id = (value: number): string =>
   `00000000-0000-4000-8000-${value.toString().padStart(12, "0")}`;
-
-const catalog: SoundCatalog = {
-  drumKits: [{ id: "kit.basic", soundIds: ["kick", "snare", "hat"] }],
-  synthPresets: [{ id: "synth.bass" }],
-};
 
 const blankProject = (): Project => ({
   schemaVersion: 1,
@@ -124,7 +115,6 @@ const seedRawRecord = async (indexedDB: IDBFactory, value: unknown): Promise<voi
 const createService = (indexedDB: IDBFactory): ProjectPersistenceService =>
   new ProjectPersistenceService({
     indexedDB,
-    catalog,
     now: () => 1_700_000_000_000,
     debounceMs: 500,
   });
@@ -185,12 +175,7 @@ Expected: FAIL because `src/persistence/service.ts` does not exist.
 Create `src/persistence/service.ts` with these public contracts and constants:
 
 ```ts
-import {
-  DomainError,
-  type Project,
-  type SoundCatalog,
-  validateProject,
-} from "../project/index.ts";
+import { type Project } from "../project/index.ts";
 
 const DATABASE_NAME = "agent-daw";
 const DATABASE_VERSION = 1;
@@ -219,7 +204,6 @@ export type LoadResult =
 
 export interface ProjectPersistenceOptions {
   readonly indexedDB: IDBFactory;
-  readonly catalog: SoundCatalog;
   readonly now: () => number;
   readonly debounceMs: number;
 }
@@ -303,21 +287,16 @@ export class ProjectPersistenceService {
     }
     const project = record.project as Record<string, unknown>;
     const schemaVersion = project.schemaVersion;
-    if (typeof schemaVersion === "number" && Number.isInteger(schemaVersion)
-      && schemaVersion !== SUPPORTED_PROJECT_SCHEMA_VERSION) {
+    if (schemaVersion !== SUPPORTED_PROJECT_SCHEMA_VERSION) {
       this.recoveryRequired = true;
-      return { status: "failed", error: persistenceError("unsupported_schema", `Project schema ${schemaVersion} is unsupported`) };
+      if (typeof schemaVersion === "number" && Number.isInteger(schemaVersion)) {
+        return { status: "failed", error: persistenceError("unsupported_schema", `Project schema ${schemaVersion} is unsupported`) };
+      }
+      return { status: "failed", error: persistenceError("corrupt_record", "Stored project schema is invalid") };
     }
     if (!Number.isInteger(record.updatedAt) || (record.updatedAt as number) < 0) {
       this.recoveryRequired = true;
       return { status: "failed", error: persistenceError("corrupt_record", "Stored project update time is invalid") };
-    }
-    try {
-      validateProject(project as unknown as Project, this.options.catalog);
-    } catch (error: unknown) {
-      if (!(error instanceof DomainError)) throw error;
-      this.recoveryRequired = true;
-      return { status: "failed", error: persistenceError("corrupt_record", "Stored project failed validation", error) };
     }
     return {
       status: "loaded",
@@ -387,7 +366,7 @@ Run:
 
 ```bash
 node --disable-warning=ExperimentalWarning --test test/persistence.test.ts
-npm run typecheck
+pnpm run typecheck
 ```
 
 Expected: all four persistence tests PASS and typecheck exits 0.
@@ -395,7 +374,7 @@ Expected: all four persistence tests PASS and typecheck exits 0.
 - [ ] **Step 6: Commit the load boundary**
 
 ```bash
-git add package.json package-lock.json src/persistence test/persistence.test.ts
+git add package.json pnpm-lock.yaml src/persistence test/persistence.test.ts
 git commit -m "feat: load persisted project"
 ```
 
@@ -532,7 +511,6 @@ scheduleSave(project: Project): Promise<SaveResult> {
       error: persistenceError("recovery_required", "Clear the unreadable stored project before saving"),
     });
   }
-  validateProject(project, this.options.catalog);
   const clone = structuredClone(project);
   if (this.pending === undefined) this.pending = createPendingSave(clone);
   else this.pending.project = clone;
@@ -605,7 +583,7 @@ private finishWrite(operation: Promise<SaveResult>): void {
 
 Declare `timer?: ReturnType<typeof setTimeout>`, `pending?: PendingSave`, `pendingReady = false`, and `activeWrite?: Promise<SaveResult>` as private class state. Unexpected programming failures reject the pending promise; expected IndexedDB failures resolve as `SaveResult.status === "failed"`.
 
-Implement `writeProject` with a validated non-negative integer timestamp and one read-write transaction:
+Implement `writeProject` with a checked non-negative integer timestamp and one read-write transaction:
 
 ```ts
 private async writeProject(project: Project): Promise<SaveResult> {
@@ -631,7 +609,7 @@ Run:
 
 ```bash
 node --disable-warning=ExperimentalWarning --test test/persistence.test.ts
-npm run typecheck
+pnpm run typecheck
 ```
 
 Expected: all persistence tests PASS and typecheck exits 0.
@@ -791,7 +769,7 @@ Run:
 
 ```bash
 node --disable-warning=ExperimentalWarning --test test/persistence.test.ts
-npm run typecheck
+pnpm run typecheck
 ```
 
 Expected: all persistence tests PASS and typecheck exits 0.
@@ -976,18 +954,21 @@ Expected: the rollback tests reach `transaction.onabort`, map it to `transaction
 
 - [ ] **Step 3: Tighten error boundaries without swallowing programming failures**
 
-Ensure only `DOMException` values become `PersistenceError`. Keep timestamp failures, invalid outbound projects, and other non-storage exceptions rejected or thrown. Add this regression test:
+Ensure only storage `DOMException` values become `PersistenceError`. Keep timestamp failures, cloning failures, and other non-storage exceptions rejected or thrown. Add this regression test:
 
 ```ts
-test("an invalid project cannot replace valid pending work", async () => {
+test("a non-cloneable project cannot replace valid pending work", async () => {
   const indexedDB = new IDBFactory();
   const service = createService(indexedDB);
   service.scheduleSave({ ...blankProject(), name: "Valid" });
+  const nonCloneable = {
+    ...blankProject(),
+    unsupported: () => undefined,
+  } as unknown as Project;
 
   assert.throws(
-    () => service.scheduleSave({ ...blankProject(), bpm: Number.NaN }),
-    (error: unknown) =>
-      error instanceof InvalidInputError && error.info.path === "project.bpm",
+    () => service.scheduleSave(nonCloneable),
+    (error: unknown) => error instanceof DOMException && error.name === "DataCloneError",
   );
 
   await service.flush();
@@ -1001,8 +982,8 @@ test("an invalid project cannot replace valid pending work", async () => {
 Run:
 
 ```bash
-npm test
-npm run typecheck
+pnpm test
+pnpm run typecheck
 git diff --check
 git status --short
 ```
@@ -1026,7 +1007,7 @@ git commit -m "test: cover persistence failures"
 - Review only: `src/persistence/service.ts`
 - Review only: `test/persistence.test.ts`
 - Review only: `package.json`
-- Review only: `package-lock.json`
+- Review only: `pnpm-lock.yaml`
 
 **Interfaces:**
 - Consumes: completed service from Tasks 1-4.
@@ -1048,8 +1029,8 @@ Expected: all five persistence contracts are exported; no history persistence ex
 Run:
 
 ```bash
-npm test
-npm run typecheck
+pnpm test
+pnpm run typecheck
 git diff --check main...HEAD
 git status --short --branch
 ```

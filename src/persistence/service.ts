@@ -1,9 +1,4 @@
-import {
-  DomainError,
-  type Project,
-  type SoundCatalog,
-  validateProject,
-} from "../project/index.ts";
+import { type Project } from "../project/index.ts";
 
 const DATABASE_NAME = "agent-daw";
 const DATABASE_VERSION = 1;
@@ -43,7 +38,6 @@ export type ClearResult =
 
 export interface ProjectPersistenceOptions {
   readonly indexedDB: IDBFactory;
-  readonly catalog: SoundCatalog;
   readonly now: () => number;
   readonly debounceMs: number;
 }
@@ -149,7 +143,6 @@ export class ProjectPersistenceService {
         error: persistenceError("recovery_required", "Clear the unreadable stored project before saving"),
       });
     }
-    validateProject(project, this.options.catalog);
     const clone = structuredClone(project);
     if (this.pending === undefined) this.pending = createPendingSave(clone);
     else this.pending.project = clone;
@@ -207,21 +200,16 @@ export class ProjectPersistenceService {
     }
     const project = record.project as Record<string, unknown>;
     const schemaVersion = project.schemaVersion;
-    if (typeof schemaVersion === "number" && Number.isInteger(schemaVersion)
-      && schemaVersion !== SUPPORTED_PROJECT_SCHEMA_VERSION) {
+    if (schemaVersion !== SUPPORTED_PROJECT_SCHEMA_VERSION) {
       this.enterRecovery();
-      return { status: "failed", error: persistenceError("unsupported_schema", `Project schema ${schemaVersion} is unsupported`) };
+      if (typeof schemaVersion === "number" && Number.isInteger(schemaVersion)) {
+        return { status: "failed", error: persistenceError("unsupported_schema", `Project schema ${schemaVersion} is unsupported`) };
+      }
+      return { status: "failed", error: persistenceError("corrupt_record", "Stored project schema is invalid") };
     }
     if (!Number.isInteger(record.updatedAt) || (record.updatedAt as number) < 0) {
       this.enterRecovery();
       return { status: "failed", error: persistenceError("corrupt_record", "Stored project update time is invalid") };
-    }
-    try {
-      validateProject(project as unknown as Project, this.options.catalog);
-    } catch (error: unknown) {
-      if (!(error instanceof DomainError)) throw error;
-      this.enterRecovery();
-      return { status: "failed", error: persistenceError("corrupt_record", "Stored project failed validation", error) };
     }
     return {
       status: "loaded",
@@ -232,8 +220,7 @@ export class ProjectPersistenceService {
 
   private async openDatabase(): Promise<IDBDatabase> {
     if (this.databasePromise !== undefined) return this.databasePromise;
-    let opening: Promise<IDBDatabase>;
-    opening = new Promise((resolve, reject) => {
+    const opening: Promise<IDBDatabase> = new Promise((resolve, reject) => {
       const request = this.options.indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
       let blocked = false;
       request.onupgradeneeded = () => {

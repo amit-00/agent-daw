@@ -1,7 +1,5 @@
 import { emptyChangeSummary, type ChangeSummary, type Operation, type Reduction } from "./commands.ts";
-import { ConflictError, InvalidInputError, NotFoundError } from "./errors.ts";
-import type { ArrangementClip, DrumHit, DrumPattern, Pattern, Project, SoundCatalog, SynthNote, SynthPattern, Track } from "./model.ts";
-import { assertUuid, validateProject } from "./model.ts";
+import type { ArrangementClip, DrumPattern, Pattern, Project, SynthPattern, Track } from "./model.ts";
 
 type Diff = { readonly created: readonly string[]; readonly updated: readonly string[]; readonly deleted: readonly string[] };
 type Event = { readonly key: string; readonly id: string; readonly value: unknown };
@@ -20,80 +18,6 @@ const withChanges = (
   };
 };
 
-const requireTrack = (project: Project, trackId: string): Track => {
-  assertUuid(trackId, "operation.trackId");
-  const track = project.tracks.find((candidate) => candidate.id === trackId);
-  if (track === undefined) {
-    throw new NotFoundError({ path: "operation.trackId", message: "must reference an existing track" });
-  }
-  return track;
-};
-
-const requirePattern = (project: Project, patternId: string): Pattern => {
-  assertUuid(patternId, "operation.patternId");
-  const pattern = project.patterns.find((candidate) => candidate.id === patternId);
-  if (pattern === undefined) {
-    throw new NotFoundError({ path: "operation.patternId", message: "must reference an existing pattern" });
-  }
-  return pattern;
-};
-
-const requireArrangementClip = (project: Project, clipId: string): ArrangementClip => {
-  assertUuid(clipId, "operation.clipId");
-  const clip = project.arrangement.find((candidate) => candidate.id === clipId);
-  if (clip === undefined) {
-    throw new NotFoundError({ path: "operation.clipId", message: "must reference an existing arrangement clip" });
-  }
-  return clip;
-};
-
-const requireDrumPattern = (project: Project, patternId: string): DrumPattern => {
-  const pattern = requirePattern(project, patternId);
-  if (pattern.kind !== "drum") {
-    throw new ConflictError({ path: "operation.patternId", message: "must reference a drum pattern" });
-  }
-  return pattern;
-};
-
-const requireSynthPattern = (project: Project, patternId: string): SynthPattern => {
-  const pattern = requirePattern(project, patternId);
-  if (pattern.kind !== "synth") {
-    throw new ConflictError({ path: "operation.patternId", message: "must reference a synth pattern" });
-  }
-  return pattern;
-};
-
-const requireDrumHit = (pattern: DrumPattern, hitId: string, path: string): DrumHit => {
-  assertUuid(hitId, path);
-  const hit = pattern.events.find((candidate) => candidate.id === hitId);
-  if (hit === undefined) {
-    throw new NotFoundError({ path: "operation.hitId", message: "must reference an existing drum hit" });
-  }
-  return hit;
-};
-
-const requireSynthNote = (pattern: SynthPattern, noteId: string, path: string): SynthNote => {
-  assertUuid(noteId, path);
-  const note = pattern.events.find((candidate) => candidate.id === noteId);
-  if (note === undefined) {
-    throw new NotFoundError({ path: "operation.noteId", message: "must reference an existing synth note" });
-  }
-  return note;
-};
-
-const assertUniqueOperationIds = (ids: readonly string[], path: string): void => {
-  if (new Set(ids).size !== ids.length) {
-    throw new ConflictError({ path, message: "must not contain duplicate IDs" });
-  }
-};
-
-const assertOperationIds = (
-  ids: readonly string[],
-  pathForIndex: (index: number) => string,
-): void => {
-  ids.forEach((id, index) => assertUuid(id, pathForIndex(index)));
-};
-
 const replacePattern = (project: Project, updatedPattern: Pattern): Project => ({
   ...project,
   patterns: project.patterns.map((pattern) => pattern.id === updatedPattern.id ? updatedPattern : pattern),
@@ -110,26 +34,6 @@ const copyPattern = <T extends Pattern>(
   name: duplicateName,
   events: pattern.events.map((event, index) => ({ ...event, id: duplicateEventIds[index]! })),
 }) as T;
-
-const assertDrumInstrumentCompatibility = (project: Project, track: Track, catalog: SoundCatalog): void => {
-  if (track.kind !== "drum") return;
-  const kit = catalog.drumKits.find((candidate) => candidate.id === track.instrumentId);
-  if (kit === undefined) return;
-  const soundIds = new Set(kit.soundIds);
-  const incompatibleHitIds: string[] = [];
-  for (const pattern of project.patterns) {
-    if (pattern.trackId === track.id && pattern.kind === "drum") {
-      incompatibleHitIds.push(...pattern.events.filter((hit) => !soundIds.has(hit.soundId)).map((hit) => hit.id));
-    }
-  }
-  if (incompatibleHitIds.length > 0) {
-    throw new ConflictError({
-      path: "operation.changes.instrumentId",
-      message: "must support all existing drum hits on the track",
-      relatedIds: incompatibleHitIds,
-    });
-  }
-};
 
 const diff = <T extends { readonly id: string }>(before: readonly T[], after: readonly T[]): Diff => {
   const beforeById = new Map(before.map((entity) => [entity.id, entity]));
@@ -172,7 +76,7 @@ export function summarizeProjectDiff(before: Project, after: Project): ChangeSum
   };
 }
 
-export function reduceOperation(project: Project, operation: Operation, catalog: SoundCatalog): Reduction {
+export function reduceOperation(project: Project, operation: Operation): Reduction {
   switch (operation.type) {
     case "project.update": {
       const candidate: Project = {
@@ -182,16 +86,14 @@ export function reduceOperation(project: Project, operation: Operation, catalog:
         ...(operation.changes.masterVolumeDb === undefined ? {} : { masterVolumeDb: operation.changes.masterVolumeDb }),
       };
       if (isJsonEqual(project, candidate)) return { project, changes: emptyChangeSummary() };
-      validateProject(candidate, catalog);
       return { project: candidate, changes: withChanges({ updated: { projectIds: [project.id] } }) };
     }
     case "track.create": {
       const candidate: Project = { ...project, tracks: [...project.tracks, operation.track] };
-      validateProject(candidate, catalog);
       return { project: candidate, changes: withChanges({ created: { trackIds: [operation.track.id] } }) };
     }
     case "track.update": {
-      const track = requireTrack(project, operation.trackId);
+      const track = project.tracks.find((track) => track.id === operation.trackId)!;
       const updatedTrack: Track = {
         ...track,
         ...(operation.changes.name === undefined ? {} : { name: operation.changes.name }),
@@ -202,16 +104,13 @@ export function reduceOperation(project: Project, operation: Operation, catalog:
         ...(operation.changes.soloed === undefined ? {} : { soloed: operation.changes.soloed }),
       };
       if (isJsonEqual(track, updatedTrack)) return { project, changes: emptyChangeSummary() };
-      assertDrumInstrumentCompatibility(project, updatedTrack, catalog);
       const candidate: Project = {
         ...project,
         tracks: project.tracks.map((candidateTrack) => candidateTrack.id === track.id ? updatedTrack : candidateTrack),
       };
-      validateProject(candidate, catalog);
       return { project: candidate, changes: withChanges({ updated: { trackIds: [track.id] } }) };
     }
     case "track.delete": {
-      requireTrack(project, operation.trackId);
       const deletedPatterns = project.patterns.filter((pattern) => pattern.trackId === operation.trackId);
       const deletedPatternIds = new Set(deletedPatterns.map((pattern) => pattern.id));
       const deletedDrumHitIds = deletedPatterns.filter((pattern) => pattern.kind === "drum").flatMap((pattern) => pattern.events.map((event) => event.id));
@@ -223,7 +122,6 @@ export function reduceOperation(project: Project, operation: Operation, catalog:
         patterns: project.patterns.filter((pattern) => pattern.trackId !== operation.trackId),
         arrangement: project.arrangement.filter((clip) => !deletedPatternIds.has(clip.patternId)),
       };
-      validateProject(candidate, catalog);
       return {
         project: candidate,
         changes: withChanges({ deleted: {
@@ -237,7 +135,6 @@ export function reduceOperation(project: Project, operation: Operation, catalog:
     }
     case "pattern.create": {
       const candidate: Project = { ...project, patterns: [...project.patterns, operation.pattern] };
-      validateProject(candidate, catalog);
       return {
         project: candidate,
         changes: withChanges({ created: {
@@ -252,23 +149,7 @@ export function reduceOperation(project: Project, operation: Operation, catalog:
       };
     }
     case "pattern.duplicate": {
-      const pattern = requirePattern(project, operation.patternId);
-      assertUuid(operation.duplicatePatternId, "operation.duplicatePatternId");
-      assertOperationIds(
-        operation.duplicateEventIds,
-        (index) => `operation.duplicateEventIds[${index}]`,
-      );
-      const sourceEventIds = new Set(pattern.events.map((event) => event.id));
-      if (
-        operation.duplicateEventIds.length !== pattern.events.length
-        || new Set(operation.duplicateEventIds).size !== operation.duplicateEventIds.length
-        || operation.duplicateEventIds.some((eventId) => sourceEventIds.has(eventId))
-      ) {
-        throw new InvalidInputError({
-          path: "operation.duplicateEventIds",
-          message: "must contain one fresh ID for each copied event",
-        });
-      }
+      const pattern = project.patterns.find((pattern) => pattern.id === operation.patternId)!;
       const duplicate = copyPattern(
         pattern,
         operation.duplicatePatternId,
@@ -276,7 +157,6 @@ export function reduceOperation(project: Project, operation: Operation, catalog:
         operation.duplicateEventIds,
       );
       const candidate: Project = { ...project, patterns: [...project.patterns, duplicate] };
-      validateProject(candidate, catalog);
       return {
         project: candidate,
         changes: withChanges({ created: {
@@ -287,7 +167,7 @@ export function reduceOperation(project: Project, operation: Operation, catalog:
       };
     }
     case "pattern.update": {
-      const pattern = requirePattern(project, operation.patternId);
+      const pattern = project.patterns.find((pattern) => pattern.id === operation.patternId)!;
       const updatedPattern: Pattern = {
         ...pattern,
         ...(operation.changes.name === undefined ? {} : { name: operation.changes.name }),
@@ -295,18 +175,16 @@ export function reduceOperation(project: Project, operation: Operation, catalog:
       };
       if (isJsonEqual(pattern, updatedPattern)) return { project, changes: emptyChangeSummary() };
       const candidate = replacePattern(project, updatedPattern);
-      validateProject(candidate, catalog);
       return { project: candidate, changes: withChanges({ updated: { patternIds: [pattern.id] } }) };
     }
     case "pattern.delete": {
-      const pattern = requirePattern(project, operation.patternId);
+      const pattern = project.patterns.find((pattern) => pattern.id === operation.patternId)!;
       const deletedClips = project.arrangement.filter((clip) => clip.patternId === pattern.id);
       const candidate: Project = {
         ...project,
         patterns: project.patterns.filter((candidatePattern) => candidatePattern.id !== pattern.id),
         arrangement: project.arrangement.filter((clip) => clip.patternId !== pattern.id),
       };
-      validateProject(candidate, catalog);
       return {
         project: candidate,
         changes: withChanges({ deleted: {
@@ -325,11 +203,10 @@ export function reduceOperation(project: Project, operation: Operation, catalog:
         repeatCount: operation.clip.repeatCount,
       };
       const candidate: Project = { ...project, arrangement: [...project.arrangement, clip] };
-      validateProject(candidate, catalog);
       return { project: candidate, changes: withChanges({ created: { arrangementClipIds: [clip.id] } }) };
     }
     case "arrangement.update": {
-      const clip = requireArrangementClip(project, operation.clipId);
+      const clip = project.arrangement.find((clip) => clip.id === operation.clipId)!;
       const updatedClip: ArrangementClip = {
         ...clip,
         ...(operation.changes.patternId === undefined ? {} : { patternId: operation.changes.patternId }),
@@ -341,33 +218,24 @@ export function reduceOperation(project: Project, operation: Operation, catalog:
         ...project,
         arrangement: project.arrangement.map((candidateClip) => candidateClip.id === clip.id ? updatedClip : candidateClip),
       };
-      validateProject(candidate, catalog);
       return { project: candidate, changes: withChanges({ updated: { arrangementClipIds: [clip.id] } }) };
     }
     case "arrangement.delete": {
-      const clip = requireArrangementClip(project, operation.clipId);
+      const clip = project.arrangement.find((clip) => clip.id === operation.clipId)!;
       const candidate: Project = {
         ...project,
         arrangement: project.arrangement.filter((candidateClip) => candidateClip.id !== clip.id),
       };
-      validateProject(candidate, catalog);
       return { project: candidate, changes: withChanges({ deleted: { arrangementClipIds: [clip.id] } }) };
     }
     case "drum-hits.add": {
-      const pattern = requireDrumPattern(project, operation.patternId);
+      const pattern = project.patterns.find((pattern) => pattern.id === operation.patternId) as DrumPattern;
       if (operation.hits.length === 0) return { project, changes: emptyChangeSummary() };
       const candidate = replacePattern(project, { ...pattern, events: [...pattern.events, ...operation.hits] });
-      validateProject(candidate, catalog);
       return { project: candidate, changes: withChanges({ created: { drumHitIds: operation.hits.map((hit) => hit.id) } }) };
     }
     case "drum-hits.update": {
-      const pattern = requireDrumPattern(project, operation.patternId);
-      const hitIds = operation.updates.map((update) => update.hitId);
-      assertOperationIds(hitIds, (index) => `operation.updates[${index}].hitId`);
-      assertUniqueOperationIds(hitIds, "operation.updates");
-      for (const [index, hitId] of hitIds.entries()) {
-        requireDrumHit(pattern, hitId, `operation.updates[${index}].hitId`);
-      }
+      const pattern = project.patterns.find((pattern) => pattern.id === operation.patternId) as DrumPattern;
       const changesById = new Map(operation.updates.map((update) => [update.hitId, update.changes]));
       const updatedPattern: DrumPattern = {
         ...pattern,
@@ -385,37 +253,23 @@ export function reduceOperation(project: Project, operation: Operation, catalog:
         .map((hit) => hit.id);
       if (changedHitIds.length === 0) return { project, changes: emptyChangeSummary() };
       const candidate = replacePattern(project, updatedPattern);
-      validateProject(candidate, catalog);
       return { project: candidate, changes: withChanges({ updated: { drumHitIds: changedHitIds } }) };
     }
     case "drum-hits.delete": {
-      const pattern = requireDrumPattern(project, operation.patternId);
-      assertOperationIds(operation.hitIds, (index) => `operation.hitIds[${index}]`);
-      assertUniqueOperationIds(operation.hitIds, "operation.hitIds");
-      for (const [index, hitId] of operation.hitIds.entries()) {
-        requireDrumHit(pattern, hitId, `operation.hitIds[${index}]`);
-      }
+      const pattern = project.patterns.find((pattern) => pattern.id === operation.patternId) as DrumPattern;
       if (operation.hitIds.length === 0) return { project, changes: emptyChangeSummary() };
       const hitIds = new Set(operation.hitIds);
       const candidate = replacePattern(project, { ...pattern, events: pattern.events.filter((hit) => !hitIds.has(hit.id)) });
-      validateProject(candidate, catalog);
       return { project: candidate, changes: withChanges({ deleted: { drumHitIds: operation.hitIds } }) };
     }
     case "synth-notes.add": {
-      const pattern = requireSynthPattern(project, operation.patternId);
+      const pattern = project.patterns.find((pattern) => pattern.id === operation.patternId) as SynthPattern;
       if (operation.notes.length === 0) return { project, changes: emptyChangeSummary() };
       const candidate = replacePattern(project, { ...pattern, events: [...pattern.events, ...operation.notes] });
-      validateProject(candidate, catalog);
       return { project: candidate, changes: withChanges({ created: { synthNoteIds: operation.notes.map((note) => note.id) } }) };
     }
     case "synth-notes.update": {
-      const pattern = requireSynthPattern(project, operation.patternId);
-      const noteIds = operation.updates.map((update) => update.noteId);
-      assertOperationIds(noteIds, (index) => `operation.updates[${index}].noteId`);
-      assertUniqueOperationIds(noteIds, "operation.updates");
-      for (const [index, noteId] of noteIds.entries()) {
-        requireSynthNote(pattern, noteId, `operation.updates[${index}].noteId`);
-      }
+      const pattern = project.patterns.find((pattern) => pattern.id === operation.patternId) as SynthPattern;
       const changesById = new Map(operation.updates.map((update) => [update.noteId, update.changes]));
       const updatedPattern: SynthPattern = {
         ...pattern,
@@ -434,20 +288,13 @@ export function reduceOperation(project: Project, operation: Operation, catalog:
         .map((note) => note.id);
       if (changedNoteIds.length === 0) return { project, changes: emptyChangeSummary() };
       const candidate = replacePattern(project, updatedPattern);
-      validateProject(candidate, catalog);
       return { project: candidate, changes: withChanges({ updated: { synthNoteIds: changedNoteIds } }) };
     }
     case "synth-notes.delete": {
-      const pattern = requireSynthPattern(project, operation.patternId);
-      assertOperationIds(operation.noteIds, (index) => `operation.noteIds[${index}]`);
-      assertUniqueOperationIds(operation.noteIds, "operation.noteIds");
-      for (const [index, noteId] of operation.noteIds.entries()) {
-        requireSynthNote(pattern, noteId, `operation.noteIds[${index}]`);
-      }
+      const pattern = project.patterns.find((pattern) => pattern.id === operation.patternId) as SynthPattern;
       if (operation.noteIds.length === 0) return { project, changes: emptyChangeSummary() };
       const noteIds = new Set(operation.noteIds);
       const candidate = replacePattern(project, { ...pattern, events: pattern.events.filter((note) => !noteIds.has(note.id)) });
-      validateProject(candidate, catalog);
       return { project: candidate, changes: withChanges({ deleted: { synthNoteIds: operation.noteIds } }) };
     }
   }
