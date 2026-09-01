@@ -110,4 +110,3 @@ and check for clipping, overflow, contrast, and visible focus treatment.
 - IndexedDB autosave, WAV export, and WebMCP.
 - Responsive tablet or mobile layouts.
 - Extracted design-system primitives or additional dependencies.
-

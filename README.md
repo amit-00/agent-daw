@@ -38,6 +38,20 @@ WebMCP adapter ─┘          │                 │
 The planned stack is strict TypeScript, React, Next.js, native Web Audio, and
 IndexedDB with no application backend.
 
+## Development
+
+Use Node.js 23.6 or newer and pnpm 10.17.0 (pinned in `package.json`).
+
+```sh
+pnpm install --frozen-lockfile
+pnpm dev
+```
+
+Run checks with `pnpm test`, `pnpm typecheck`, `pnpm lint`, and `pnpm build`.
+Commit `pnpm-lock.yaml` when dependencies change; do not generate npm or Yarn
+lockfiles. Each Git worktree needs its own `pnpm install --frozen-lockfile`.
+Dependency build scripts are allowed only for `esbuild` and `unrs-resolver`.
+
 ## Documentation
 
 - [Project design](docs/design.md) — approved scope, workflows, architecture,
