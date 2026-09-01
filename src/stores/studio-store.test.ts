@@ -4,6 +4,94 @@ import { DEMO_PROJECT, EMPTY_PROJECT } from "@/data/studio-data";
 import { createStudioStore } from "@/stores/studio-store";
 
 describe("studio session", () => {
+  it("commits a drum paint stroke once and retains edits across selection", () => {
+    const store = createStudioStore(EMPTY_PROJECT);
+    const patternId = store.getState().createPattern("drum")!;
+    const before = store.getState().history.length;
+    store.getState().setDrumCells(patternId, [
+      { soundId: "kick", startStep: 0, active: true },
+      { soundId: "kick", startStep: 4, active: true },
+    ]);
+    const otherId = store.getState().createPattern("drum")!;
+    store.getState().selectPattern(otherId);
+    store.getState().selectPattern(patternId);
+    expect(store.getState().project.patterns.find((pattern) => pattern.id === patternId)?.events).toHaveLength(2);
+    expect(store.getState().history).toHaveLength(before + 2);
+    store.getState().undo();
+    store.getState().undo();
+    expect(store.getState().project.patterns.find((pattern) => pattern.id === patternId)?.events).toHaveLength(0);
+  });
+
+  it("adds and erases drum cells atomically without toggling repeated cells", () => {
+    const store = createStudioStore(EMPTY_PROJECT);
+    const patternId = store.getState().createPattern("drum")!;
+    store.getState().setDrumCells(patternId, [
+      { soundId: "kick", startStep: 0, active: true },
+      { soundId: "kick", startStep: 0, active: true },
+      { soundId: "snare", startStep: 4, active: true },
+    ]);
+    const before = store.getState().history.length;
+    store.getState().setDrumCells(patternId, [
+      { soundId: "kick", startStep: 0, active: false },
+      { soundId: "hat", startStep: 8, active: true },
+      { soundId: "kick", startStep: 0, active: false },
+    ]);
+    const pattern = store.getState().project.patterns.find((item) => item.id === patternId)!;
+    expect(pattern.kind).toBe("drum");
+    if (pattern.kind !== "drum") throw new Error("Expected a drum pattern");
+    expect(pattern.events.map((event) => ({ soundId: event.soundId, startStep: event.startStep }))).toEqual([
+      { soundId: "snare", startStep: 4 }, { soundId: "hat", startStep: 8 },
+    ]);
+    expect(store.getState().history).toHaveLength(before + 1);
+    expect(store.getState().history.at(-1)?.action.kind).toBe("batch");
+    store.getState().undo();
+    expect(store.getState().project.patterns.find((item) => item.id === patternId)?.events).toHaveLength(2);
+  });
+
+  it("accepts the final drum step and rejects invalid cells without history", () => {
+    const project = { ...EMPTY_PROJECT, patterns: [
+      { id: "long-beat", name: "Long beat", kind: "drum" as const, lengthBars: 4 as const, events: [] },
+      { id: "unused-synth", name: "Melody", kind: "synth" as const, lengthBars: 1 as const, events: [] },
+    ] };
+    const store = createStudioStore(project);
+    store.getState().setDrumCells("long-beat", [{ soundId: "kick", startStep: 63, active: true }]);
+    const before = store.getState().history.length;
+    for (const startStep of [-1, 64, 1.5, NaN, Infinity]) {
+      store.getState().setDrumCells("long-beat", [{ soundId: "kick", startStep, active: true }]);
+    }
+    store.getState().setDrumCells("long-beat", [{ soundId: "clap", startStep: 0, active: true }]);
+    store.getState().setDrumCells("gone", [{ soundId: "kick", startStep: 0, active: true }]);
+    store.getState().setDrumCells("unused-synth", [{ soundId: "kick", startStep: 0, active: true }]);
+    expect(store.getState().project.patterns[0]?.events).toHaveLength(1);
+    expect(store.getState().history).toHaveLength(before);
+    expect(store.getState().errorMessage).toBeTruthy();
+  });
+
+  it("checks every referencing drum kit before adding a hit", () => {
+    const store = createStudioStore({ ...DEMO_PROJECT,
+      tracks: [...DEMO_PROJECT.tracks, { ...DEMO_PROJECT.tracks[0]!, id: "other-drums", instrumentId: "missing-kit" }],
+      arrangement: [...DEMO_PROJECT.arrangement,
+        { id: "other-neon", trackId: "other-drums", patternId: "neon", startBar: 8, repeatCount: 1 }],
+    });
+    store.getState().setDrumCells("neon", [{ soundId: "kick", startStep: 1, active: true }]);
+    expect(store.getState().history).toHaveLength(0);
+    expect(store.getState().errorMessage).toMatch(/unavailable/i);
+    expect(DEMO_PROJECT.patterns[0]?.events).toHaveLength(10);
+  });
+
+  it("enforces the drum-event cap while still allowing erasure", () => {
+    const events = Array.from({ length: 512 }, (_, index) => ({ id: `hit-${index}`, soundId: "kick", startStep: index % 16 }));
+    const store = createStudioStore({ ...EMPTY_PROJECT, patterns: [
+      { id: "full-beat", name: "Full beat", kind: "drum", lengthBars: 1, events },
+    ] });
+    store.getState().setDrumCells("full-beat", [{ soundId: "snare", startStep: 0, active: true }]);
+    expect(store.getState().history).toHaveLength(0);
+    expect(store.getState().errorMessage).toMatch(/512/);
+    store.getState().setDrumCells("full-beat", [{ soundId: "kick", startStep: 0, active: false }]);
+    expect(store.getState().project.patterns[0]?.events).toHaveLength(480);
+    expect(store.getState().history).toHaveLength(1);
+  });
+
   it("assigns new tracks successive wheel colors and wraps to purple", () => {
     const store = createStudioStore(EMPTY_PROJECT);
     for (let index = 0; index < 9; index += 1) store.getState().createTrack("synth", "synth.pad");

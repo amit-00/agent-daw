@@ -39,6 +39,9 @@ export interface StudioState extends ProjectServiceState {
   duplicateClip(clipId: string): string | null;
   deleteClip(clipId: string): void;
   makeClipUnique(clipId: string): void;
+  setDrumCells(patternId: string, cells: readonly {
+    readonly soundId: string; readonly startStep: number; readonly active: boolean;
+  }[]): void;
 }
 
 function duplicatePatternOperation(pattern: Pattern, id: string): Operation {
@@ -324,6 +327,52 @@ export function createStudioStore(initialProject: Project): StoreApi<StudioState
         const id = crypto.randomUUID();
         commitBatch(`Make ${pattern.name} unique`, [duplicatePatternOperation(pattern, id),
           { type: "arrangement.update", clipId, changes: { patternId: id } }]);
+      },
+      setDrumCells(patternId, cells): void {
+        const { project } = get();
+        const pattern = project.patterns.find((item) => item.id === patternId);
+        if (!pattern || pattern.kind !== "drum") {
+          set({ errorMessage: "That drum pattern no longer exists. Select another pattern." });
+          return;
+        }
+        const edits = [...new Map(cells.map((cell) => [`${cell.soundId}:${cell.startStep}`, cell])).values()];
+        const endStep = pattern.lengthBars * 16;
+        if (edits.some((cell) => !Number.isInteger(cell.startStep) || cell.startStep < 0 || cell.startStep >= endStep)) {
+          set({ errorMessage: `Choose whole steps from 1 to ${endStep} for this pattern.` });
+          return;
+        }
+        const sounds = new Set(SOUND_CATALOG.drumKits.flatMap((kit) => kit.soundIds));
+        const unavailable = edits.find((cell) => !sounds.has(cell.soundId));
+        if (unavailable) {
+          set({ errorMessage: `${unavailable.soundId} is unavailable. Choose a sound from the drum catalog.` });
+          return;
+        }
+        const additions = edits.filter((cell) => cell.active &&
+          !pattern.events.some((hit) => hit.soundId === cell.soundId && hit.startStep === cell.startStep));
+        const deletedIds = pattern.events.filter((hit) => edits.some((cell) => !cell.active &&
+          cell.soundId === hit.soundId && cell.startStep === hit.startStep)).map((hit) => hit.id);
+        if (pattern.events.length - deletedIds.length + additions.length > PROJECT_CAPS.maxEventsPerPattern) {
+          set({ errorMessage: `A pattern supports ${PROJECT_CAPS.maxEventsPerPattern} events. Erase a hit before adding another.` });
+          return;
+        }
+        const deleted = new Set(deletedIds);
+        const resultingSoundIds = [
+          ...pattern.events.filter((hit) => !deleted.has(hit.id)).map((hit) => hit.soundId),
+          ...additions.map((cell) => cell.soundId),
+        ];
+        for (const clip of project.arrangement.filter((item) => item.patternId === patternId)) {
+          const track = project.tracks.find((item) => item.id === clip.trackId)!;
+          const problem = getDrumKitProblem(track, resultingSoundIds);
+          if (problem) { set({ errorMessage: problem }); return; }
+        }
+        const operations: Operation[] = [];
+        if (additions.length > 0) operations.push({ type: "drum-hits.add", patternId, hits: additions.map((cell) => ({
+          id: crypto.randomUUID(), soundId: cell.soundId, startStep: cell.startStep,
+        })) });
+        if (deletedIds.length > 0) operations.push({ type: "drum-hits.delete", patternId, hitIds: deletedIds });
+        if (operations.length === 1) commit(`Edit ${pattern.name}`, operations[0]!);
+        else if (operations.length > 1) commitBatch(`Edit ${pattern.name}`, operations);
+        else set({ errorMessage: null });
       },
     };
   });
