@@ -6,6 +6,8 @@ import { getTrackColor } from "@/data/studio-data";
 import type { ArrangementClip, Pattern } from "@/project";
 import { useStudioStore } from "@/stores/studio-provider";
 
+const MIDI_NOTE_HEIGHT = 0.6;
+
 export function Clip({ clip, pattern, bars, onEdit }: Readonly<{
   clip: ArrangementClip; pattern: Pattern; bars: number; onEdit: () => void;
 }>): ReactElement {
@@ -33,7 +35,9 @@ export function Clip({ clip, pattern, bars, onEdit }: Readonly<{
           <pattern id={marksId} width={steps} height={previewHeight} patternUnits="userSpaceOnUse">
             {pattern.kind === "drum"
               ? pattern.events.map((hit) => <rect key={hit.id} x={hit.startStep} y={hit.soundId === "kick" ? 52 : hit.soundId === "snare" ? 30 : 8} width={0.65} height={14} fill="currentColor" />)
-              : pattern.events.map((note) => <rect key={note.id} x={note.startStep} y={octaveEnd - note.midiNote - 1} width={note.lengthSteps} height={1} fill="currentColor" />)}
+              : pattern.events.map((note) => <rect key={note.id} x={note.startStep}
+                y={octaveEnd - note.midiNote - 1 + (1 - MIDI_NOTE_HEIGHT) / 2}
+                width={note.lengthSteps} height={MIDI_NOTE_HEIGHT} rx={MIDI_NOTE_HEIGHT / 2} fill="currentColor" />)}
           </pattern>
         </defs>
         <rect width="100%" height="100%" fill={`url(#${marksId})`} />

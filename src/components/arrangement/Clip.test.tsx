@@ -6,7 +6,7 @@ import { EMPTY_PROJECT } from "@/data/studio-data";
 import type { ArrangementClip, Project, SynthPattern } from "@/project";
 import { StudioProvider } from "@/stores/studio-provider";
 
-it("frames MIDI clip previews around the complete octaves containing their notes", () => {
+it("renders thin rounded MIDI notes within their occupied octaves", () => {
   const pattern: SynthPattern = { id: "phrase", name: "Phrase", kind: "synth", lengthBars: 1,
     events: [
       { id: "low", midiNote: 36, startStep: 0, lengthSteps: 2 },
@@ -27,7 +27,8 @@ it("frames MIDI clip previews around the complete octaves containing their notes
   expect(container.querySelector("svg")).toHaveAttribute("viewBox", "0 0 16 24");
   expect(container.querySelector("svg pattern")).toHaveAttribute("height", "24");
   const notes = container.querySelectorAll("svg pattern rect");
-  expect(notes[0]).toHaveAttribute("y", "23");
-  expect(notes[0]).toHaveAttribute("height", "1");
-  expect(notes[1]).toHaveAttribute("y", "9");
+  expect(notes[0]).toHaveAttribute("y", "23.2");
+  expect(notes[0]).toHaveAttribute("height", "0.6");
+  expect(notes[0]).toHaveAttribute("rx", "0.3");
+  expect(notes[1]).toHaveAttribute("y", "9.2");
 });
