@@ -164,7 +164,7 @@ export function Arrangement({ previewEndBar = null }: Readonly<{ previewEndBar?:
       </section>
       {adding && <AddTrack onClose={() => setAdding(false)} />}
       {editingClip && editingPattern && <ClipSettings key={editingClip.id} clip={editingClip} pattern={editingPattern}
-        onClose={closeClipSettings} onDeleted={closeClipSettings} />}
+        onClose={closeClipSettings} />}
       {editingTrack && <TrackSettings key={editingTrack.id} track={editingTrack} onClose={() => setEditingId(null)} onDeleted={() => {
         setEditingId(null);
         queueMicrotask(() => addButton.current?.focus());

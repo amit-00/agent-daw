@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, type KeyboardEvent, type MouseEvent, type PointerEvent, type ReactElement } from "react";
+import { useRef, useState, type MouseEvent, type PointerEvent, type ReactElement } from "react";
 
 import { BASIC_DRUM_KIT } from "@/audio/catalog";
 import { getTrackColor } from "@/data/studio-data";
@@ -87,12 +87,6 @@ export function DrumGrid({ pattern }: Readonly<{ pattern: DrumPattern }>): React
     if (event.detail === 0) setDrumCells(pattern.id, [{ soundId, startStep, active: !isActive(soundId, startStep) }]);
   }
 
-  function activateKey(event: KeyboardEvent<HTMLButtonElement>, soundId: string, startStep: number): void {
-    if (event.key !== "Enter" && event.key !== " ") return;
-    event.preventDefault();
-    setDrumCells(pattern.id, [{ soundId, startStep, active: !isActive(soundId, startStep) }]);
-  }
-
   return <section ref={grid} aria-label={`Drum grid for ${pattern.name}`}
     className="grid h-full min-h-[160px] grid-cols-[38px_1fr] grid-rows-[20px_1fr] touch-none"
     style={{ minWidth: 38 + steps * MIN_STEP_WIDTH }}
@@ -121,7 +115,6 @@ export function DrumGrid({ pattern }: Readonly<{ pattern: DrumPattern }>): React
           data-sound-id={sound.id} data-start-step={startStep}
           onPointerDown={(event) => start(event, sound.id, startStep)}
           onClick={(event) => activate(event, sound.id, startStep)}
-          onKeyDown={(event) => activateKey(event, sound.id, startStep)}
           className="relative border-r border-b border-white/[0.04] bg-transparent p-0 focus-visible:z-[1] focus-visible:outline-2 focus-visible:outline-violet-300">
           {active && <span className="absolute inset-1/4 rounded-[3px]" style={{ background: `color-mix(in srgb, ${color} 78%, transparent)` }} />}
         </button>;

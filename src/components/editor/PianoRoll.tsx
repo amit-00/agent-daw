@@ -103,21 +103,17 @@ export function PianoRoll({ pattern }: Readonly<{ pattern: SynthPattern }>): Rea
   const track = project.tracks.find((item) => item.id === trackId);
   const color = getTrackColor(track ?? pattern);
 
-  function releaseCapture(pointerId: number): void {
-    if (cells.current?.hasPointerCapture(pointerId)) cells.current.releasePointerCapture(pointerId);
-  }
-
-  function clearGesture(release = true): NoteGesture | null {
+  function clearGesture(): NoteGesture | null {
     const current = gestureRef.current;
     gestureRef.current = null;
     setPreview(null);
     setMarquee(null);
-    if (release && current) releaseCapture(current.pointerId);
+    if (current && cells.current?.hasPointerCapture(current.pointerId)) cells.current.releasePointerCapture(current.pointerId);
     return current;
   }
 
-  function cancelGesture(release = true): void {
-    const current = clearGesture(release);
+  function cancelGesture(): void {
+    const current = clearGesture();
     if (current?.kind === "marquee") setSelectedIds(current.previousSelectedIds);
   }
 
@@ -236,13 +232,9 @@ export function PianoRoll({ pattern }: Readonly<{ pattern: SynthPattern }>): Rea
   }
 
   function updateSelection(notes: readonly SynthNote[]): void {
-    const current = pattern.events.filter((note) => currentSelectedIds.includes(note.id));
-    if (notes.some((note, index) => note.midiNote !== current[index]?.midiNote || note.startStep !== current[index]?.startStep ||
-      note.lengthSteps !== current[index]?.lengthSteps)) {
-      updateSynthNotes(pattern.id, notes.map((note) => ({ noteId: note.id, changes: {
-        midiNote: note.midiNote, startStep: note.startStep, lengthSteps: note.lengthSteps,
-      } })));
-    }
+    updateSynthNotes(pattern.id, notes.map((note) => ({ noteId: note.id, changes: {
+      midiNote: note.midiNote, startStep: note.startStep, lengthSteps: note.lengthSteps,
+    } })));
   }
 
   function handleKeyboard(event: KeyboardEvent<HTMLElement>): void {
@@ -311,7 +303,7 @@ export function PianoRoll({ pattern }: Readonly<{ pattern: SynthPattern }>): Rea
         <div ref={cells} data-piano-cells role="group" tabIndex={0} aria-label={`Note grid, ${steps} steps`}
           onPointerDown={begin} onPointerMove={move} onPointerUp={finish}
           onPointerCancel={(event) => { if (event.pointerId === gestureRef.current?.pointerId) cancelGesture(); }}
-          onLostPointerCapture={(event) => { if (event.pointerId === gestureRef.current?.pointerId) cancelGesture(false); }}
+          onLostPointerCapture={(event) => { if (event.pointerId === gestureRef.current?.pointerId) cancelGesture(); }}
           onDoubleClick={doubleClick}
           className="relative col-start-2 row-start-2 grid focus-visible:outline-2 focus-visible:outline-inset focus-visible:outline-violet-300"
           style={{ gridTemplateColumns: `repeat(${steps},minmax(${MIN_STEP_WIDTH}px,1fr))`, gridTemplateRows: `repeat(${PITCHES.length},${PITCH_HEIGHT}px)`,

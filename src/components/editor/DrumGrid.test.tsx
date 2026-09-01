@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { useEffect } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -47,7 +48,8 @@ beforeEach(() => vi.stubGlobal("PointerEvent", TestPointerEvent));
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe("DrumGrid", () => {
-  it("toggles one real hit with click or keyboard activation", () => {
+  it("toggles one real hit with click or keyboard activation", async () => {
+    const user = userEvent.setup();
     mount();
     const kick = screen.getByRole("button", { name: "Add Kick at step 1" });
     fireEvent.pointerDown(kick, { pointerId: 1, button: 0, clientX: 12, clientY: 15 });
@@ -55,7 +57,8 @@ describe("DrumGrid", () => {
     expect(screen.getByRole("button", { name: "Remove Kick at step 1" })).toHaveAttribute("aria-pressed", "true");
     expect(state.project.patterns[0]?.events).toHaveLength(1);
     expect(state.history).toHaveLength(1);
-    fireEvent.keyDown(screen.getByRole("button", { name: "Add Snare at step 2" }), { key: "Enter" });
+    screen.getByRole("button", { name: "Add Snare at step 2" }).focus();
+    await user.keyboard("{Enter}");
     expect(state.project.patterns[0]?.events).toHaveLength(2);
     expect(state.history).toHaveLength(2);
   });

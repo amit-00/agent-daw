@@ -4,7 +4,8 @@ import { SOUND_CATALOG } from "@/audio/catalog";
 import { getTrackColor, INSTRUMENT_NAMES, TRACK_COLOR_WHEEL } from "@/data/studio-data";
 import { PROJECT_CAPS, ProjectService, type Command, type DispatchResult, type Operation, type Pattern, type PatternLengthBars, type Project, type ProjectServiceState, type SynthNote, type SynthPattern, type TrackKind } from "@/project";
 import { getDrumKitProblem, getPatternLengthProblem, getPlacementProblem } from "@/stores/studio-edits";
-import type { EditorTab } from "@/types/studio";
+
+type EditorTab = "mixer" | "pattern";
 
 export interface StudioState extends ProjectServiceState {
   readonly activityOpen: boolean;
@@ -18,7 +19,6 @@ export interface StudioState extends ProjectServiceState {
   redo(): void;
   restore(entryId: string): void;
   toggleActivity(): void;
-  closeActivity(): void;
   selectEditorTab(tab: EditorTab): void;
   selectClip(clipId: string): void;
   selectPattern(patternId: string): void;
@@ -121,7 +121,6 @@ export function createStudioStore(initialProject: Project): StoreApi<StudioState
         publish();
       },
       toggleActivity: () => set((state) => ({ activityOpen: !state.activityOpen })),
-      closeActivity: () => set({ activityOpen: false }),
       selectEditorTab: (editorTab) => set({ editorTab }),
       selectClip(clipId): void {
         const clip = get().project.arrangement.find((item) => item.id === clipId);

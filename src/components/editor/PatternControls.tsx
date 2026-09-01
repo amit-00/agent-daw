@@ -93,8 +93,8 @@ export function PatternSettings({ pattern, onClose, onDeleted }: Readonly<{
   </EditorDialog>;
 }
 
-export function ClipSettings({ clip, pattern, onClose, onDeleted }: Readonly<{
-  clip: ArrangementClip; pattern: Pattern; onClose: () => void; onDeleted: () => void;
+export function ClipSettings({ clip, pattern, onClose }: Readonly<{
+  clip: ArrangementClip; pattern: Pattern; onClose: () => void;
 }>): ReactElement {
   const { project, updateClip, duplicateClip, deleteClip, makeClipUnique } = useStudioStore((state) => state);
   const [trackId, setTrackId] = useState(clip.trackId);
@@ -122,7 +122,7 @@ export function ClipSettings({ clip, pattern, onClose, onDeleted }: Readonly<{
         <button type="button" onClick={() => makeClipUnique(clip.id)}>Make unique</button>
       </div>
       <div className="flex justify-between border-t border-white/10 pt-4">
-        <button type="button" className="text-rose-300" onClick={() => { deleteClip(clip.id); onDeleted(); }}>Delete clip</button>
+        <button type="button" className="text-rose-300" onClick={() => { deleteClip(clip.id); onClose(); }}>Delete clip</button>
         <button type="button" onClick={onClose}>Done</button>
       </div>
     </div>
