@@ -135,7 +135,7 @@ The service is one concrete class because its operations share lifecycle state. 
 ## 6.2 Inputs
 
 - Native `IDBFactory` supplied by the application.
-- Clock function used to create deterministic `updatedAt` values.
+- Optional clock function for deterministic `updatedAt` values; defaults to `Date.now`.
 - Explicit debounce duration; the application uses 500 ms.
 - Complete `Project` snapshots after current state changes.
 
@@ -180,7 +180,7 @@ The one record contains the latest durable domain project and its save time.
 | Field | Type | Nullable | Notes |
 |---|---|---|---|
 | `project` | `Project` | no | Complete current project. |
-| `updatedAt` | integer | no | Non-negative Unix milliseconds from the supplied clock. |
+| `updatedAt` | integer | no | Non-negative Unix milliseconds from the supplied clock or `Date.now`. |
 
 **Primary key:** Out-of-line fixed key `current`.
 
@@ -341,7 +341,7 @@ Clearing an absent record succeeds. Repeated clear calls leave storage empty.
 
 ## 10.1 Construction
 
-The application constructs one service with an explicit IndexedDB factory, clock, and debounce duration. Required dependencies avoid hidden globals and keep tests deterministic.
+The application constructs one service with an explicit IndexedDB factory and debounce duration. Tests may provide a clock; production defaults to `Date.now`.
 
 ## 10.2 `load`
 

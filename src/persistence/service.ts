@@ -38,7 +38,7 @@ export type ClearResult =
 
 export interface ProjectPersistenceOptions {
   readonly indexedDB: IDBFactory;
-  readonly now: () => number;
+  readonly now?: () => number;
   readonly debounceMs: number;
 }
 
@@ -344,7 +344,7 @@ export class ProjectPersistenceService {
   }
 
   private async writeProject(project: Project): Promise<SaveResult> {
-    const updatedAt = this.options.now();
+    const updatedAt = (this.options.now ?? Date.now)();
     if (!Number.isInteger(updatedAt) || updatedAt < 0) {
       throw new RangeError("Persistence clock must return a non-negative integer");
     }

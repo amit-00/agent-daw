@@ -226,6 +226,18 @@ test("scheduleSave and flush persist a project", async () => {
   assert.equal((await createService(indexedDB).load()).status, "loaded");
 });
 
+test("scheduleSave defaults to Date.now", async (context) => {
+  context.mock.method(Date, "now", () => 1_800_000_000_000);
+  const service = new ProjectPersistenceService({
+    indexedDB: new IDBFactory(),
+    debounceMs: 500,
+  });
+
+  service.scheduleSave(blankProject());
+
+  assert.deepEqual(await service.flush(), { status: "saved", updatedAt: 1_800_000_000_000 });
+});
+
 test("scheduleSave coalesces to the newest snapshot", async (context) => {
   context.mock.timers.enable({ apis: ["setTimeout"] });
   const indexedDB = new IDBFactory();
