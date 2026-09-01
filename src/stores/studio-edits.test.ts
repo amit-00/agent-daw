@@ -58,6 +58,13 @@ describe("placement constraints", () => {
     expect(getPatternLengthProblem({ ...project, arrangement: [{ ...candidate, startBar: 255 }] }, "p", 2)).toMatch(/256/);
   });
 
+  it("allows exactly 64 repeats of a four-bar pattern within the arrangement", () => {
+    const longPattern: Project = { ...project,
+      patterns: [{ ...project.patterns[0]!, lengthBars: 4 }], arrangement: [] };
+    expect(getPlacementProblem(longPattern, { ...candidate, startBar: 0, repeatCount: 64 })).toBeNull();
+    expect(getPlacementProblem(longPattern, { ...candidate, startBar: 1, repeatCount: 64 })).toMatch(/256/);
+  });
+
   it("refuses to truncate hits or note durations on shrink", () => {
     expect(getPatternLengthProblem({ ...project, patterns: [{ id: "p", name: "Notes", kind: "synth", lengthBars: 2,
       events: [{ id: "note", midiNote: 60, startStep: 15, lengthSteps: 2 }] }] }, "p", 1)).toMatch(/shorten/i);

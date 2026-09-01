@@ -245,13 +245,13 @@ Loader/storage integration is a named follow-up gate, not an excuse to merge the
 
 # 11) Delivery and Acceptance
 
-- [ ] Model: independent patterns, clip routing, safe deletion, reorder, version conversion, and audio routing regressions pass.
-- [ ] State bridge: one committed project/history, per-session isolation, no fixture-backed musical state, and safe empty selections.
-- [ ] Track/pattern workflows: UI-1, UI-2, and UI-3 work through both direct and accessible controls.
-- [ ] Arrangement: UI-4 supports valid cross-track moves, repeats, shared duplication, and Make unique; invalid/cancelled gestures are non-mutating.
-- [ ] Pattern editors: UI-5 and UI-6 modify actual events and every shared preview; switching patterns never loses edits.
-- [ ] Mixer/history: UI-7 and UI-8 are controlled, undoable, and truthful about silence.
-- [ ] Cross-cutting: UI-9, resource caps, keyboard focus, errors, and current desktop layout pass automated and browser review.
-- [ ] Integration: document the separate persistence gate; do not report audible playback, autosave, or WebMCP as complete.
+- [x] Model: independent patterns, clip routing, safe deletion, reorder, version conversion, and audio routing regressions pass.
+- [x] State bridge: one committed project/history, per-session isolation, no fixture-backed musical state, and safe empty selections.
+- [x] Track/pattern workflows: UI-1, UI-2, and UI-3 work through both direct and accessible controls.
+- [x] Arrangement: UI-4 supports valid cross-track moves, repeats, shared duplication, and Make unique; invalid/cancelled gestures are non-mutating.
+- [x] Pattern editors: UI-5 and UI-6 modify actual events and every shared preview; switching patterns never loses edits.
+- [x] Mixer/history: UI-7 and UI-8 are controlled, undoable, and truthful about silence.
+- [x] Cross-cutting: UI-9, resource caps, keyboard focus, errors, and current desktop layout pass automated and browser review.
+- [x] Integration: document the separate persistence gate; do not report audible playback, autosave, or WebMCP as complete.
 
 The [implementation plan](../plans/2026-08-31-silent-editor.md) supplies file-level slices and checks. This document supersedes the track-owned-pattern model for this milestone in the [original product design](../../design.md) and [historical domain design](2026-08-25-project-domain-design.md); broader product aspirations in those documents are not all part of this change.

@@ -4,6 +4,45 @@ import { DEMO_PROJECT, EMPTY_PROJECT } from "@/data/studio-data";
 import { createStudioStore } from "@/stores/studio-store";
 
 describe("studio session", () => {
+  it("completes the silent composition workflow through one project history", () => {
+    const store = createStudioStore(EMPTY_PROJECT);
+    const bassId = store.getState().createTrack("synth", "synth.bass")!;
+    const padId = store.getState().createTrack("synth", "synth.pad")!;
+    const drumsId = store.getState().createTrack("drum", "kit.basic")!;
+    const phraseId = store.getState().createPattern("synth")!;
+    const beatId = store.getState().createPatternAt(drumsId, 0)!;
+
+    store.getState().addSynthNote(phraseId, 60, 0, 4);
+    store.getState().setDrumCells(beatId, [{ soundId: "kick", startStep: 0, active: true }]);
+    const bassClipId = store.getState().placePattern(phraseId, bassId, 0)!;
+    const padClipId = store.getState().placePattern(phraseId, padId, 0)!;
+    store.getState().makeClipUnique(padClipId);
+    const uniquePatternId = store.getState().selectedPatternId!;
+    expect(uniquePatternId).not.toBe(phraseId);
+    expect(store.getState().project.patterns.find((pattern) => pattern.id === uniquePatternId)?.events)
+      .toEqual([expect.objectContaining({ midiNote: 60, startStep: 0, lengthSteps: 4 })]);
+
+    store.getState().updateClip(bassClipId, { startBar: 2 });
+    store.getState().reorderTrack(drumsId, 0);
+    store.getState().updateClip(bassClipId, { repeatCount: 2 });
+    const arrangementEntryId = store.getState().history.at(-1)!.id;
+    store.getState().setTrackVolume(bassId, -12);
+    store.getState().setTrackPan(padId, 0.5);
+    store.getState().setMasterVolume(-3);
+    store.getState().undo();
+    expect(store.getState().project.masterVolumeDb).toBe(0);
+    store.getState().redo();
+    expect(store.getState().project.masterVolumeDb).toBe(-3);
+
+    store.getState().restore(arrangementEntryId);
+    expect(store.getState().project.masterVolumeDb).toBe(0);
+    expect(store.getState().project.tracks[0]?.id).toBe(drumsId);
+    expect(store.getState().project.arrangement.find((clip) => clip.id === bassClipId))
+      .toMatchObject({ startBar: 2, repeatCount: 2 });
+    store.getState().undo();
+    expect(store.getState().project.masterVolumeDb).toBe(-3);
+  });
+
   it("stores mixer values in the project and restores them with undo", () => {
     const store = createStudioStore(EMPTY_PROJECT);
     const trackId = store.getState().createTrack("synth", "synth.bass")!;

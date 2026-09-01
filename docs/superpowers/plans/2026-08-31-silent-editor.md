@@ -41,7 +41,9 @@ Task 8 is implemented inline: synth patterns use a scrollable MIDI 24–96 piano
 
 Task 9 is now implemented inline: mixer and track-header controls edit project-backed track/master volume, pan, mute, and solo values. Range gestures preview locally and commit once; numeric fields commit on Enter/blur and cancel on Escape. Mixer controls stay synchronized with track headers and Undo.
 
-Task 10 is implemented inline: the activity panel renders retained manual/agent history, marks the cursor and undone branch, and confirms undoable restores. Global undo/redo shortcuts avoid editable fields and open dialogs, while Delete/Backspace applies only to the focused arrangement clip. Existing store checks cover stale targets, rejected edits, history branching, limits, and selection reconciliation. Task 11 remains pending.
+Task 10 is implemented inline: the activity panel renders retained manual/agent history, marks the cursor and undone branch, and confirms undoable restores. Global undo/redo shortcuts avoid editable fields and open dialogs, while Delete/Backspace applies only to the focused arrangement clip. Existing store checks cover stale targets, rejected edits, history branching, limits, and selection reconciliation.
+
+Task 11 is verified: one regression covers the complete silent composition workflow, and limit coverage includes 16 tracks, 128 patterns, 512 clips/events, the final arrangement bar, and 64 repeats of a four-bar pattern. The full 232-test suite, typecheck, lint, production build, and diff checks pass. The current browser controller could not reload localhost because of its URL policy, so the final fresh browser pass remains unchecked; earlier recorded browser checks and the user's interactive checkpoints remain the native-browser evidence.
 
 There is no audio or persistence, and refreshing resets this demo session.
 
@@ -536,11 +538,11 @@ it("retains command attribution and makes restore undoable", () => {
 
 **Files:** Extend existing store/component tests for any newly found regression before fixing it. Update `README.md` and these design/plan documents to reflect actual completed scope. Do not edit the separate persistence worktree.
 
-- [ ] Run the focused regression for any discovered defect first, observe the failure, fix only that behavior, and rerun it. The final workflow must cover: empty session → two synth tracks plus drums → standalone and placed patterns → notes/hits → shared cross-track placement → Make unique → clip/track movement → repeats → mixer → undo/redo/restore.
-- [ ] Perform browser checks at the existing desktop size: preserve layout; test pointer release outside targets, timeline/piano scrolling, cancellation, invalid drops, keyboard-only alternatives, focus in text fields, and deletion confirmation. Check that shared edits appear in every referring clip and that switching editor tabs/selections loses no edits.
-- [ ] Exercise limits with programmatically constructed test projects: 16 tracks, 128 patterns, 512 clips/events, final valid bar, and four-bar patterns with 64 repeats. Verify refusals are explained and non-mutating. Native browser interactions, not jsdom alone, must verify pointer capture and range behavior.
-- [ ] Confirm no audio context is constructed or samples fetched during initial render or editing; Play/Record/Loop/Export remain unavailable. Reload behavior matches the visible warning: edits are not persisted in this milestone.
-- [ ] Run the final verification commands from the worktree:
+- [x] Run the focused regression for any discovered defect first, observe the failure, fix only that behavior, and rerun it. The final workflow must cover: empty session → two synth tracks plus drums → standalone and placed patterns → notes/hits → shared cross-track placement → Make unique → clip/track movement → repeats → mixer → undo/redo/restore.
+- [ ] Perform browser checks at the existing desktop size: preserve layout; test pointer release outside targets, timeline/piano scrolling, cancellation, invalid drops, keyboard-only alternatives, focus in text fields, and deletion confirmation. Check that shared edits appear in every referring clip and that switching editor tabs/selections loses no edits. Earlier slice checks cover these interactions, but the final reload was blocked by the browser controller's localhost URL policy.
+- [x] Exercise limits with programmatically constructed test projects: 16 tracks, 128 patterns, 512 clips/events, final valid bar, and four-bar patterns with 64 repeats. Verify refusals are explained and non-mutating. Native browser interactions, not jsdom alone, must verify pointer capture and range behavior.
+- [x] Confirm no audio context is constructed or samples fetched during initial render or editing; Play/Record/Loop/Export remain unavailable. Reload behavior matches the visible warning: edits are not persisted in this milestone.
+- [x] Run the final verification commands from the worktree:
 
 ```sh
 pnpm test
@@ -551,9 +553,9 @@ git diff --check
 git status --short --branch
 ```
 
-- [ ] Review changed application code for accidental new generic validators, duplicate musical state, new dependencies, and silent data loss. Check all acceptance items in spec section 11 against the actual tests/browser evidence, not just a successful build.
-- [ ] Record the persistence integration gate explicitly: `codex/project-persistence` must be updated to the trusted domain and schema 2; its loader must decode external input once, use `migrateProject`, retain old/corrupt/unsupported records, and preserve a recoverable old record before upgrade writes. Its current project-only storage does not include history. Do not claim this gate was implemented or that autosave works.
-- [ ] Update completion checkboxes only for implemented and verified work, inspect the diff, and make the final local documentation/test commit as `test: verify silent editor workflows`. Present the remaining persistence/playback/WebMCP boundaries and stop for human review; integration into `main` is a separate decision.
+- [x] Review changed application code for accidental new generic validators, duplicate musical state, new dependencies, and silent data loss. Check all acceptance items in spec section 11 against the actual tests/browser evidence, not just a successful build.
+- [x] Record the persistence integration gate explicitly: `codex/project-persistence` must be updated to the trusted domain and schema 2; its loader must decode external input once, use `migrateProject`, retain old/corrupt/unsupported records, and preserve a recoverable old record before upgrade writes. Its current project-only storage does not include history. Do not claim this gate was implemented or that autosave works.
+- [x] Update completion checkboxes only for implemented and verified work, inspect the diff, and make the final local documentation/test commit as `test: verify silent editor workflows`. Present the remaining persistence/playback/WebMCP boundaries and stop for human review; integration into `main` is a separate decision.
 
 ## Acceptance Traceability
 
