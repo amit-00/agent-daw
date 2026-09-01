@@ -35,11 +35,15 @@ Task 1 was accepted and Tasks 2–4 were grouped inline into the next user-testa
 
 The track-management checkpoint was accepted. Task 5 is now implemented inline: library pattern creation, rename/length/duplication/deletion, compatible placement, atomic empty-lane creation, numeric clip routing/start/repeats, shared duplication, and Make unique. Open the small pattern/clip options buttons for controls; double-click empty lane space or use Track settings → Create pattern here. Pattern deletion confirms every affected placement, and removing a clip retains its pattern. The existing native track dialog was extracted into `EditorDialog.tsx` for reuse; `PatternControls.tsx` holds the new forms. Clip settings are owned by the arrangement so moving a clip across tracks does not destroy its open dialog.
 
-The pattern/clip, color, and arrangement-gesture checkpoints were accepted. Task 7 is now implemented inline: the existing pattern editor has a catalog-backed drum grid with click, keyboard, paint, and erase interactions. A stroke previews locally and commits once; shared placements update together, invalid edits are rejected at the store boundary, and no audio context is created. Task 7 is ready for human review before starting Task 8.
+The pattern/clip, color, and arrangement-gesture checkpoints were accepted. Task 7 is implemented inline: the existing pattern editor has a catalog-backed drum grid with click, keyboard, paint, and erase interactions. A stroke previews locally and commits once; shared placements update together, invalid edits are rejected at the store boundary, and no audio context is created.
 
-Tasks 8–11 remain pending. Synth notes are still read-only, and mixer adjustment controls remain disabled. There is no audio or persistence, and refreshing resets this demo session.
+Task 8 is now implemented inline: synth patterns use a scrollable MIDI 24–96 piano roll with note creation, selection, snapped move/resize gestures, duplication, deletion, and labeled numeric alternatives. Chords and shared patterns are supported, cancelled or invalid gestures do not commit, and each completed edit creates one history entry. The background is one coordinate-mapped grid rather than thousands of empty controls; numeric add/edit fields provide the keyboard path. Task 8 is ready for human review before starting Task 9.
+
+Tasks 9–11 remain pending. Mixer adjustment controls remain disabled. There is no audio or persistence, and refreshing resets this demo session.
 
 Verification after Task 7: 208 tests pass (106 domain/audio/migration, 102 UI), along with typechecking, lint, production build, and diff checks. The drum tests cover atomic add/erase, repeated visits, 1–64 step bounds, the event cap, unavailable sounds, all referencing kits, stale patterns, pointer cancellation/Escape/lost capture, responsive step geometry, and keyboard activation. Browser checks in a separate session confirm responsive columns, exact four-cell paint/erase, one-entry history, shared-pattern updates, and no audio context. The user's original in-memory session was preserved. No dependencies, generic runtime validation infrastructure, or main-branch changes were added.
+
+Verification after Task 8: 223 tests pass (106 domain/audio/migration, 117 UI), along with typechecking, lint, production build, and diff checks. Piano-roll coverage includes chords, MIDI/event bounds, atomic multi-note operations, stale selections, shared patterns, visual placement, empty-cell and numeric creation, selection, move/resize cancellation and one-entry commits, duplication/deletion, focus-aware keyboard paths, four-bar geometry, and stale-pattern gestures. Fresh-session browser checks confirmed scrolling with fixed controls, note creation, move, resize, Undo, shared arrangement updates, and no audio context. No dependencies or generic runtime validation infrastructure were added.
 
 Task 6 implementation detail: `ArrangementGestures.tsx` owns local gesture state on the existing shared arrangement/editor container. This keeps capture alive when a clip changes lanes and connects sidebar placement without a global drag store or new service actions. The original grid classes remain unchanged; a temporary ghost/status appears only while dragging or reporting an outside-lane drop. Drag focus uses `preventScroll` so partially visible clips do not shift the viewport. Full-studio tests live in `ArrangementGestures.test.tsx`; existing track-reorder tests remain in `Arrangement.test.tsx`.
 
@@ -433,7 +437,7 @@ it("commits a drum paint stroke once and retains edits across selection", () => 
 
 **Interfaces:** Add `addSynthNote(patternId: string, midiNote: number, startStep: number, lengthSteps: number): string | null`, `updateSynthNotes(patternId: string, updates: Extract<Operation, { type: "synth-notes.update" }>["updates"]): void`, `duplicateSynthNotes(patternId: string, noteIds: readonly string[], offsetSteps: number): void`, and `deleteSynthNotes(patternId: string, noteIds: readonly string[]): void`. `PianoRoll` takes `{ readonly pattern: SynthPattern }`; selected note IDs and drag previews remain editor-local.
 
-- [ ] Write a failing chord/boundary regression:
+- [x] Write a failing chord/boundary regression:
 
 ```ts
 it("allows chords but rejects a note extending past its pattern", () => {
@@ -450,9 +454,9 @@ it("allows chords but rejects a note extending past its pattern", () => {
 });
 ```
 
-- [ ] Run `pnpm exec vitest run src/stores/studio-store.test.ts -t "allows chords"`; expect missing note actions. Add cases for MIDI 24/96 limits, non-integer/zero duration, multi-note atomic move/resize, duplicate IDs, event cap, out-of-bounds duplication, stale selection, undo, and editing a pattern shared across tracks.
-- [ ] Render a scrollable chromatic MIDI 24–96 grid and sixteenth-step columns for the pattern length. Clicking an empty cell creates a one-step note. Clicking a note selects it; Shift-click toggles membership. Drag moves the selection by a shared snapped step/pitch delta; right-edge drag resizes the targeted note. Cancel does not alter project data.
-- [ ] For a whole-note movement, compute candidate values from the gesture origin rather than accumulating rounded movement:
+- [x] Run `pnpm exec vitest run src/stores/studio-store.test.ts -t "allows chords"`; expect missing note actions. Add cases for MIDI 24/96 limits, non-integer/zero duration, multi-note atomic move/resize, duplicate IDs, event cap, out-of-bounds duplication, stale selection, undo, and editing a pattern shared across tracks.
+- [x] Render a scrollable chromatic MIDI 24–96 grid and sixteenth-step columns for the pattern length. Clicking an empty cell creates a one-step note. Clicking a note selects it; Shift-click toggles membership. Drag moves the selection by a shared snapped step/pitch delta; right-edge drag resizes the targeted note. Cancel does not alter project data.
+- [x] For a whole-note movement, compute candidate values from the gesture origin rather than accumulating rounded movement:
 
 ```ts
 const changes = {
@@ -462,8 +466,8 @@ const changes = {
 ```
 
 The action rejects the whole update if any selected note leaves the valid range. Dispatch existing multi-note operations once; do not silently shorten notes. Duplicate selection offsets by one step by default, with an explicit offset control; reject overflow. Provide labeled pitch/start/length controls and Delete/Duplicate actions so drag is not required.
-- [ ] Add component tests covering visual note position/duration, selection changes, cancelled drag, one-entry commit, and keyboard behavior outside versus inside text fields. Remove the prototype four-pitch grid. No note audition handlers.
-- [ ] Run `pnpm exec vitest run src/components/editor/PianoRoll.test.tsx src/stores/studio-store.test.ts`, `pnpm typecheck`, and `pnpm lint`; inspect scrolling/resize in the browser, review diff, commit as `feat: add piano roll editing`, and request human review.
+- [x] Add component tests covering visual note position/duration, selection changes, cancelled drag, one-entry commit, and keyboard behavior outside versus inside text fields. Remove the prototype four-pitch grid. No note audition handlers.
+- [x] Run `pnpm exec vitest run src/components/editor/PianoRoll.test.tsx src/stores/studio-store.test.ts`, `pnpm typecheck`, and `pnpm lint`; inspect scrolling/resize in the browser, review diff, commit as `feat: add piano roll editing`, and request human review.
 
 ## Task 9: Connect Mixer Controls and Gesture History
 

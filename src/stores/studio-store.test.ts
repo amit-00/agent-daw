@@ -4,6 +4,116 @@ import { DEMO_PROJECT, EMPTY_PROJECT } from "@/data/studio-data";
 import { createStudioStore } from "@/stores/studio-store";
 
 describe("studio session", () => {
+  it("allows chords but rejects a note extending past its pattern", () => {
+    const store = createStudioStore(EMPTY_PROJECT);
+    const patternId = store.getState().createPattern("synth")!;
+    store.getState().addSynthNote(patternId, 60, 0, 4);
+    store.getState().addSynthNote(patternId, 64, 0, 4);
+    store.getState().addSynthNote(patternId, 67, 0, 4);
+    const before = store.getState().history.length;
+    expect(store.getState().addSynthNote(patternId, 72, 15, 2)).toBeNull();
+    expect(store.getState().project.patterns[0]?.events).toHaveLength(3);
+    expect(store.getState().history).toHaveLength(before);
+    expect(store.getState().errorMessage).toBeTruthy();
+  });
+
+  it("accepts the synth-note boundaries and rejects invalid note values", () => {
+    const store = createStudioStore({ ...EMPTY_PROJECT, patterns: [
+      { id: "melody", name: "Melody", kind: "synth", lengthBars: 1, events: [] },
+      { id: "beat", name: "Beat", kind: "drum", lengthBars: 1, events: [] },
+    ] });
+    expect(store.getState().addSynthNote("melody", 24, 0, 1)).toBeTruthy();
+    expect(store.getState().addSynthNote("melody", 96, 15, 1)).toBeTruthy();
+    const before = store.getState().history.length;
+    for (const [midiNote, startStep, lengthSteps] of [
+      [23, 0, 1], [97, 0, 1], [60.5, 0, 1], [60, -1, 1], [60, 1.5, 1],
+      [60, 0, 0], [60, 0, -1], [60, 0, 1.5], [60, 15, 2], [NaN, 0, 1], [60, Infinity, 1],
+    ]) expect(store.getState().addSynthNote("melody", midiNote!, startStep!, lengthSteps!)).toBeNull();
+    expect(store.getState().addSynthNote("beat", 60, 0, 1)).toBeNull();
+    expect(store.getState().addSynthNote("gone", 60, 0, 1)).toBeNull();
+    expect(store.getState().project.patterns[0]?.events).toHaveLength(2);
+    expect(store.getState().history).toHaveLength(before);
+  });
+
+  it("updates multiple synth notes atomically and restores them with undo", () => {
+    const original = [
+      { id: "a", midiNote: 60, startStep: 0, lengthSteps: 4 },
+      { id: "b", midiNote: 64, startStep: 4, lengthSteps: 4 },
+    ];
+    const store = createStudioStore({ ...EMPTY_PROJECT, patterns: [
+      { id: "melody", name: "Melody", kind: "synth", lengthBars: 1, events: original },
+    ] });
+    store.getState().updateSynthNotes("melody", [
+      { noteId: "a", changes: { midiNote: 61, startStep: 2 } },
+      { noteId: "b", changes: { startStep: 6, lengthSteps: 2 } },
+    ]);
+    expect(store.getState().project.patterns[0]?.events).toEqual([
+      { id: "a", midiNote: 61, startStep: 2, lengthSteps: 4 },
+      { id: "b", midiNote: 64, startStep: 6, lengthSteps: 2 },
+    ]);
+    expect(store.getState().history).toHaveLength(1);
+    store.getState().undo();
+    expect(store.getState().project.patterns[0]?.events).toEqual(original);
+    const before = store.getState().history.length;
+    store.getState().updateSynthNotes("melody", [
+      { noteId: "a", changes: { startStep: 1 } },
+      { noteId: "missing", changes: { startStep: 2 } },
+    ]);
+    expect(store.getState().project.patterns[0]?.events).toEqual(original);
+    expect(store.getState().history).toHaveLength(before);
+    expect(store.getState().errorMessage).toBeTruthy();
+  });
+
+  it("duplicates unique synth-note IDs once and rejects overflow or the event cap", () => {
+    const notes = [
+      { id: "a", midiNote: 60, startStep: 0, lengthSteps: 4 },
+      { id: "b", midiNote: 64, startStep: 4, lengthSteps: 4 },
+    ];
+    const store = createStudioStore({ ...EMPTY_PROJECT, patterns: [
+      { id: "melody", name: "Melody", kind: "synth", lengthBars: 1, events: notes },
+    ] });
+    store.getState().duplicateSynthNotes("melody", ["a", "a", "b"], 1);
+    const events = store.getState().project.patterns[0]?.events ?? [];
+    expect(events).toHaveLength(4);
+    expect(new Set(events.map((event) => event.id)).size).toBe(4);
+    expect(events.slice(2)).toMatchObject([
+      { midiNote: 60, startStep: 1, lengthSteps: 4 },
+      { midiNote: 64, startStep: 5, lengthSteps: 4 },
+    ]);
+    expect(store.getState().history).toHaveLength(1);
+    store.getState().undo();
+    const before = store.getState().history.length;
+    store.getState().duplicateSynthNotes("melody", ["b"], 9);
+    store.getState().duplicateSynthNotes("melody", ["missing"], 1);
+    expect(store.getState().project.patterns[0]?.events).toEqual(notes);
+    expect(store.getState().history).toHaveLength(before);
+
+    const fullStore = createStudioStore({ ...EMPTY_PROJECT, patterns: [
+      { id: "full", name: "Full", kind: "synth", lengthBars: 1,
+        events: Array.from({ length: 512 }, (_, index) => ({ id: `note-${index}`, midiNote: 60, startStep: 0, lengthSteps: 1 })) },
+    ] });
+    expect(fullStore.getState().addSynthNote("full", 64, 1, 1)).toBeNull();
+    fullStore.getState().duplicateSynthNotes("full", ["note-0"], 1);
+    expect(fullStore.getState().project.patterns[0]?.events).toHaveLength(512);
+    expect(fullStore.getState().history).toHaveLength(0);
+  });
+
+  it("deletes synth notes once and edits shared patterns without copying them", () => {
+    const store = createStudioStore(DEMO_PROJECT);
+    const arrangement = store.getState().project.arrangement;
+    const noteId = store.getState().addSynthNote("glasshouse", 72, 31, 1)!;
+    expect(store.getState().project.arrangement).toEqual(arrangement);
+    expect(store.getState().project.patterns.find((pattern) => pattern.id === "glasshouse")?.events).toHaveLength(7);
+    const before = store.getState().history.length;
+    store.getState().deleteSynthNotes("glasshouse", [noteId, noteId]);
+    expect(store.getState().project.patterns.find((pattern) => pattern.id === "glasshouse")?.events).toHaveLength(6);
+    expect(store.getState().history).toHaveLength(before + 1);
+    store.getState().undo();
+    expect(store.getState().project.patterns.find((pattern) => pattern.id === "glasshouse")?.events).toHaveLength(7);
+    store.getState().deleteSynthNotes("glasshouse", ["missing"]);
+    expect(store.getState().errorMessage).toBeTruthy();
+  });
+
   it("commits a drum paint stroke once and retains edits across selection", () => {
     const store = createStudioStore(EMPTY_PROJECT);
     const patternId = store.getState().createPattern("drum")!;

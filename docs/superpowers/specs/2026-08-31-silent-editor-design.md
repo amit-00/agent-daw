@@ -2,7 +2,7 @@
 
 Date: 2026-08-31
 
-Status: Ownership migration, project-backed UI, track management, pattern/clip workflows, arrangement gestures, and drum editing implemented inline. The drum-editor checkpoint is ready for human testing; synth-note editing, mixer edits, and remaining history UX are still pending.
+Status: Ownership migration, project-backed UI, track management, pattern/clip workflows, arrangement gestures, drum editing, and synth-note editing implemented inline. The piano-roll checkpoint is ready for human testing; mixer edits and remaining history UX are still pending.
 
 Branch: `codex/silent-editor`, based on `b3a3463` (pnpm migration).
 

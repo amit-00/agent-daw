@@ -28,7 +28,8 @@ describe("Studio", () => {
     expect(clip).toHaveStyle({ background: "color-mix(in srgb, color-mix(in srgb, #70bd72 88%, white) 80%, transparent)" });
     await user.click(clip);
     const editor = screen.getByRole("region", { name: "Pattern editor for Low Orbit phrase" });
-    expect(editor.querySelector("span[style]")).toHaveStyle({ background: "color-mix(in srgb, #70bd72 78%, transparent)" });
+    expect(within(editor).getByRole("button", { name: "Select G2 at step 9 for 4 steps" }))
+      .toHaveStyle({ background: "color-mix(in srgb, #70bd72 78%, transparent)" });
   });
 
   it("creates an unplaced pattern, renames it, and places it using one-based bars", async () => {
