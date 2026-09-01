@@ -98,7 +98,7 @@ it("scrolls before extending its fixed-width sixteen-bar timeline", () => {
   const arrangement = screen.getByRole("region", { name: "Song arrangement" });
   const lane = screen.getByRole("region", { name: "Low Orbit lane" });
   vi.mocked(lane.getBoundingClientRect).mockImplementation(() =>
-    new DOMRect(154 - scroller.scrollLeft, 151 - scroller.scrollTop, Number(arrangement.dataset.bars) * 70, 112));
+    new DOMRect(154 - scroller.scrollLeft, 151 - scroller.scrollTop, Number(arrangement.dataset.bars) * 100, 112));
   Object.defineProperties(scroller, {
     clientWidth: { value: 954, configurable: true },
     scrollWidth: { get: () => Number.parseFloat(arrangement.style.width), configurable: true },
@@ -106,11 +106,11 @@ it("scrolls before extending its fixed-width sixteen-bar timeline", () => {
   start("Select Low Orbit phrase", 314, 200);
   move(940, 200);
   expect(arrangement).toHaveAttribute("data-bars", "16");
-  expect(arrangement).toHaveStyle({ width: "1274px" });
+  expect(arrangement).toHaveStyle({ width: "1754px" });
   act(() => animationFrames.shift()?.(16));
   expect(scroller.scrollLeft).toBeGreaterThan(0);
   expect(arrangement).toHaveAttribute("data-bars", "16");
-  expect(arrangement).toHaveStyle({ width: "1274px" });
+  expect(arrangement).toHaveStyle({ width: "1754px" });
 });
 
 it("uses the visible clip area as the left scrolling boundary", () => {
@@ -214,7 +214,7 @@ it("bounds repeat resizing to 1–64 without changing pattern content", () => {
   release(20000, 600);
   expect(screen.getByRole("button", { name: "Select Low Orbit phrase" })).toHaveTextContent("×64");
   expect(screen.getByRole("region", { name: "Pattern editor for Low Orbit phrase" })).toHaveTextContent("4 notes");
-  expect(screen.getByRole("region", { name: "Song arrangement" })).toHaveStyle({ width: "9464px" });
+  expect(screen.getByRole("region", { name: "Song arrangement" })).toHaveStyle({ width: "13454px" });
   expect(historyCount()).toBe(1);
 });
 

@@ -10,7 +10,7 @@ import { PROJECT_CAPS, type Track } from "@/project";
 import { useStudioStore } from "@/stores/studio-provider";
 
 export const ARRANGEMENT_BUFFER_BARS = 4;
-const ARRANGEMENT_BAR_WIDTH = 70;
+const ARRANGEMENT_BAR_WIDTH = 100;
 const ARRANGEMENT_MIN_BARS = 16;
 const TRACK_COLUMN_WIDTH = 154;
 

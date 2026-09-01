@@ -43,7 +43,7 @@ it("starts with sixteen fixed-width bars", () => {
   expect(screen.getByRole("region", { name: "Song arrangement" }))
     .toHaveAttribute("data-bars", "16");
   expect(screen.getByRole("region", { name: "Song arrangement" }))
-    .toHaveStyle({ width: "1274px" });
+    .toHaveStyle({ width: "1754px" });
 });
 
 it("previews track order but commits only once on release, with undo", () => {
