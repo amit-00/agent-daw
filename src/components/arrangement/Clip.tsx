@@ -15,6 +15,10 @@ export function Clip({ clip, pattern, bars, onEdit }: Readonly<{
   const marksId = useId();
   const steps = pattern.lengthBars * 16;
   const color = getTrackColor(track);
+  const midiNotes = pattern.kind === "synth" ? pattern.events.map((note) => note.midiNote) : [];
+  const octaveStart = midiNotes.length > 0 ? Math.floor(Math.min(...midiNotes) / 12) * 12 : 24;
+  const octaveEnd = midiNotes.length > 0 ? (Math.floor(Math.max(...midiNotes) / 12) + 1) * 12 : 97;
+  const previewHeight = octaveEnd - octaveStart;
   return (
     <>
     <button type="button" data-clip-id={clip.id} aria-label={`Select ${pattern.name}`} aria-pressed={selected} onClick={() => selectClip(clip.id)}
@@ -24,12 +28,12 @@ export function Clip({ clip, pattern, bars, onEdit }: Readonly<{
         background: `color-mix(in srgb, color-mix(in srgb, ${color} 88%, white) 80%, transparent)`,
         borderColor: selected ? "rgba(255, 255, 255, 0.85)" : `color-mix(in srgb, ${color}, #fff 8%)` }}>
       <span className="absolute top-[7px] right-7 left-2 z-[1] block overflow-hidden text-[9px] font-bold tracking-[0.055em] text-ellipsis whitespace-nowrap uppercase">{pattern.name} · ×{clip.repeatCount}</span>
-      <svg className="absolute inset-x-2 bottom-2 h-16 w-[calc(100%-16px)] opacity-50" aria-hidden="true" viewBox={`0 0 ${steps * clip.repeatCount} 73`} preserveAspectRatio="none">
+      <svg className="absolute inset-x-2 bottom-2 h-16 w-[calc(100%-16px)] opacity-50" aria-hidden="true" viewBox={`0 0 ${steps * clip.repeatCount} ${previewHeight}`} preserveAspectRatio="none">
         <defs>
-          <pattern id={marksId} width={steps} height={73} patternUnits="userSpaceOnUse">
+          <pattern id={marksId} width={steps} height={previewHeight} patternUnits="userSpaceOnUse">
             {pattern.kind === "drum"
               ? pattern.events.map((hit) => <rect key={hit.id} x={hit.startStep} y={hit.soundId === "kick" ? 52 : hit.soundId === "snare" ? 30 : 8} width={0.65} height={14} fill="currentColor" />)
-              : pattern.events.map((note) => <rect key={note.id} x={note.startStep} y={96 - note.midiNote} width={note.lengthSteps} height={2} fill="currentColor" />)}
+              : pattern.events.map((note) => <rect key={note.id} x={note.startStep} y={octaveEnd - note.midiNote - 1} width={note.lengthSteps} height={1} fill="currentColor" />)}
           </pattern>
         </defs>
         <rect width="100%" height="100%" fill={`url(#${marksId})`} />
