@@ -1,6 +1,6 @@
 "use client";
 
-import type { KeyboardEvent, ReactElement } from "react";
+import { useState, type KeyboardEvent, type ReactElement } from "react";
 
 import { ActivityPanel } from "@/components/ActivityPanel";
 import { Transport } from "@/components/Transport";
@@ -12,6 +12,7 @@ import { StudioProvider, useStudioStore } from "@/stores/studio-provider";
 
 function StudioSession(): ReactElement {
   const { errorMessage, history, historyCursor, undo, redo } = useStudioStore((state) => state);
+  const [previewEndBar, setPreviewEndBar] = useState<number | null>(null);
 
   function handleKeyboard(event: KeyboardEvent<HTMLElement>): void {
     const target = event.target;
@@ -34,8 +35,8 @@ function StudioSession(): ReactElement {
       <section className="flex h-dvh min-w-0 flex-col overflow-hidden" id="studio">
         <Transport />
         {errorMessage && <p role="alert" className="border-b border-rose-400/20 bg-rose-950/60 px-4 py-2 text-xs text-rose-200">{errorMessage}</p>}
-        <ArrangementGestures>
-          <Arrangement />
+        <ArrangementGestures onPreviewEndBar={setPreviewEndBar}>
+          <Arrangement previewEndBar={previewEndBar} />
           <TrackEditor />
         </ArrangementGestures>
       </section>

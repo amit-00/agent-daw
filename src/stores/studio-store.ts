@@ -99,7 +99,7 @@ export function createStudioStore(initialProject: Project): StoreApi<StudioState
     const firstClip = snapshot.project.arrangement[0];
     return {
       ...snapshot,
-      activityOpen: true, editorTab: "pattern", errorMessage: null,
+      activityOpen: false, editorTab: "pattern", errorMessage: null,
       selectedClipId: firstClip?.id ?? null,
       selectedPatternId: firstClip?.patternId ?? snapshot.project.patterns[0]?.id ?? null,
       selectedTrackId: firstClip?.trackId ?? null,

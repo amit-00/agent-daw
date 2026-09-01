@@ -39,6 +39,10 @@ function startDrag(): HTMLElement {
   return handle;
 }
 
+it("keeps a four-bar buffer after the furthest clip", () => {
+  expect(screen.getByRole("region", { name: "Song arrangement" })).toHaveAttribute("data-bars", "12");
+});
+
 it("previews track order but commits only once on release, with undo", () => {
   const handle = startDrag();
   fireEvent.pointerMove(handle, { pointerId: 1, clientY: 324 });

@@ -289,8 +289,9 @@ describe("Studio", () => {
     vi.stubGlobal("fetch", fetch);
     const user = userEvent.setup();
     render(<Studio initialProject={DEMO_PROJECT} />);
-    await user.click(screen.getByRole("button", { name: "Hide activity" }));
     expect(screen.queryByRole("complementary", { name: "Activity" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Show activity" }));
+    expect(screen.getByRole("complementary", { name: "Activity" })).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Mixer" }));
     expect(screen.getByRole("region", { name: "Mixer channels" })).toBeVisible();
     expect(context).not.toHaveBeenCalled();
@@ -305,6 +306,7 @@ describe("Studio", () => {
     }
     const user = userEvent.setup();
     render(<StudioProvider initialProject={EMPTY_PROJECT}><Transport /><ActivityPanel /><Probe /></StudioProvider>);
+    await user.click(screen.getByRole("button", { name: "Show activity" }));
     act(() => state!.dispatch({
       id: "rename", source: "agent", label: "Agent named song", kind: "operation",
       operation: { type: "project.update", changes: { name: "Named song" } },
@@ -326,6 +328,7 @@ describe("Studio", () => {
     }
     const user = userEvent.setup();
     render(<StudioProvider initialProject={EMPTY_PROJECT}><Transport /><ActivityPanel /><Probe /></StudioProvider>);
+    await user.click(screen.getByRole("button", { name: "Show activity" }));
     act(() => state!.dispatch({
       id: "rename", source: "agent", label: "Agent named song", kind: "operation",
       operation: { type: "project.update", changes: { name: "Named song" } },

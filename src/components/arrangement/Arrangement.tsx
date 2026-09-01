@@ -6,8 +6,10 @@ import { AddTrack, TrackSettings } from "@/components/arrangement/TrackControls"
 import { TrackHeader } from "@/components/arrangement/TrackHeader";
 import { TrackLane } from "@/components/arrangement/TrackLane";
 import { ClipSettings } from "@/components/editor/PatternControls";
-import type { Track } from "@/project";
+import { PROJECT_CAPS, type Track } from "@/project";
 import { useStudioStore } from "@/stores/studio-provider";
+
+export const ARRANGEMENT_BUFFER_BARS = 4;
 
 interface TrackDrag {
   readonly trackId: string;
@@ -20,7 +22,7 @@ interface TrackDrag {
   readonly scrollTop: number;
 }
 
-export function Arrangement(): ReactElement {
+export function Arrangement({ previewEndBar = null }: Readonly<{ previewEndBar?: number | null }>): ReactElement {
   const project = useStudioStore((state) => state.project);
   const reorderTrack = useStudioStore((state) => state.reorderTrack);
   const scroller = useRef<HTMLDivElement>(null);
@@ -63,10 +65,12 @@ export function Arrangement(): ReactElement {
     setDrag({ trackId, tracks: project.tracks, pointerId: event.pointerId, fromIndex: index, toIndex: index,
       startY: event.clientY, clientY: event.clientY, scrollTop: scroller.current!.scrollTop });
   }
-  const bars = project.arrangement.reduce((end, clip) => {
+  const furthestClipEnd = project.arrangement.reduce((end, clip) => {
     const pattern = project.patterns.find((item) => item.id === clip.patternId);
     return Math.max(end, clip.startBar + (pattern?.lengthBars ?? 0) * clip.repeatCount);
-  }, 8);
+  }, 0);
+  const bars = Math.min(PROJECT_CAPS.maxArrangementBars,
+    Math.max(8, furthestClipEnd + ARRANGEMENT_BUFFER_BARS, (previewEndBar ?? 0) + ARRANGEMENT_BUFFER_BARS));
   return (
     <div ref={scroller} data-arrangement-scroll className="min-h-0 overflow-auto [scrollbar-color:#29292e_transparent] [scrollbar-width:thin]"
       onPointerMove={(event) => {

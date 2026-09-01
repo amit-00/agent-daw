@@ -11,5 +11,6 @@ it("renders a silent in-memory workstation with no fabricated history", () => {
     expect(screen.getByRole("button", { name })).toBeDisabled();
   }
   expect(screen.getByText(/silent.*in memory.*refresh/i)).toBeVisible();
-  expect(screen.getByText("No changes yet")).toBeVisible();
+  expect(screen.getByRole("button", { name: "Show activity" })).toHaveAttribute("aria-pressed", "false");
+  expect(screen.queryByRole("complementary", { name: "Activity" })).not.toBeInTheDocument();
 });

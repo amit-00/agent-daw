@@ -18,11 +18,19 @@ const project: Project = { ...DEMO_PROJECT, tracks: DEMO_PROJECT.tracks.slice(0,
 
 let surface: HTMLElement;
 let scroller: HTMLElement;
+let animationFrames: FrameRequestCallback[];
 beforeEach(() => {
   vi.stubGlobal("PointerEvent", TestPointerEvent);
+  animationFrames = [];
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+    animationFrames.push(callback);
+    return animationFrames.length;
+  });
+  vi.stubGlobal("cancelAnimationFrame", vi.fn());
   HTMLDialogElement.prototype.showModal = function (): void { this.setAttribute("open", ""); };
   HTMLDialogElement.prototype.close = function (): void { this.removeAttribute("open"); };
   render(<Studio initialProject={project} />);
+  fireEvent.click(screen.getByRole("button", { name: "Show activity" }));
   scroller = screen.getByRole("region", { name: "Song arrangement" }).parentElement!;
   surface = scroller.parentElement!;
   Object.defineProperties(surface, {
@@ -80,8 +88,34 @@ it("accounts for horizontal and vertical scrolling during a captured drag", () =
   scroller.scrollTop = 112;
   fireEvent.scroll(scroller);
   release(314, 200);
-  expect(within(screen.getByRole("region", { name: "Glasshouse lane" })).getByRole("button", { name: "Select Low Orbit phrase" })).toHaveStyle({ left: "37.5%" });
+  expect(within(screen.getByRole("region", { name: "Glasshouse lane" })).getByRole("button", { name: "Edit clip Low Orbit phrase at bar 4" })).toBeVisible();
   expect(historyCount()).toBe(1);
+});
+
+it("extends and scrolls the timeline while dragging at the right edge", () => {
+  const arrangement = screen.getByRole("region", { name: "Song arrangement" });
+  Object.defineProperties(scroller, {
+    clientWidth: { value: 954, configurable: true },
+    scrollWidth: { get: () => Number.parseFloat(arrangement.style.minWidth), configurable: true },
+  });
+  start("Select Low Orbit phrase", 314, 200);
+  move(940, 200);
+  expect(arrangement).toHaveAttribute("data-bars", "13");
+  act(() => {
+    for (let index = 0; index < 12; index += 1) animationFrames.shift()?.(index);
+  });
+  expect(scroller.scrollLeft).toBeGreaterThan(0);
+  expect(Number(arrangement.dataset.bars)).toBeGreaterThan(13);
+});
+
+it("clamps a moved clip to its final valid starting bar", () => {
+  start("Select Low Orbit phrase", 314, 200);
+  move(940, 200);
+  scroller.scrollLeft = 25_000;
+  fireEvent.scroll(scroller);
+  release(940, 200);
+  expect(screen.getByRole("button", { name: "Edit clip Low Orbit phrase at bar 255" })).toBeVisible();
+  expect(screen.getByRole("region", { name: "Song arrangement" })).toHaveAttribute("data-bars", "256");
 });
 
 it("drags a library pattern to the same bar mapping as empty-lane creation", () => {
@@ -156,7 +190,7 @@ it("bounds repeat resizing to 1–64 without changing pattern content", () => {
   release(20000, 600);
   expect(screen.getByRole("button", { name: "Select Low Orbit phrase" })).toHaveTextContent("×64");
   expect(screen.getByRole("region", { name: "Pattern editor for Low Orbit phrase" })).toHaveTextContent("4 notes");
-  expect(screen.getByRole("region", { name: "Song arrangement" })).toHaveStyle({ minWidth: "12022px" });
+  expect(screen.getByRole("region", { name: "Song arrangement" })).toHaveStyle({ minWidth: "12390px" });
   expect(historyCount()).toBe(1);
 });
 

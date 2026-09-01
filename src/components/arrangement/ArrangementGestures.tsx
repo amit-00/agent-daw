@@ -3,8 +3,9 @@
 import { useRef, useState, type PointerEvent, type ReactElement, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
+import { ARRANGEMENT_BUFFER_BARS } from "@/components/arrangement/Arrangement";
 import { getTrackColor } from "@/data/studio-data";
-import type { ArrangementClip } from "@/project";
+import { PROJECT_CAPS, type ArrangementClip } from "@/project";
 import { getPlacementProblem } from "@/stores/studio-edits";
 import { useStudioStore } from "@/stores/studio-provider";
 
@@ -29,9 +30,12 @@ interface PlacementDrag {
   clientX: number;
   clientY: number;
   preview: PlacementPreview | null;
+  scrollFrame: number | null;
 }
 
-export function ArrangementGestures({ children }: Readonly<{ children: ReactNode }>): ReactElement {
+export function ArrangementGestures({ children, onPreviewEndBar = () => undefined }: Readonly<{
+  children: ReactNode; onPreviewEndBar?: (endBar: number | null) => void;
+}>): ReactElement {
   const { project, updateClip, placePattern, deleteClip, selectClip, selectPattern } = useStudioStore((state) => state);
   const surface = useRef<HTMLDivElement>(null);
   const drag = useRef<PlacementDrag | null>(null);
@@ -44,24 +48,65 @@ export function ArrangementGestures({ children }: Readonly<{ children: ReactNode
     const viewport = current.scroller.getBoundingClientRect();
     const lane = current.kind === "resize" ? source : lanes.find((item) => {
       const rect = item.getBoundingClientRect();
-      return clientX >= Math.max(rect.left, viewport.left + 154) && clientX < Math.min(rect.right, viewport.right) &&
+      return clientX >= Math.max(rect.left, viewport.left + 154) &&
         clientY >= Math.max(rect.top, viewport.top) && clientY < Math.min(rect.bottom, viewport.bottom);
     });
     if (!lane) return { clip: current.clip, lane: null, bars: current.bars, problem: "Drop inside a track lane. Use clip settings for an exact placement." };
     const rect = lane.getBoundingClientRect();
     const deltaBars = (clientX - current.startX + current.laneLeft - rect.left) / current.pixelsPerBar;
+    const lastStartBar = PROJECT_CAPS.maxArrangementBars - current.lengthBars * current.clip.repeatCount;
     const clip: ArrangementClip = { ...current.clip, trackId: lane.dataset.trackId!,
-      startBar: current.kind === "place" ? Math.floor((clientX - rect.left) / rect.width * current.bars)
-        : current.kind === "move" ? Math.max(0, current.clip.startBar + Math.round(deltaBars)) : current.clip.startBar,
+      startBar: current.kind === "place" ? Math.max(0, Math.min(lastStartBar, Math.floor((clientX - rect.left) / current.pixelsPerBar)))
+        : current.kind === "move" ? Math.max(0, Math.min(lastStartBar, current.clip.startBar + Math.round(deltaBars))) : current.clip.startBar,
       repeatCount: current.kind === "resize"
         ? Math.max(1, Math.min(64, Math.round(current.clip.repeatCount + deltaBars / current.lengthBars))) : current.clip.repeatCount };
-    return { clip, lane, bars: current.bars, problem: getPlacementProblem(project, clip) };
+    const endBar = clip.startBar + current.lengthBars * clip.repeatCount;
+    const bars = Math.min(PROJECT_CAPS.maxArrangementBars, Math.max(current.bars, endBar + ARRANGEMENT_BUFFER_BARS));
+    return { clip, lane, bars, problem: getPlacementProblem(project, clip) };
+  }
+
+  function show(current: PlacementDrag, result: PlacementPreview): void {
+    current.preview = result;
+    setPreview(result);
+    onPreviewEndBar(result.lane ? result.clip.startBar + current.lengthBars * result.clip.repeatCount : null);
+  }
+
+  function scrollSpeed(current: PlacementDrag): number {
+    const viewport = current.scroller.getBoundingClientRect();
+    const rightStart = viewport.right - 48;
+    const leftStart = viewport.left + 202;
+    if (current.clientX > rightStart) return Math.ceil((current.clientX - rightStart) / 3);
+    if (current.clientX < leftStart && current.clientX >= viewport.left + 154) return -Math.ceil((leftStart - current.clientX) / 3);
+    return 0;
+  }
+
+  function scheduleScroll(current: PlacementDrag): void {
+    const speed = scrollSpeed(current);
+    if (speed === 0) {
+      if (current.scrollFrame !== null) cancelAnimationFrame(current.scrollFrame);
+      current.scrollFrame = null;
+      return;
+    }
+    if (current.scrollFrame !== null) return;
+    current.scrollFrame = requestAnimationFrame(() => {
+      current.scrollFrame = null;
+      if (drag.current !== current) return;
+      const next = Math.max(0, Math.min(current.scroller.scrollWidth - current.scroller.clientWidth,
+        current.scroller.scrollLeft + scrollSpeed(current)));
+      if (next !== current.scroller.scrollLeft) {
+        current.scroller.scrollLeft = next;
+        show(current, candidateAt(current, current.clientX, current.clientY));
+      }
+      scheduleScroll(current);
+    });
   }
 
   function cancel(): void {
     const current = drag.current;
     drag.current = null;
     setPreview(null);
+    onPreviewEndBar(null);
+    if (current && current.scrollFrame !== null) cancelAnimationFrame(current.scrollFrame);
     if (current && surface.current?.hasPointerCapture(current.pointerId)) surface.current.releasePointerCapture(current.pointerId);
   }
 
@@ -88,7 +133,7 @@ export function ArrangementGestures({ children }: Readonly<{ children: ReactNode
       clip: clip ?? { id: "", patternId: pattern.id, trackId: "", startBar: 0, repeatCount: 1 },
       pointerId: event.pointerId, startX: event.clientX, startY: event.clientY,
       clientX: event.clientX, clientY: event.clientY, laneLeft: rect.left,
-      pixelsPerBar: rect.width / bars, lengthBars: pattern.lengthBars, bars, scroller, preview: null };
+      pixelsPerBar: rect.width / bars, lengthBars: pattern.lengthBars, bars, scroller, preview: null, scrollFrame: null };
   }
 
   function move(clientX: number, clientY: number): void {
@@ -96,8 +141,8 @@ export function ArrangementGestures({ children }: Readonly<{ children: ReactNode
     if (!current) return;
     current.clientX = clientX;
     current.clientY = clientY;
-    current.preview = candidateAt(current, clientX, clientY);
-    setPreview(current.preview);
+    show(current, candidateAt(current, clientX, clientY));
+    scheduleScroll(current);
   }
 
   function finish(event: PointerEvent<HTMLDivElement>): void {
