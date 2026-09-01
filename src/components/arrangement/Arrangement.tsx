@@ -1,25 +1,174 @@
-import type { ReactElement } from "react";
+"use client";
 
-import { Playhead } from "@/components/arrangement/Playhead";
+import { useRef, useState, type KeyboardEvent, type PointerEvent, type ReactElement } from "react";
+
+import { AddTrack, TrackSettings } from "@/components/arrangement/TrackControls";
 import { TrackHeader } from "@/components/arrangement/TrackHeader";
 import { TrackLane } from "@/components/arrangement/TrackLane";
-import { TRACKS } from "@/data/studio-data";
+import { ClipSettings } from "@/components/editor/PatternControls";
+import { PROJECT_CAPS, type Track } from "@/project";
+import { useStudioStore } from "@/stores/studio-provider";
 
-export function Arrangement(): ReactElement {
+export const ARRANGEMENT_BUFFER_BARS = 4;
+const ARRANGEMENT_BAR_WIDTH = 100;
+const ARRANGEMENT_MIN_BARS = 16;
+const TRACK_COLUMN_WIDTH = 154;
+
+interface TrackDrag {
+  readonly trackId: string;
+  readonly tracks: readonly Track[];
+  readonly pointerId: number;
+  readonly fromIndex: number;
+  readonly toIndex: number;
+  readonly startY: number;
+  readonly clientY: number;
+  readonly scrollTop: number;
+}
+
+interface PlayheadDrag {
+  readonly pointerId: number;
+  readonly grabOffset: number;
+}
+
+const clamp = (value: number, minimum: number, maximum: number): number =>
+  Math.min(maximum, Math.max(minimum, value));
+
+const playheadLabel = (step: number): string =>
+  `Bar ${Math.floor(step / 16) + 1}, beat ${Math.floor((step % 16) / 4) + 1}, step ${(step % 4) + 1}`;
+
+export function Arrangement({ previewEndBar = null }: Readonly<{ previewEndBar?: number | null }>): ReactElement {
+  const project = useStudioStore((state) => state.project);
+  const reorderTrack = useStudioStore((state) => state.reorderTrack);
+  const scroller = useRef<HTMLDivElement>(null);
+  const arrangement = useRef<HTMLElement>(null);
+  const dragHandle = useRef<HTMLButtonElement>(null);
+  const [drag, setDrag] = useState<TrackDrag | null>(null);
+  const playheadDrag = useRef<PlayheadDrag | null>(null);
+  const [playheadStep, setPlayheadStep] = useState(0);
+  const addButton = useRef<HTMLButtonElement>(null);
+  const [adding, setAdding] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingClipId, setEditingClipId] = useState<string | null>(null);
+  const editingTrack = project.tracks.find((track) => track.id === editingId);
+  const editingClip = project.arrangement.find((clip) => clip.id === editingClipId);
+  const editingPattern = project.patterns.find((pattern) => pattern.id === editingClip?.patternId);
+  function closeClipSettings(): void {
+    const lane = Array.from(scroller.current!.querySelectorAll<HTMLElement>("[data-track-id]"))
+      .find((element) => element.dataset.trackId === editingClip?.trackId);
+    setEditingClipId(null);
+    queueMicrotask(() => lane?.focus());
+  }
+  const tracks = [...project.tracks];
+  if (drag && drag.tracks === project.tracks) {
+    const [moved] = tracks.splice(drag.fromIndex, 1);
+    tracks.splice(drag.toIndex, 0, moved!);
+  }
+  function positionAt(clientY: number): number {
+    if (!drag) return 0;
+    const delta = clientY - drag.startY + scroller.current!.scrollTop - drag.scrollTop;
+    return Math.max(0, Math.min(project.tracks.length - 1, drag.fromIndex + Math.round(delta / 112)));
+  }
+  function cancelDrag(): void {
+    setDrag(null);
+    if (drag && dragHandle.current?.hasPointerCapture(drag.pointerId)) dragHandle.current.releasePointerCapture(drag.pointerId);
+  }
+  function startDrag(event: PointerEvent<HTMLButtonElement>, trackId: string): void {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.currentTarget.focus();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    dragHandle.current = event.currentTarget;
+    const index = project.tracks.findIndex((track) => track.id === trackId);
+    setDrag({ trackId, tracks: project.tracks, pointerId: event.pointerId, fromIndex: index, toIndex: index,
+      startY: event.clientY, clientY: event.clientY, scrollTop: scroller.current!.scrollTop });
+  }
+  const furthestClipEnd = project.arrangement.reduce((end, clip) => {
+    const pattern = project.patterns.find((item) => item.id === clip.patternId);
+    return Math.max(end, clip.startBar + (pattern?.lengthBars ?? 0) * clip.repeatCount);
+  }, 0);
+  const bars = Math.min(PROJECT_CAPS.maxArrangementBars,
+    Math.max(ARRANGEMENT_MIN_BARS, furthestClipEnd + ARRANGEMENT_BUFFER_BARS, (previewEndBar ?? 0) + ARRANGEMENT_BUFFER_BARS));
+  const currentPlayheadStep = Math.min(playheadStep, bars * 16);
+  const playheadLeft = TRACK_COLUMN_WIDTH + currentPlayheadStep / 16 * ARRANGEMENT_BAR_WIDTH;
+
+  function playheadStepAt(clientX: number, grabOffset: number): number {
+    const left = arrangement.current!.getBoundingClientRect().left + TRACK_COLUMN_WIDTH + grabOffset;
+    return clamp(Math.round((clientX - left) / (ARRANGEMENT_BAR_WIDTH / 16)), 0, bars * 16);
+  }
+
+  function startPlayheadDrag(event: PointerEvent<HTMLDivElement>): void {
+    if (event.button !== 0 || playheadDrag.current) return;
+    event.preventDefault();
+    event.currentTarget.focus({ preventScroll: true });
+    const headX = arrangement.current!.getBoundingClientRect().left + playheadLeft;
+    playheadDrag.current = { pointerId: event.pointerId, grabOffset: event.clientX - headX };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  function movePlayhead(event: PointerEvent<HTMLDivElement>): void {
+    const current = playheadDrag.current;
+    if (event.pointerId === current?.pointerId) setPlayheadStep(playheadStepAt(event.clientX, current.grabOffset));
+  }
+
+  function finishPlayheadDrag(event: PointerEvent<HTMLDivElement>): void {
+    if (event.pointerId !== playheadDrag.current?.pointerId) return;
+    playheadDrag.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+  }
+
+  function movePlayheadWithKeyboard(event: KeyboardEvent<HTMLDivElement>): void {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    setPlayheadStep(clamp(currentPlayheadStep + (event.key === "ArrowRight" ? 1 : -1), 0, bars * 16));
+  }
+
   return (
-    <div className="min-h-0 overflow-auto [scrollbar-color:#29292e_transparent] [scrollbar-width:thin]">
-      <section className="relative grid h-full min-h-[650px] min-w-[870px] grid-cols-[154px_minmax(730px,1fr)] grid-rows-[39px_repeat(5,112px)] content-start bg-black bg-[linear-gradient(90deg,rgba(255,255,255,0.12)_2px,transparent_2px),linear-gradient(90deg,rgba(255,255,255,0.055)_1px,transparent_1px)] [background-position:154px_0,154px_0] [background-size:calc((100%_-_154px)/2)_100%,calc((100%_-_154px)/16)_100%]" aria-label="Song arrangement">
-        <div className="sticky left-0 z-[3] flex items-center justify-between border-r border-b border-white/10 bg-black px-[11px] text-[10px] tracking-[0.12em] text-zinc-600">
+    <div ref={scroller} data-arrangement-scroll className="min-h-0 overflow-auto [scrollbar-color:#29292e_transparent] [scrollbar-width:thin]"
+      onPointerMove={(event) => {
+        if (drag && event.pointerId === drag.pointerId) setDrag({ ...drag, clientY: event.clientY, toIndex: positionAt(event.clientY) });
+      }}
+      onPointerUp={(event) => {
+        if (!drag || event.pointerId !== drag.pointerId) return;
+        const toIndex = positionAt(event.clientY);
+        cancelDrag();
+        if (drag.tracks === project.tracks) reorderTrack(drag.trackId, toIndex);
+      }}
+      onPointerCancel={cancelDrag} onLostPointerCapture={() => setDrag(null)}
+      onKeyDown={(event) => { if (drag && event.key === "Escape") { event.preventDefault(); cancelDrag(); } }}
+      onScroll={() => { if (drag) setDrag({ ...drag, toIndex: positionAt(drag.clientY) }); }}>
+      <section ref={arrangement} data-bars={bars} className="relative grid h-full min-h-[650px] content-start bg-black bg-[linear-gradient(90deg,rgba(255,255,255,0.12)_2px,transparent_2px),linear-gradient(90deg,rgba(255,255,255,0.055)_1px,transparent_1px)] [background-position:154px_0,154px_0]" aria-label="Song arrangement"
+        style={{ width: TRACK_COLUMN_WIDTH + bars * ARRANGEMENT_BAR_WIDTH,
+          gridTemplateColumns: `${TRACK_COLUMN_WIDTH}px ${bars * ARRANGEMENT_BAR_WIDTH}px`,
+          gridTemplateRows: `39px repeat(${project.tracks.length},112px)`,
+          backgroundSize: `${ARRANGEMENT_BAR_WIDTH * 4}px 100%, ${ARRANGEMENT_BAR_WIDTH / 2}px 100%` }}>
+        <div data-track-column className="sticky left-0 z-[3] flex items-center justify-between border-r border-b border-white/10 bg-black px-[11px] text-[10px] tracking-[0.12em] text-zinc-600">
           <span>TRACKS</span>
-          <button className="border-0 bg-transparent text-[15px] text-zinc-500 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-300" type="button" aria-label="Add track">＋</button>
+          <button ref={addButton} type="button" aria-label="Add track" onClick={() => setAdding(true)} className="border-0 bg-transparent text-[15px] text-zinc-500 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-300">＋</button>
         </div>
-        <div className="col-start-2 grid grid-cols-8 border-b border-white/10 bg-zinc-950/90 font-mono text-[10px] text-zinc-600">
-          {[1, 2, 3, 4, 5, 6, 7, 8].map((bar) => <span className="border-l border-white/[0.045] px-[7px] py-[13px]" key={bar}>{String(bar).padStart(2, "0")}</span>)}
+        <div className="col-start-2 grid border-b border-white/10 bg-zinc-950/90 font-mono text-[10px] text-zinc-600" style={{ gridTemplateColumns: `repeat(${bars},${ARRANGEMENT_BAR_WIDTH}px)` }}>
+          {Array.from({ length: bars }, (_, index) => <span className="border-l border-white/[0.045] px-[7px] py-[13px]" key={index}>{String(index + 1).padStart(2, "0")}</span>)}
         </div>
-        {TRACKS.map((track, index) => <TrackHeader key={track.id} row={index + 2} track={track} />)}
-        {TRACKS.map((track, index) => <TrackLane key={`${track.id}-lane`} row={index + 2} track={track} />)}
-        <Playhead />
+        {project.tracks.map((track) => <TrackHeader key={track.id} row={tracks.findIndex((item) => item.id === track.id) + 2} track={track} onEdit={() => setEditingId(track.id)} onReorderStart={(event) => startDrag(event, track.id)} />)}
+        {project.tracks.map((track) => <TrackLane key={track.id + "-lane"} row={tracks.findIndex((item) => item.id === track.id) + 2} track={track} bars={bars} onEditClip={setEditingClipId} />)}
+        {project.tracks.length === 0 && <p className="col-span-2 p-6 text-xs text-zinc-500">Add a track to start arranging.</p>}
+        <span aria-hidden="true" className="pointer-events-none absolute inset-y-0 z-[2] w-px bg-white/90" style={{ left: playheadLeft }} />
+        <div role="slider" aria-label="Playhead" aria-valuemin={0} aria-valuemax={bars * 16} aria-valuenow={currentPlayheadStep}
+          aria-valuetext={playheadLabel(currentPlayheadStep)} tabIndex={0} style={{ left: playheadLeft }}
+          onPointerDown={startPlayheadDrag} onPointerMove={movePlayhead} onPointerUp={finishPlayheadDrag}
+          onPointerCancel={finishPlayheadDrag} onLostPointerCapture={(event) => {
+            if (event.pointerId === playheadDrag.current?.pointerId) playheadDrag.current = null;
+          }} onKeyDown={movePlayheadWithKeyboard}
+          className="absolute top-[29px] z-[2] grid h-5 w-4 -translate-x-1/2 touch-none cursor-col-resize place-items-center focus-visible:outline-2 focus-visible:outline-violet-300">
+          <span aria-hidden="true" className="h-[7px] w-[7px] rounded-b-full rounded-t-sm bg-white" />
+        </div>
       </section>
+      {adding && <AddTrack onClose={() => setAdding(false)} />}
+      {editingClip && editingPattern && <ClipSettings key={editingClip.id} clip={editingClip} pattern={editingPattern}
+        onClose={closeClipSettings} />}
+      {editingTrack && <TrackSettings key={editingTrack.id} track={editingTrack} onClose={() => setEditingId(null)} onDeleted={() => {
+        setEditingId(null);
+        queueMicrotask(() => addButton.current?.focus());
+      }} />}
     </div>
   );
 }

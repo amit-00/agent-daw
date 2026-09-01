@@ -114,12 +114,12 @@ export const expandTimeline = (
       continue;
     }
 
-    const trackEntry = tracks.get(pattern.trackId);
+    const trackEntry = tracks.get(clip.trackId);
     if (trackEntry === undefined) {
       issues.push({
         code: "missing_track",
-        message: "Pattern references a missing track",
-        relatedId: pattern.trackId,
+        message: "Arrangement clip references a missing track",
+        relatedId: clip.trackId,
       });
       continue;
     }

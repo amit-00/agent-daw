@@ -1,61 +1,81 @@
-import type { ActivityEntry, Clip, Pattern, Track, TrackId } from "@/types/studio";
+import type { Project, Track } from "@/project";
 
-export const TRACKS: readonly Track[] = [
-  { id: "drums", name: "Neon Kit", kind: "drum", color: "#9a69f5", preset: "Polaroid Drums", volume: 74 },
-  { id: "bass", name: "Low Orbit", kind: "synth", color: "#d95fc8", preset: "Velvet Sub", volume: 68 },
-  { id: "chords", name: "Glasshouse", kind: "synth", color: "#ef6070", preset: "Warm Glass", volume: 61 },
-  { id: "melody", name: "Afterglow", kind: "synth", color: "#f18a4c", preset: "Soft Signal", volume: 72 },
-  { id: "pad", name: "Night Air", kind: "synth", color: "#efbd52", preset: "Cloud Pad", volume: 55 },
+export const EMPTY_PROJECT: Project = {
+  schemaVersion: 2, id: "session", name: "Untitled", bpm: 120, masterVolumeDb: 0,
+  tracks: [], patterns: [], arrangement: [],
+};
+
+export const INSTRUMENT_NAMES: Readonly<Record<string, string>> = {
+  "kit.basic": "Basic drums", "synth.bass": "Bass", "synth.chord": "Chords",
+  "synth.lead": "Lead", "synth.pad": "Pad",
+};
+
+const TRACK_COLORS: ReadonlyMap<string, string> = new Map([
+  ["drums", "#9a69f5"], ["bass", "#d95fc8"], ["chords", "#ef6070"],
+  ["melody", "#f18a4c"], ["pad", "#efbd52"],
+]);
+
+export const TRACK_COLOR_WHEEL: readonly string[] = [
+  ...TRACK_COLORS.values(), "#70bd72", "#50b8b1", "#598fe3",
 ];
 
-export const CLIPS: readonly Clip[] = [
-  { id: "drums-a", trackId: "drums", name: "Neon Kit · Main", start: 0, width: 50, detail: "4 bars · 64 steps" },
-  { id: "drums-b", trackId: "drums", name: "Neon Kit · Lift", start: 50, width: 26, detail: "2 bars · 32 steps" },
-  { id: "bass-a", trackId: "bass", name: "Low Orbit · A", start: 0, width: 50, detail: "4 bars · 14 notes" },
-  { id: "bass-b", trackId: "bass", name: "Low Orbit · B", start: 52, width: 48, detail: "4 bars · 12 notes" },
-  { id: "chords-a", trackId: "chords", name: "Glasshouse", start: 0, width: 50, detail: "4 bars · 22 notes" },
-  { id: "chords-b", trackId: "chords", name: "Glasshouse · Open", start: 50, width: 50, detail: "4 bars · 18 notes" },
-  { id: "melody-a", trackId: "melody", name: "Afterglow", start: 18, width: 58, detail: "4 bars · 19 notes" },
-  { id: "pad-a", trackId: "pad", name: "Night Air", start: 0, width: 100, detail: "8 bars · 16 notes" },
-];
-
-export const PROJECT_PATTERNS: readonly Pattern[] = [
-  { id: "neon-main", clipId: "drums-a", steps: [1, 6, 12, 17, 23, 29, 36, 42, 49, 55, 60] },
-  { id: "neon-lift", clipId: "drums-b", steps: [0, 4, 8, 13, 16, 20, 24, 29, 33, 37, 40, 45, 49, 53, 56, 61] },
-  { id: "orbit-a", clipId: "bass-a", steps: [2, 10, 18, 26, 35, 42, 50, 58] },
-  { id: "orbit-b", clipId: "bass-b", steps: [5, 12, 19, 28, 36, 43, 52, 59] },
-  { id: "glasshouse", clipId: "chords-a", steps: [1, 6, 12, 17, 23, 29, 36, 42, 49, 55, 60] },
-  { id: "glasshouse-open", clipId: "chords-b", steps: [3, 10, 18, 25, 34, 41, 50, 57] },
-  { id: "afterglow", clipId: "melody-a", steps: [2, 9, 14, 22, 30, 39, 45, 54, 61] },
-  { id: "night-air", clipId: "pad-a", steps: [0, 8, 16, 24, 32, 40, 48, 56] },
-];
-
-export const DRUM_LEVELS = [33, 58, 41, 75, 51, 86, 42, 67, 47, 80, 57, 91, 49, 70, 38, 76, 53, 88, 44, 72, 35, 61, 46, 82] as const;
-
-export const NOTE_MARKS = [
-  [5, 22, 16], [18, 46, 25], [32, 31, 11], [43, 62, 20],
-  [58, 18, 13], [67, 43, 21], [82, 29, 12], [91, 56, 7],
-] as const;
-
-export const SEQUENCE_NOTES = ["C5", "A4", "F4", "C4"] as const;
-
-export const ACTIVITY_ENTRIES: readonly ActivityEntry[] = [
-  { title: "Agent shaped Glasshouse", detail: "Added open voicings · just now" },
-  { title: "You adjusted Neon Kit", detail: "Muted the final kick · 2m" },
-  { title: "Agent created Afterglow", detail: "19 notes · 6m" },
-  { title: "You renamed the project", detail: "Midnight Polaroid · 9m" },
-];
-
-function requireItem<T extends { readonly id: string }>(items: readonly T[], id: string, label: string): T {
-  const item = items.find((candidate) => candidate.id === id);
-  if (!item) {
-    throw new Error(`Unknown ${label} "${id}". Check studio-data.ts fixture relationships.`);
-  }
-  return item;
+export function getTrackColor(track: Pick<Track, "id" | "color">): string {
+  if (track.color) return track.color;
+  const index = Array.from(track.id).reduce((sum, character) => sum + character.charCodeAt(0), 0);
+  return TRACK_COLORS.get(track.id) ?? [...TRACK_COLORS.values()][index % TRACK_COLORS.size]!;
 }
 
-export const getTrack = (id: TrackId): Track => requireItem(TRACKS, id, "track");
-export const getClip = (id: string): Clip => requireItem(CLIPS, id, "clip");
-export const getPattern = (id: string): Pattern => requireItem(PROJECT_PATTERNS, id, "pattern");
-export const findPatternForClip = (clipId: string): Pattern | undefined =>
-  PROJECT_PATTERNS.find((pattern) => pattern.clipId === clipId);
+export const DEMO_PROJECT: Project = {
+  ...EMPTY_PROJECT,
+  id: "demo", name: "Midnight Polaroid", bpm: 118, masterVolumeDb: -3,
+  tracks: [
+    { id: "drums", name: "Neon Kit", kind: "drum", instrumentId: "kit.basic",
+      volumeDb: -6, pan: 0, muted: false, soloed: false },
+    { id: "bass", name: "Low Orbit", kind: "synth", instrumentId: "synth.bass",
+      volumeDb: -9, pan: 0, muted: false, soloed: false },
+    { id: "chords", name: "Glasshouse", kind: "synth", instrumentId: "synth.chord",
+      volumeDb: -12, pan: -0.15, muted: false, soloed: false },
+    { id: "melody", name: "Afterglow", kind: "synth", instrumentId: "synth.lead",
+      volumeDb: -8, pan: 0.2, muted: false, soloed: false },
+    { id: "pad", name: "Night Air", kind: "synth", instrumentId: "synth.pad",
+      volumeDb: -15, pan: 0, muted: false, soloed: false },
+  ],
+  patterns: [
+    { id: "neon", name: "Neon beat", kind: "drum", lengthBars: 1, events: [
+      ...[0, 4, 8, 12].map((startStep) => ({ id: "kick-" + startStep, soundId: "kick", startStep })),
+      ...[4, 12].map((startStep) => ({ id: "snare-" + startStep, soundId: "snare", startStep })),
+      ...[2, 6, 10, 14].map((startStep) => ({ id: "hat-" + startStep, soundId: "hat", startStep })),
+    ] },
+    { id: "orbit", name: "Low Orbit phrase", kind: "synth", lengthBars: 2, events: [
+      { id: "bass-1", midiNote: 36, startStep: 0, lengthSteps: 6 },
+      { id: "bass-2", midiNote: 43, startStep: 8, lengthSteps: 4 },
+      { id: "bass-3", midiNote: 39, startStep: 16, lengthSteps: 6 },
+      { id: "bass-4", midiNote: 46, startStep: 24, lengthSteps: 4 },
+    ] },
+    { id: "glasshouse", name: "Glasshouse", kind: "synth", lengthBars: 2, events: [
+      ...[60, 64, 67].map((midiNote) => ({ id: "chord-a-" + midiNote, midiNote, startStep: 0, lengthSteps: 12 })),
+      ...[60, 63, 67].map((midiNote) => ({ id: "chord-b-" + midiNote, midiNote, startStep: 16, lengthSteps: 12 })),
+    ] },
+    { id: "afterglow", name: "Afterglow", kind: "synth", lengthBars: 2, events: [
+      { id: "lead-1", midiNote: 72, startStep: 0, lengthSteps: 3 },
+      { id: "lead-2", midiNote: 76, startStep: 6, lengthSteps: 3 },
+      { id: "lead-3", midiNote: 79, startStep: 12, lengthSteps: 4 },
+      { id: "lead-4", midiNote: 75, startStep: 20, lengthSteps: 6 },
+    ] },
+    { id: "night-air", name: "Night Air", kind: "synth", lengthBars: 4, events: [
+      { id: "pad-1", midiNote: 48, startStep: 0, lengthSteps: 64 },
+      { id: "pad-2", midiNote: 55, startStep: 0, lengthSteps: 64 },
+    ] },
+    { id: "unused-idea", name: "Unused idea", kind: "synth", lengthBars: 1, events: [] },
+  ],
+  arrangement: [
+    { id: "drums-a", trackId: "drums", patternId: "neon", startBar: 0, repeatCount: 4 },
+    { id: "drums-b", trackId: "drums", patternId: "neon", startBar: 4, repeatCount: 4 },
+    { id: "bass-a", trackId: "bass", patternId: "orbit", startBar: 0, repeatCount: 2 },
+    { id: "bass-b", trackId: "bass", patternId: "orbit", startBar: 4, repeatCount: 2 },
+    { id: "chords-a", trackId: "chords", patternId: "glasshouse", startBar: 0, repeatCount: 2 },
+    { id: "chords-b", trackId: "chords", patternId: "glasshouse", startBar: 4, repeatCount: 2 },
+    { id: "melody-a", trackId: "melody", patternId: "afterglow", startBar: 2, repeatCount: 2 },
+    { id: "pad-a", trackId: "pad", patternId: "night-air", startBar: 0, repeatCount: 2 },
+  ],
+};
