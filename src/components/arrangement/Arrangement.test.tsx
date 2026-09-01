@@ -46,6 +46,49 @@ it("starts with sixteen fixed-width bars", () => {
     .toHaveStyle({ width: "1754px" });
 });
 
+it("renders a draggable playhead in timeline content coordinates", () => {
+  const arrangement = screen.getByRole("region", { name: "Song arrangement" });
+  const playhead = screen.getByRole("slider", { name: "Playhead" });
+  expect(arrangement).toContainElement(playhead);
+  expect(playhead).toHaveAttribute("aria-valuenow", "0");
+  expect(playhead).toHaveClass("cursor-col-resize");
+  expect(playhead).toHaveStyle({ left: "154px" });
+});
+
+it("snaps a dragged playhead without moving it when the arrangement scrolls", () => {
+  const arrangement = screen.getByRole("region", { name: "Song arrangement" });
+  const scroller = arrangement.parentElement!;
+  const playhead = screen.getByRole("slider", { name: "Playhead" });
+  vi.spyOn(arrangement, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 1_754, 650));
+  Object.defineProperties(playhead, {
+    setPointerCapture: { value: vi.fn(), configurable: true },
+    hasPointerCapture: { value: () => true, configurable: true },
+    releasePointerCapture: { value: vi.fn(), configurable: true },
+  });
+
+  fireEvent.pointerDown(playhead, { pointerId: 2, button: 0, clientX: 154 });
+  fireEvent.pointerMove(playhead, { pointerId: 2, clientX: 407 });
+  fireEvent.pointerUp(playhead, { pointerId: 2, clientX: 407 });
+  expect(playhead).toHaveAttribute("aria-valuenow", "40");
+  expect(playhead).toHaveStyle({ left: "404px" });
+  expect(state.history).toHaveLength(0);
+
+  scroller.scrollLeft = 300;
+  fireEvent.scroll(scroller);
+  expect(playhead).toHaveAttribute("aria-valuenow", "40");
+  expect(playhead).toHaveStyle({ left: "404px" });
+});
+
+it("moves the playhead one step with the arrow keys", () => {
+  const playhead = screen.getByRole("slider", { name: "Playhead" });
+  fireEvent.keyDown(playhead, { key: "ArrowRight" });
+  expect(playhead).toHaveAttribute("aria-valuenow", "1");
+  expect(playhead).toHaveStyle({ left: "160.25px" });
+  fireEvent.keyDown(playhead, { key: "ArrowLeft" });
+  fireEvent.keyDown(playhead, { key: "ArrowLeft" });
+  expect(playhead).toHaveAttribute("aria-valuenow", "0");
+});
+
 it("previews track order but commits only once on release, with undo", () => {
   const handle = startDrag();
   fireEvent.pointerMove(handle, { pointerId: 1, clientY: 324 });

@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, type PointerEvent, type ReactElement } from "react";
+import { useRef, useState, type KeyboardEvent, type PointerEvent, type ReactElement } from "react";
 
 import { AddTrack, TrackSettings } from "@/components/arrangement/TrackControls";
 import { TrackHeader } from "@/components/arrangement/TrackHeader";
@@ -25,12 +25,26 @@ interface TrackDrag {
   readonly scrollTop: number;
 }
 
+interface PlayheadDrag {
+  readonly pointerId: number;
+  readonly grabOffset: number;
+}
+
+const clamp = (value: number, minimum: number, maximum: number): number =>
+  Math.min(maximum, Math.max(minimum, value));
+
+const playheadLabel = (step: number): string =>
+  `Bar ${Math.floor(step / 16) + 1}, beat ${Math.floor((step % 16) / 4) + 1}, step ${(step % 4) + 1}`;
+
 export function Arrangement({ previewEndBar = null }: Readonly<{ previewEndBar?: number | null }>): ReactElement {
   const project = useStudioStore((state) => state.project);
   const reorderTrack = useStudioStore((state) => state.reorderTrack);
   const scroller = useRef<HTMLDivElement>(null);
+  const arrangement = useRef<HTMLElement>(null);
   const dragHandle = useRef<HTMLButtonElement>(null);
   const [drag, setDrag] = useState<TrackDrag | null>(null);
+  const playheadDrag = useRef<PlayheadDrag | null>(null);
+  const [playheadStep, setPlayheadStep] = useState(0);
   const addButton = useRef<HTMLButtonElement>(null);
   const [adding, setAdding] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -74,6 +88,40 @@ export function Arrangement({ previewEndBar = null }: Readonly<{ previewEndBar?:
   }, 0);
   const bars = Math.min(PROJECT_CAPS.maxArrangementBars,
     Math.max(ARRANGEMENT_MIN_BARS, furthestClipEnd + ARRANGEMENT_BUFFER_BARS, (previewEndBar ?? 0) + ARRANGEMENT_BUFFER_BARS));
+  const currentPlayheadStep = Math.min(playheadStep, bars * 16);
+  const playheadLeft = TRACK_COLUMN_WIDTH + currentPlayheadStep / 16 * ARRANGEMENT_BAR_WIDTH;
+
+  function playheadStepAt(clientX: number, grabOffset: number): number {
+    const left = arrangement.current!.getBoundingClientRect().left + TRACK_COLUMN_WIDTH + grabOffset;
+    return clamp(Math.round((clientX - left) / (ARRANGEMENT_BAR_WIDTH / 16)), 0, bars * 16);
+  }
+
+  function startPlayheadDrag(event: PointerEvent<HTMLDivElement>): void {
+    if (event.button !== 0 || playheadDrag.current) return;
+    event.preventDefault();
+    event.currentTarget.focus({ preventScroll: true });
+    const headX = arrangement.current!.getBoundingClientRect().left + playheadLeft;
+    playheadDrag.current = { pointerId: event.pointerId, grabOffset: event.clientX - headX };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  function movePlayhead(event: PointerEvent<HTMLDivElement>): void {
+    const current = playheadDrag.current;
+    if (event.pointerId === current?.pointerId) setPlayheadStep(playheadStepAt(event.clientX, current.grabOffset));
+  }
+
+  function finishPlayheadDrag(event: PointerEvent<HTMLDivElement>): void {
+    if (event.pointerId !== playheadDrag.current?.pointerId) return;
+    playheadDrag.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+  }
+
+  function movePlayheadWithKeyboard(event: KeyboardEvent<HTMLDivElement>): void {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    setPlayheadStep(clamp(currentPlayheadStep + (event.key === "ArrowRight" ? 1 : -1), 0, bars * 16));
+  }
+
   return (
     <div ref={scroller} data-arrangement-scroll className="min-h-0 overflow-auto [scrollbar-color:#29292e_transparent] [scrollbar-width:thin]"
       onPointerMove={(event) => {
@@ -88,7 +136,7 @@ export function Arrangement({ previewEndBar = null }: Readonly<{ previewEndBar?:
       onPointerCancel={cancelDrag} onLostPointerCapture={() => setDrag(null)}
       onKeyDown={(event) => { if (drag && event.key === "Escape") { event.preventDefault(); cancelDrag(); } }}
       onScroll={() => { if (drag) setDrag({ ...drag, toIndex: positionAt(drag.clientY) }); }}>
-      <section data-bars={bars} className="relative grid h-full min-h-[650px] content-start bg-black bg-[linear-gradient(90deg,rgba(255,255,255,0.12)_2px,transparent_2px),linear-gradient(90deg,rgba(255,255,255,0.055)_1px,transparent_1px)] [background-position:154px_0,154px_0]" aria-label="Song arrangement"
+      <section ref={arrangement} data-bars={bars} className="relative grid h-full min-h-[650px] content-start bg-black bg-[linear-gradient(90deg,rgba(255,255,255,0.12)_2px,transparent_2px),linear-gradient(90deg,rgba(255,255,255,0.055)_1px,transparent_1px)] [background-position:154px_0,154px_0]" aria-label="Song arrangement"
         style={{ width: TRACK_COLUMN_WIDTH + bars * ARRANGEMENT_BAR_WIDTH,
           gridTemplateColumns: `${TRACK_COLUMN_WIDTH}px ${bars * ARRANGEMENT_BAR_WIDTH}px`,
           gridTemplateRows: `39px repeat(${project.tracks.length},112px)`,
@@ -103,6 +151,16 @@ export function Arrangement({ previewEndBar = null }: Readonly<{ previewEndBar?:
         {project.tracks.map((track) => <TrackHeader key={track.id} row={tracks.findIndex((item) => item.id === track.id) + 2} track={track} onEdit={() => setEditingId(track.id)} onReorderStart={(event) => startDrag(event, track.id)} />)}
         {project.tracks.map((track) => <TrackLane key={track.id + "-lane"} row={tracks.findIndex((item) => item.id === track.id) + 2} track={track} bars={bars} onEditClip={setEditingClipId} />)}
         {project.tracks.length === 0 && <p className="col-span-2 p-6 text-xs text-zinc-500">Add a track to start arranging.</p>}
+        <span aria-hidden="true" className="pointer-events-none absolute inset-y-0 z-[2] w-px bg-white/90" style={{ left: playheadLeft }} />
+        <div role="slider" aria-label="Playhead" aria-valuemin={0} aria-valuemax={bars * 16} aria-valuenow={currentPlayheadStep}
+          aria-valuetext={playheadLabel(currentPlayheadStep)} tabIndex={0} style={{ left: playheadLeft }}
+          onPointerDown={startPlayheadDrag} onPointerMove={movePlayhead} onPointerUp={finishPlayheadDrag}
+          onPointerCancel={finishPlayheadDrag} onLostPointerCapture={(event) => {
+            if (event.pointerId === playheadDrag.current?.pointerId) playheadDrag.current = null;
+          }} onKeyDown={movePlayheadWithKeyboard}
+          className="absolute top-[29px] z-[2] grid h-5 w-4 -translate-x-1/2 touch-none cursor-col-resize place-items-center focus-visible:outline-2 focus-visible:outline-violet-300">
+          <span aria-hidden="true" className="h-[7px] w-[7px] rounded-b-full rounded-t-sm bg-white" />
+        </div>
       </section>
       {adding && <AddTrack onClose={() => setAdding(false)} />}
       {editingClip && editingPattern && <ClipSettings key={editingClip.id} clip={editingClip} pattern={editingPattern}
