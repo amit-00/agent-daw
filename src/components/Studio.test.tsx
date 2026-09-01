@@ -298,6 +298,39 @@ describe("Studio", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  it("resizes, closes, and restores the track editor", async () => {
+    const user = userEvent.setup();
+    render(<Studio initialProject={DEMO_PROJECT} />);
+    const editor = screen.getByRole("complementary", { name: "Track editor" });
+    const separator = screen.getByRole("separator", { name: "Resize track editor" });
+    vi.spyOn(editor.parentElement!, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 1_200, 800));
+
+    expect(editor).toHaveStyle({ height: "410px" });
+    fireEvent.pointerDown(separator, { pointerId: 1, button: 0, clientY: 500 });
+    fireEvent.pointerMove(separator, { pointerId: 1, clientY: 0 });
+    expect(editor).toHaveStyle({ height: "640px" });
+    fireEvent.pointerMove(separator, { pointerId: 1, clientY: 1_000 });
+    expect(editor).toHaveStyle({ height: "180px" });
+    fireEvent.pointerUp(separator, { pointerId: 1 });
+
+    await user.click(screen.getByRole("button", { name: "Close track editor" }));
+    expect(screen.queryByRole("complementary", { name: "Track editor" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: /Pattern editor/ })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Open track editor" }));
+    expect(screen.getByRole("complementary", { name: "Track editor" })).toHaveStyle({ height: "180px" });
+  });
+
+  it("resizes the track editor from the keyboard", () => {
+    render(<Studio initialProject={DEMO_PROJECT} />);
+    const editor = screen.getByRole("complementary", { name: "Track editor" });
+    vi.spyOn(editor.parentElement!, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 1_200, 800));
+    const separator = screen.getByRole("separator", { name: "Resize track editor" });
+    fireEvent.keyDown(separator, { key: "ArrowUp" });
+    expect(editor).toHaveStyle({ height: "430px" });
+    fireEvent.keyDown(separator, { key: "ArrowDown" });
+    expect(editor).toHaveStyle({ height: "410px" });
+  });
+
   it("publishes history and undo/redo to the transport", async () => {
     let state: StudioState | undefined;
     function Probe(): null {

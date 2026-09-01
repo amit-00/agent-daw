@@ -168,7 +168,7 @@ export function ArrangementGestures({ children, onPreviewEndBar = () => undefine
 
   const pattern = project.patterns.find((item) => item.id === preview?.clip.patternId);
   const track = project.tracks.find((item) => item.id === preview?.clip.trackId);
-  return <div ref={surface} className="grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)_410px] overflow-hidden"
+  return <div ref={surface} className="grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)_auto] overflow-hidden"
     onPointerDown={start} onPointerMove={(event) => {
       if (event.pointerId === drag.current?.pointerId) move(event.clientX, event.clientY);
     }} onPointerUp={finish}
