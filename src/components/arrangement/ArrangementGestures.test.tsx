@@ -39,9 +39,11 @@ beforeEach(() => {
     releasePointerCapture: { value: vi.fn(), configurable: true },
   });
   vi.spyOn(scroller, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 954, 500));
+  const arrangement = screen.getByRole("region", { name: "Song arrangement" });
   project.tracks.forEach((track, index) => {
     vi.spyOn(screen.getByRole("region", { name: `${track.name} lane` }), "getBoundingClientRect")
-      .mockImplementation(() => new DOMRect(154 - scroller.scrollLeft, 39 + index * 112 - scroller.scrollTop, 800, 112));
+      .mockImplementation(() => new DOMRect(154 - scroller.scrollLeft, 39 + index * 112 - scroller.scrollTop,
+        Number(arrangement.dataset.bars) * 100, 112));
   });
 });
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
@@ -60,31 +62,24 @@ function historyCount(): number {
   return within(screen.getByRole("complementary", { name: "Activity" })).queryAllByRole("listitem").length;
 }
 
-function previewViewportLeft(): number {
-  const arrangement = screen.getByRole("region", { name: "Song arrangement" });
-  const preview = screen.getByRole("region", { name: "Low Orbit lane" })
-    .querySelector<HTMLElement>("div[aria-hidden='true']")!;
-  return Number.parseFloat(preview.style.left) / 100 * Number(arrangement.dataset.bars) * 92 - scroller.scrollLeft;
-}
-
 it("previews a snapped clip move, preserving the grab offset, and commits once on release", () => {
   start("Select Low Orbit phrase", 314, 200);
   move(434, 200);
   expect(screen.getByRole("status")).toHaveTextContent(/bar 3/i);
-  expect(screen.getByRole("button", { name: "Select Low Orbit phrase" })).toHaveStyle({ left: "12.5%" });
+  expect(screen.getByRole("button", { name: "Select Low Orbit phrase" })).toHaveStyle({ left: "6.25%" });
   expect(historyCount()).toBe(0);
   release(434, 200);
-  expect(screen.getByRole("button", { name: "Select Low Orbit phrase" })).toHaveStyle({ left: "25%" });
+  expect(screen.getByRole("button", { name: "Select Low Orbit phrase" })).toHaveStyle({ left: "12.5%" });
   expect(historyCount()).toBe(1);
   fireEvent.click(screen.getByRole("button", { name: "Undo" }));
-  expect(screen.getByRole("button", { name: "Select Low Orbit phrase" })).toHaveStyle({ left: "12.5%" });
+  expect(screen.getByRole("button", { name: "Select Low Orbit phrase" })).toHaveStyle({ left: "6.25%" });
 });
 
 it("moves across compatible tracks without copying the shared pattern", () => {
   start("Select Low Orbit phrase", 314, 200);
   move(414, 300);
   release(414, 300);
-  expect(within(screen.getByRole("region", { name: "Glasshouse lane" })).getByRole("button", { name: "Select Low Orbit phrase" })).toHaveStyle({ left: "25%" });
+  expect(within(screen.getByRole("region", { name: "Glasshouse lane" })).getByRole("button", { name: "Select Low Orbit phrase" })).toHaveStyle({ left: "12.5%" });
   expect(screen.getByRole("button", { name: "Select pattern Low Orbit phrase" })).toHaveTextContent("1 placement");
   expect(historyCount()).toBe(1);
 });
@@ -99,29 +94,29 @@ it("accounts for horizontal and vertical scrolling during a captured drag", () =
   expect(historyCount()).toBe(1);
 });
 
-it("extends and scrolls the timeline while dragging at the right edge", () => {
+it("scrolls before extending its fixed-width sixteen-bar timeline", () => {
   const arrangement = screen.getByRole("region", { name: "Song arrangement" });
   const lane = screen.getByRole("region", { name: "Low Orbit lane" });
   vi.mocked(lane.getBoundingClientRect).mockImplementation(() =>
-    new DOMRect(154 - scroller.scrollLeft, 151 - scroller.scrollTop, Number(arrangement.dataset.bars) * 92, 112));
+    new DOMRect(154 - scroller.scrollLeft, 151 - scroller.scrollTop, Number(arrangement.dataset.bars) * 70, 112));
   Object.defineProperties(scroller, {
     clientWidth: { value: 954, configurable: true },
-    scrollWidth: { get: () => Number.parseFloat(arrangement.style.minWidth), configurable: true },
+    scrollWidth: { get: () => Number.parseFloat(arrangement.style.width), configurable: true },
   });
   start("Select Low Orbit phrase", 314, 200);
   move(940, 200);
-  expect(arrangement).toHaveAttribute("data-bars", "14");
-  const initialPreviewLeft = previewViewportLeft();
+  expect(arrangement).toHaveAttribute("data-bars", "16");
+  expect(arrangement).toHaveStyle({ width: "1274px" });
   act(() => animationFrames.shift()?.(16));
-  expect(previewViewportLeft()).toBeCloseTo(initialPreviewLeft);
-  act(() => {
-    for (let index = 1; index < 12; index += 1) animationFrames.shift()?.((index + 1) * 16);
-  });
   expect(scroller.scrollLeft).toBeGreaterThan(0);
-  expect(Number(arrangement.dataset.bars)).toBeGreaterThan(14);
+  expect(arrangement).toHaveAttribute("data-bars", "16");
+  expect(arrangement).toHaveStyle({ width: "1274px" });
 });
 
-it("keeps left-edge scrolling smooth when frames are delayed", () => {
+it("uses the visible clip area as the left scrolling boundary", () => {
+  const arrangement = screen.getByRole("region", { name: "Song arrangement" });
+  vi.spyOn(arrangement.firstElementChild as HTMLElement, "getBoundingClientRect")
+    .mockReturnValue(new DOMRect(0, 0, 250, 39));
   Object.defineProperties(scroller, {
     clientWidth: { value: 954, configurable: true },
     scrollWidth: { value: 2_000, configurable: true },
@@ -129,12 +124,12 @@ it("keeps left-edge scrolling smooth when frames are delayed", () => {
   start("Select Low Orbit phrase", 314, 200);
   scroller.scrollLeft = 400;
   fireEvent.scroll(scroller);
-  move(160, 200);
-  act(() => animationFrames.shift()?.(0));
-  const firstDistance = 400 - scroller.scrollLeft;
-  const firstPosition = scroller.scrollLeft;
-  act(() => animationFrames.shift()?.(32));
-  expect(firstPosition - scroller.scrollLeft).toBeGreaterThan(firstDistance);
+  move(200, 200);
+  expect(animationFrames).toHaveLength(0);
+  move(260, 200);
+  expect(animationFrames).toHaveLength(1);
+  act(() => animationFrames.shift()?.(16));
+  expect(scroller.scrollLeft).toBeLessThan(400);
 });
 
 it("clamps a moved clip to its final valid starting bar", () => {
@@ -180,7 +175,7 @@ it("does not scroll a partially visible clip into view when a drag starts", () =
   start("Select Low Orbit phrase", 314, 200);
   move(414, 300);
   release(414, 300);
-  expect(within(screen.getByRole("region", { name: "Glasshouse lane" })).getByRole("button", { name: "Select Low Orbit phrase" })).toHaveStyle({ left: "25%" });
+  expect(within(screen.getByRole("region", { name: "Glasshouse lane" })).getByRole("button", { name: "Select Low Orbit phrase" })).toHaveStyle({ left: "12.5%" });
 });
 
 it.each(["source", "destination"])("refuses a release after the %s is deleted", (deleted) => {
@@ -219,7 +214,7 @@ it("bounds repeat resizing to 1–64 without changing pattern content", () => {
   release(20000, 600);
   expect(screen.getByRole("button", { name: "Select Low Orbit phrase" })).toHaveTextContent("×64");
   expect(screen.getByRole("region", { name: "Pattern editor for Low Orbit phrase" })).toHaveTextContent("4 notes");
-  expect(screen.getByRole("region", { name: "Song arrangement" })).toHaveStyle({ minWidth: "12390px" });
+  expect(screen.getByRole("region", { name: "Song arrangement" })).toHaveStyle({ width: "9464px" });
   expect(historyCount()).toBe(1);
 });
 
@@ -230,8 +225,8 @@ it("refuses repeat growth beyond the final arrangement bar", () => {
   fireEvent.click(screen.getByRole("button", { name: "Done" }));
   expect(screen.getByRole("region", { name: "Song arrangement" })).toHaveAttribute("data-bars", "256");
   start("Resize repeats for Low Orbit phrase at bar 255", 950, 200);
-  move(956.25, 200);
-  release(956.25, 200);
+  move(1_150, 200);
+  release(1_150, 200);
   expect(screen.getByRole("alert")).toHaveTextContent(/256/);
   expect(screen.getByRole("button", { name: "Select Low Orbit phrase" })).toHaveTextContent("×1");
   expect(historyCount()).toBe(1);
@@ -243,7 +238,7 @@ it("rechecks collisions introduced while a drag is in progress", () => {
   fireEvent.doubleClick(screen.getByRole("region", { name: "Glasshouse lane" }), { clientX: 404 });
   release(414, 300);
   expect(screen.getByRole("alert")).toHaveTextContent(/overlap/i);
-  expect(within(screen.getByRole("region", { name: "Low Orbit lane" })).getByRole("button", { name: "Select Low Orbit phrase" })).toHaveStyle({ left: "12.5%" });
+  expect(within(screen.getByRole("region", { name: "Low Orbit lane" })).getByRole("button", { name: "Select Low Orbit phrase" })).toHaveStyle({ left: "6.25%" });
   expect(historyCount()).toBe(1);
 });
 
@@ -291,7 +286,7 @@ it.each(["pointercancel", "escape", "lostcapture"])("cancels a clip preview on %
   if (cancel === "lostcapture") fireEvent.lostPointerCapture(surface, { pointerId: 1 });
   release(414, 300);
   expect(screen.queryByRole("status")).not.toBeInTheDocument();
-  expect(within(screen.getByRole("region", { name: "Low Orbit lane" })).getByRole("button", { name: "Select Low Orbit phrase" })).toHaveStyle({ left: "12.5%" });
+  expect(within(screen.getByRole("region", { name: "Low Orbit lane" })).getByRole("button", { name: "Select Low Orbit phrase" })).toHaveStyle({ left: "6.25%" });
   expect(historyCount()).toBe(0);
 });
 
@@ -304,7 +299,7 @@ it.each([
   move(x, y);
   release(x, y);
   expect(screen.getByRole("alert")).toHaveTextContent(error);
-  expect(within(screen.getByRole("region", { name: "Low Orbit lane" })).getByRole("button", { name: "Select Low Orbit phrase" })).toHaveStyle({ left: "12.5%" });
+  expect(within(screen.getByRole("region", { name: "Low Orbit lane" })).getByRole("button", { name: "Select Low Orbit phrase" })).toHaveStyle({ left: "6.25%" });
   expect(historyCount()).toBe(0);
 });
 

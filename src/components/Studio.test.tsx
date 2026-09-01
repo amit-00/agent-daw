@@ -60,8 +60,8 @@ describe("Studio", () => {
     const user = userEvent.setup();
     render(<Studio initialProject={{ ...DEMO_PROJECT, arrangement: [] }} />);
     const lane = screen.getByRole("region", { name: "Low Orbit lane" });
-    vi.spyOn(lane, "getBoundingClientRect").mockReturnValue(new DOMRect(100, 0, 800, 112));
-    fireEvent.doubleClick(lane, { clientX: 350 });
+    vi.spyOn(lane, "getBoundingClientRect").mockReturnValue(new DOMRect(100, 0, 1_120, 112));
+    fireEvent.doubleClick(lane, { clientX: 240 });
     expect(within(lane).getByRole("button", { name: "Edit clip New melody at bar 3" })).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Undo" }));
     expect(screen.queryByRole("button", { name: "Select pattern New melody" })).not.toBeInTheDocument();

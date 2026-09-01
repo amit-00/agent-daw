@@ -10,6 +10,9 @@ import { PROJECT_CAPS, type Track } from "@/project";
 import { useStudioStore } from "@/stores/studio-provider";
 
 export const ARRANGEMENT_BUFFER_BARS = 4;
+const ARRANGEMENT_BAR_WIDTH = 70;
+const ARRANGEMENT_MIN_BARS = 16;
+const TRACK_COLUMN_WIDTH = 154;
 
 interface TrackDrag {
   readonly trackId: string;
@@ -70,7 +73,7 @@ export function Arrangement({ previewEndBar = null }: Readonly<{ previewEndBar?:
     return Math.max(end, clip.startBar + (pattern?.lengthBars ?? 0) * clip.repeatCount);
   }, 0);
   const bars = Math.min(PROJECT_CAPS.maxArrangementBars,
-    Math.max(8, furthestClipEnd + ARRANGEMENT_BUFFER_BARS, (previewEndBar ?? 0) + ARRANGEMENT_BUFFER_BARS));
+    Math.max(ARRANGEMENT_MIN_BARS, furthestClipEnd + ARRANGEMENT_BUFFER_BARS, (previewEndBar ?? 0) + ARRANGEMENT_BUFFER_BARS));
   return (
     <div ref={scroller} data-arrangement-scroll className="min-h-0 overflow-auto [scrollbar-color:#29292e_transparent] [scrollbar-width:thin]"
       onPointerMove={(event) => {
@@ -85,14 +88,16 @@ export function Arrangement({ previewEndBar = null }: Readonly<{ previewEndBar?:
       onPointerCancel={cancelDrag} onLostPointerCapture={() => setDrag(null)}
       onKeyDown={(event) => { if (drag && event.key === "Escape") { event.preventDefault(); cancelDrag(); } }}
       onScroll={() => { if (drag) setDrag({ ...drag, toIndex: positionAt(drag.clientY) }); }}>
-      <section data-bars={bars} className="relative grid h-full min-h-[650px] grid-cols-[154px_minmax(730px,1fr)] content-start bg-black bg-[linear-gradient(90deg,rgba(255,255,255,0.12)_2px,transparent_2px),linear-gradient(90deg,rgba(255,255,255,0.055)_1px,transparent_1px)] [background-position:154px_0,154px_0]" aria-label="Song arrangement"
-        style={{ minWidth: 154 + bars * 92, gridTemplateRows: `39px repeat(${project.tracks.length},112px)`,
-          backgroundSize: `calc((100% - 154px) * 4 / ${bars}) 100%, calc((100% - 154px) / ${bars * 2}) 100%` }}>
-        <div className="sticky left-0 z-[3] flex items-center justify-between border-r border-b border-white/10 bg-black px-[11px] text-[10px] tracking-[0.12em] text-zinc-600">
+      <section data-bars={bars} className="relative grid h-full min-h-[650px] content-start bg-black bg-[linear-gradient(90deg,rgba(255,255,255,0.12)_2px,transparent_2px),linear-gradient(90deg,rgba(255,255,255,0.055)_1px,transparent_1px)] [background-position:154px_0,154px_0]" aria-label="Song arrangement"
+        style={{ width: TRACK_COLUMN_WIDTH + bars * ARRANGEMENT_BAR_WIDTH,
+          gridTemplateColumns: `${TRACK_COLUMN_WIDTH}px ${bars * ARRANGEMENT_BAR_WIDTH}px`,
+          gridTemplateRows: `39px repeat(${project.tracks.length},112px)`,
+          backgroundSize: `${ARRANGEMENT_BAR_WIDTH * 4}px 100%, ${ARRANGEMENT_BAR_WIDTH / 2}px 100%` }}>
+        <div data-track-column className="sticky left-0 z-[3] flex items-center justify-between border-r border-b border-white/10 bg-black px-[11px] text-[10px] tracking-[0.12em] text-zinc-600">
           <span>TRACKS</span>
           <button ref={addButton} type="button" aria-label="Add track" onClick={() => setAdding(true)} className="border-0 bg-transparent text-[15px] text-zinc-500 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-300">＋</button>
         </div>
-        <div className="col-start-2 grid border-b border-white/10 bg-zinc-950/90 font-mono text-[10px] text-zinc-600" style={{ gridTemplateColumns: `repeat(${bars},1fr)` }}>
+        <div className="col-start-2 grid border-b border-white/10 bg-zinc-950/90 font-mono text-[10px] text-zinc-600" style={{ gridTemplateColumns: `repeat(${bars},${ARRANGEMENT_BAR_WIDTH}px)` }}>
           {Array.from({ length: bars }, (_, index) => <span className="border-l border-white/[0.045] px-[7px] py-[13px]" key={index}>{String(index + 1).padStart(2, "0")}</span>)}
         </div>
         {project.tracks.map((track) => <TrackHeader key={track.id} row={tracks.findIndex((item) => item.id === track.id) + 2} track={track} onEdit={() => setEditingId(track.id)} onReorderStart={(event) => startDrag(event, track.id)} />)}
