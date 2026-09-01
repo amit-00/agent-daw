@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { forceCloseDatabase, IDBFactory } from "fake-indexeddb";
 
-import { type Project } from "../src/project/index.ts";
+import { type Project, type ProjectV1 } from "../src/project/index.ts";
 import { ProjectPersistenceService } from "../src/persistence/service.ts";
 
 const DATABASE_NAME = "agent-daw";
@@ -16,7 +16,7 @@ const id = (value: number): string =>
   `00000000-0000-4000-8000-${value.toString().padStart(12, "0")}`;
 
 const blankProject = (): Project => ({
-  schemaVersion: 1,
+  schemaVersion: 2,
   id: id(1),
   name: "Untitled",
   bpm: 120,
@@ -24,6 +24,16 @@ const blankProject = (): Project => ({
   tracks: [],
   patterns: [],
   arrangement: [],
+});
+
+const legacyProject = (): ProjectV1 => ({
+  ...blankProject(),
+  schemaVersion: 1,
+  tracks: [{ id: "track", name: "Track", kind: "synth", instrumentId: "synth.lead",
+    volumeDb: 0, pan: 0, muted: false, soloed: false }],
+  patterns: [{ id: "pattern", trackId: "track", name: "Pattern", kind: "synth",
+    lengthBars: 1, events: [] }],
+  arrangement: [{ id: "clip", patternId: "pattern", startBar: 0, repeatCount: 1 }],
 });
 
 const openRawDatabase = (indexedDB: IDBFactory): Promise<IDBDatabase> =>
@@ -193,6 +203,38 @@ test("load returns a valid stored project", async () => {
   assert.deepEqual(result, { status: "loaded", project, updatedAt: 123 });
 });
 
+test("load migrates schema 1 without rewriting the stored record", async () => {
+  const indexedDB = new IDBFactory();
+  const project = legacyProject();
+  const record = { project, updatedAt: 123 };
+  await seedRawRecord(indexedDB, record);
+
+  const result = await createService(indexedDB).load();
+
+  assert.equal(result.status, "loaded");
+  if (result.status === "loaded") {
+    assert.equal(result.project.schemaVersion, 2);
+    assert.equal(result.project.arrangement[0]?.trackId, "track");
+  }
+  assert.deepEqual(await readRawRecord(indexedDB), record);
+});
+
+test("load preserves an unmigratable schema 1 record and reports recovery", async () => {
+  const indexedDB = new IDBFactory();
+  const project: ProjectV1 = {
+    ...legacyProject(),
+    arrangement: [{ id: "clip", patternId: "missing", startBar: 0, repeatCount: 1 }],
+  };
+  const record = { project, updatedAt: 123 };
+  await seedRawRecord(indexedDB, record);
+
+  const result = await createService(indexedDB).load();
+
+  assert.equal(result.status, "failed");
+  if (result.status === "failed") assert.equal(result.error.code, "corrupt_record");
+  assert.deepEqual(await readRawRecord(indexedDB), record);
+});
+
 test("load preserves a corrupt record and reports recovery", async () => {
   const indexedDB = new IDBFactory();
   await seedRawRecord(indexedDB, { project: { broken: true }, updatedAt: 123 });
@@ -206,7 +248,7 @@ test("load preserves a corrupt record and reports recovery", async () => {
 test("load distinguishes an unsupported project schema", async () => {
   const indexedDB = new IDBFactory();
   await seedRawRecord(indexedDB, {
-    project: { ...blankProject(), schemaVersion: 2 },
+    project: { ...blankProject(), schemaVersion: 3 },
     updatedAt: 123,
   });
 
