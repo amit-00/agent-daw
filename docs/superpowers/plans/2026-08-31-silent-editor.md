@@ -37,9 +37,11 @@ The track-management checkpoint was accepted. Task 5 is now implemented inline: 
 
 The pattern/clip, color, and arrangement-gesture checkpoints were accepted. Task 7 is implemented inline: the existing pattern editor has a catalog-backed drum grid with click, keyboard, paint, and erase interactions. A stroke previews locally and commits once; shared placements update together, invalid edits are rejected at the store boundary, and no audio context is created.
 
-Task 8 is now implemented inline: synth patterns use a scrollable MIDI 24–96 piano roll with note creation, selection, snapped move/resize gestures, duplication, deletion, and labeled numeric alternatives. Chords and shared patterns are supported, cancelled or invalid gestures do not commit, and each completed edit creates one history entry. The background is one coordinate-mapped grid rather than thousands of empty controls; numeric add/edit fields provide the keyboard path. Task 8 is ready for human review before starting Task 9.
+Task 8 is implemented inline: synth patterns use a scrollable MIDI 24–96 piano roll with note creation, selection, snapped move/resize gestures, duplication, deletion, and labeled numeric alternatives. Chords and shared patterns are supported, cancelled or invalid gestures do not commit, and each completed edit creates one history entry. The background is one coordinate-mapped grid rather than thousands of empty controls; numeric add/edit fields provide the keyboard path.
 
-Tasks 9–11 remain pending. Mixer adjustment controls remain disabled. There is no audio or persistence, and refreshing resets this demo session.
+Task 9 is now implemented inline: mixer and track-header controls edit project-backed track/master volume, pan, mute, and solo values. Range gestures preview locally and commit once; numeric fields commit on Enter/blur and cancel on Escape. Mixer controls stay synchronized with track headers and Undo. Tasks 10–11 remain pending.
+
+There is no audio or persistence, and refreshing resets this demo session.
 
 Verification after Task 7: 208 tests pass (106 domain/audio/migration, 102 UI), along with typechecking, lint, production build, and diff checks. The drum tests cover atomic add/erase, repeated visits, 1–64 step bounds, the event cap, unavailable sounds, all referencing kits, stale patterns, pointer cancellation/Escape/lost capture, responsive step geometry, and keyboard activation. Browser checks in a separate session confirm responsive columns, exact four-cell paint/erase, one-entry history, shared-pattern updates, and no audio context. The user's original in-memory session was preserved. No dependencies, generic runtime validation infrastructure, or main-branch changes were added.
 
@@ -475,7 +477,7 @@ The action rejects the whole update if any selected note leaves the valid range.
 
 **Interfaces:** Add `setTrackVolume(trackId: string, volumeDb: number): void`, `setTrackPan(trackId: string, pan: number): void`, `toggleMute(trackId: string): void`, `toggleSolo(trackId: string): void`, and `setMasterVolume(volumeDb: number): void`. Use the existing `track.update` / `project.update` operations. These values are musical state, not presentation percentages.
 
-- [ ] Write a failing controlled-value/undo test, plus a component test that track-header mute and mixer mute immediately agree:
+- [x] Write a failing controlled-value/undo test, plus a component test that track-header mute and mixer mute immediately agree:
 
 ```ts
 it("stores mixer values in the project and restores them with undo", () => {
@@ -491,10 +493,10 @@ it("stores mixer values in the project and restores them with undo", () => {
 });
 ```
 
-- [ ] Run `pnpm exec vitest run src/stores/studio-store.test.ts -t "stores mixer values"`; expect missing actions. Add finite numeric input and bounds tests, unchanged-value no-ops, multiple solos, and a slider gesture with many input events but one history entry.
-- [ ] Replace `defaultValue` controls with controlled native range/number inputs and visible dB/pan values. Use local draft state during adjustment; show the committed value after undo or cancellation. A pointer gesture commits on release, a keyboard adjustment on key release, and text entry on Enter/blur; prevent duplicate commits across overlapping events.
-- [ ] Dispatch only finite in-range values (-60..6 track dB, -60..0 master dB, -1..1 pan). Toggle mute/solo from the current track. Keep mixer channels in project track order. Remove the prototype master pan and all simulated level meters rather than adding unsupported model fields.
-- [ ] Run `pnpm exec vitest run src/stores/studio-store.test.ts src/components/Studio.test.tsx`, `pnpm typecheck`, and `pnpm lint`; review diff, commit as `feat: wire mixer controls to project history`, and request human review.
+- [x] Run `pnpm exec vitest run src/stores/studio-store.test.ts -t "stores mixer values"`; expect missing actions. Add finite numeric input and bounds tests, unchanged-value no-ops, multiple solos, and a slider gesture with many input events but one history entry.
+- [x] Replace `defaultValue` controls with controlled native range/number inputs and visible dB/pan values. Use local draft state during adjustment; show the committed value after undo or cancellation. A pointer gesture commits on release, a keyboard adjustment on key release, and text entry on Enter/blur; prevent duplicate commits across overlapping events.
+- [x] Dispatch only finite in-range values (-60..6 track dB, -60..0 master dB, -1..1 pan). Toggle mute/solo from the current track. Keep mixer channels in project track order. Remove the prototype master pan and all simulated level meters rather than adding unsupported model fields.
+- [x] Run `pnpm exec vitest run src/stores/studio-store.test.ts src/components/Studio.test.tsx`, `pnpm typecheck`, and `pnpm lint`; review diff, commit as `feat: wire mixer controls to project history`, and request human review.
 
 ## Task 10: Finish History, Keyboard, and Failure UX
 

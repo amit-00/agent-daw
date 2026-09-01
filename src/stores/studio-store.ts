@@ -46,6 +46,11 @@ export interface StudioState extends ProjectServiceState {
   updateSynthNotes(patternId: string, updates: Extract<Operation, { type: "synth-notes.update" }>["updates"]): void;
   duplicateSynthNotes(patternId: string, noteIds: readonly string[], offsetSteps: number): void;
   deleteSynthNotes(patternId: string, noteIds: readonly string[]): void;
+  setTrackVolume(trackId: string, volumeDb: number): void;
+  setTrackPan(trackId: string, pan: number): void;
+  toggleMute(trackId: string): void;
+  toggleSolo(trackId: string): void;
+  setMasterVolume(volumeDb: number): void;
 }
 
 function duplicatePatternOperation(pattern: Pattern, id: string): Operation {
@@ -469,6 +474,41 @@ export function createStudioStore(initialProject: Project): StoreApi<StudioState
         }
         if (uniqueIds.length > 0) commit(`Delete notes from ${pattern.name}`, { type: "synth-notes.delete", patternId, noteIds: uniqueIds });
         else set({ errorMessage: null });
+      },
+      setTrackVolume(trackId, volumeDb): void {
+        const track = get().project.tracks.find((item) => item.id === trackId);
+        if (!track) { set({ errorMessage: "That track no longer exists. Select another track." }); return; }
+        if (!Number.isFinite(volumeDb) || volumeDb < -60 || volumeDb > 6) {
+          set({ errorMessage: "Choose a track volume from -60 to 6 dB." });
+          return;
+        }
+        commit(`Set ${track.name} volume`, { type: "track.update", trackId, changes: { volumeDb } });
+      },
+      setTrackPan(trackId, pan): void {
+        const track = get().project.tracks.find((item) => item.id === trackId);
+        if (!track) { set({ errorMessage: "That track no longer exists. Select another track." }); return; }
+        if (!Number.isFinite(pan) || pan < -1 || pan > 1) {
+          set({ errorMessage: "Choose a track pan from -1 to 1." });
+          return;
+        }
+        commit(`Set ${track.name} pan`, { type: "track.update", trackId, changes: { pan } });
+      },
+      toggleMute(trackId): void {
+        const track = get().project.tracks.find((item) => item.id === trackId);
+        if (!track) { set({ errorMessage: "That track no longer exists. Select another track." }); return; }
+        commit(`${track.muted ? "Unmute" : "Mute"} ${track.name}`, { type: "track.update", trackId, changes: { muted: !track.muted } });
+      },
+      toggleSolo(trackId): void {
+        const track = get().project.tracks.find((item) => item.id === trackId);
+        if (!track) { set({ errorMessage: "That track no longer exists. Select another track." }); return; }
+        commit(`${track.soloed ? "Unsolo" : "Solo"} ${track.name}`, { type: "track.update", trackId, changes: { soloed: !track.soloed } });
+      },
+      setMasterVolume(volumeDb): void {
+        if (!Number.isFinite(volumeDb) || volumeDb < -60 || volumeDb > 0) {
+          set({ errorMessage: "Choose a master volume from -60 to 0 dB." });
+          return;
+        }
+        commit("Set master volume", { type: "project.update", changes: { masterVolumeDb: volumeDb } });
       },
     };
   });

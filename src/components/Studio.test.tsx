@@ -232,6 +232,56 @@ describe("Studio", () => {
     expect(screen.queryByLabelText("Master output level")).not.toBeInTheDocument();
   });
 
+  it("synchronizes track mute controls and commits a slider gesture once", async () => {
+    const user = userEvent.setup();
+    render(<Studio initialProject={DEMO_PROJECT} />);
+    const trackHeader = screen.getByRole("group", { name: "Low Orbit track" });
+    await user.click(within(trackHeader).getByRole("button", { name: "Mute Low Orbit" }));
+    expect(within(trackHeader).getByRole("button", { name: "Unmute Low Orbit" })).toHaveAttribute("aria-pressed", "true");
+
+    await user.click(screen.getByRole("button", { name: "Mixer" }));
+    const channel = screen.getByRole("group", { name: "Low Orbit channel" });
+    const mixerMute = within(channel).getByRole("button", { name: "Unmute Low Orbit" });
+    expect(mixerMute).toHaveAttribute("aria-pressed", "true");
+    await user.click(mixerMute);
+    expect(within(trackHeader).getByRole("button", { name: "Mute Low Orbit" })).toHaveAttribute("aria-pressed", "false");
+
+    await user.click(screen.getByRole("button", { name: "Undo" }));
+    await user.click(screen.getByRole("button", { name: "Undo" }));
+    const volume = within(channel).getByRole("slider", { name: "Low Orbit volume" });
+    fireEvent.pointerDown(volume, { pointerId: 1, button: 0 });
+    fireEvent.change(volume, { target: { value: "-12" } });
+    fireEvent.change(volume, { target: { value: "-18" } });
+    expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
+    fireEvent.pointerUp(volume, { pointerId: 1 });
+    expect(volume).toHaveValue("-18");
+    await user.click(screen.getByRole("button", { name: "Undo" }));
+    expect(volume).toHaveValue("-9");
+    expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
+  });
+
+  it("commits numeric mixer entry once and cancels an unfinished value", async () => {
+    const user = userEvent.setup();
+    render(<Studio initialProject={DEMO_PROJECT} />);
+    await user.click(screen.getByRole("button", { name: "Mixer" }));
+    const channel = screen.getByRole("group", { name: "Low Orbit channel" });
+    const value = within(channel).getByRole("spinbutton", { name: "Low Orbit volume value" });
+    const slider = within(channel).getByRole("slider", { name: "Low Orbit volume" });
+
+    fireEvent.change(value, { target: { value: "-12" } });
+    fireEvent.keyDown(value, { key: "Enter" });
+    fireEvent.blur(value);
+    expect(slider).toHaveValue("-12");
+    await user.click(screen.getByRole("button", { name: "Undo" }));
+    expect(slider).toHaveValue("-9");
+    expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
+
+    fireEvent.change(value, { target: { value: "-18" } });
+    fireEvent.keyDown(value, { key: "Escape" });
+    expect(slider).toHaveValue("-9");
+    expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
+  });
+
   it("toggles activity and editor panels without initializing audio", async () => {
     const context = vi.fn();
     const fetch = vi.fn();

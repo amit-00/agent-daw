@@ -4,6 +4,41 @@ import { DEMO_PROJECT, EMPTY_PROJECT } from "@/data/studio-data";
 import { createStudioStore } from "@/stores/studio-store";
 
 describe("studio session", () => {
+  it("stores mixer values in the project and restores them with undo", () => {
+    const store = createStudioStore(EMPTY_PROJECT);
+    const trackId = store.getState().createTrack("synth", "synth.bass")!;
+    store.getState().setTrackVolume(trackId, -12);
+    store.getState().setTrackPan(trackId, 0.5);
+    store.getState().setMasterVolume(-3);
+    expect(store.getState().project.tracks[0]).toMatchObject({ volumeDb: -12, pan: 0.5 });
+    expect(store.getState().project.masterVolumeDb).toBe(-3);
+    store.getState().undo();
+    expect(store.getState().project.masterVolumeDb).toBe(0);
+  });
+
+  it("rejects invalid mixer values and allows multiple soloed tracks", () => {
+    const store = createStudioStore(DEMO_PROJECT);
+    const before = store.getState().history.length;
+    for (const value of [-61, 7, NaN, Infinity]) store.getState().setTrackVolume("bass", value);
+    for (const value of [-1.01, 1.01, NaN, Infinity]) store.getState().setTrackPan("bass", value);
+    for (const value of [-61, 1, NaN, Infinity]) store.getState().setMasterVolume(value);
+    store.getState().setTrackVolume("missing", -12);
+    store.getState().toggleMute("missing");
+    store.getState().toggleSolo("missing");
+    expect(store.getState().history).toHaveLength(before);
+    expect(store.getState().project.tracks.find((track) => track.id === "bass"))
+      .toMatchObject({ volumeDb: -9, pan: 0, muted: false, soloed: false });
+    expect(store.getState().errorMessage).toBeTruthy();
+
+    store.getState().toggleSolo("bass");
+    store.getState().toggleSolo("chords");
+    expect(store.getState().project.tracks.filter((track) => track.soloed).map((track) => track.id))
+      .toEqual(["bass", "chords"]);
+    const changed = store.getState().history.length;
+    store.getState().setTrackVolume("bass", -9);
+    expect(store.getState().history).toHaveLength(changed);
+  });
+
   it("allows chords but rejects a note extending past its pattern", () => {
     const store = createStudioStore(EMPTY_PROJECT);
     const patternId = store.getState().createPattern("synth")!;
