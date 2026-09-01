@@ -60,6 +60,13 @@ function historyCount(): number {
   return within(screen.getByRole("complementary", { name: "Activity" })).queryAllByRole("listitem").length;
 }
 
+function previewViewportLeft(): number {
+  const arrangement = screen.getByRole("region", { name: "Song arrangement" });
+  const preview = screen.getByRole("region", { name: "Low Orbit lane" })
+    .querySelector<HTMLElement>("div[aria-hidden='true']")!;
+  return Number.parseFloat(preview.style.left) / 100 * Number(arrangement.dataset.bars) * 92 - scroller.scrollLeft;
+}
+
 it("previews a snapped clip move, preserving the grab offset, and commits once on release", () => {
   start("Select Low Orbit phrase", 314, 200);
   move(434, 200);
@@ -94,18 +101,40 @@ it("accounts for horizontal and vertical scrolling during a captured drag", () =
 
 it("extends and scrolls the timeline while dragging at the right edge", () => {
   const arrangement = screen.getByRole("region", { name: "Song arrangement" });
+  const lane = screen.getByRole("region", { name: "Low Orbit lane" });
+  vi.mocked(lane.getBoundingClientRect).mockImplementation(() =>
+    new DOMRect(154 - scroller.scrollLeft, 151 - scroller.scrollTop, Number(arrangement.dataset.bars) * 92, 112));
   Object.defineProperties(scroller, {
     clientWidth: { value: 954, configurable: true },
     scrollWidth: { get: () => Number.parseFloat(arrangement.style.minWidth), configurable: true },
   });
   start("Select Low Orbit phrase", 314, 200);
   move(940, 200);
-  expect(arrangement).toHaveAttribute("data-bars", "13");
+  expect(arrangement).toHaveAttribute("data-bars", "14");
+  const initialPreviewLeft = previewViewportLeft();
+  act(() => animationFrames.shift()?.(16));
+  expect(previewViewportLeft()).toBeCloseTo(initialPreviewLeft);
   act(() => {
-    for (let index = 0; index < 12; index += 1) animationFrames.shift()?.(index);
+    for (let index = 1; index < 12; index += 1) animationFrames.shift()?.((index + 1) * 16);
   });
   expect(scroller.scrollLeft).toBeGreaterThan(0);
-  expect(Number(arrangement.dataset.bars)).toBeGreaterThan(13);
+  expect(Number(arrangement.dataset.bars)).toBeGreaterThan(14);
+});
+
+it("keeps left-edge scrolling smooth when frames are delayed", () => {
+  Object.defineProperties(scroller, {
+    clientWidth: { value: 954, configurable: true },
+    scrollWidth: { value: 2_000, configurable: true },
+  });
+  start("Select Low Orbit phrase", 314, 200);
+  scroller.scrollLeft = 400;
+  fireEvent.scroll(scroller);
+  move(160, 200);
+  act(() => animationFrames.shift()?.(0));
+  const firstDistance = 400 - scroller.scrollLeft;
+  const firstPosition = scroller.scrollLeft;
+  act(() => animationFrames.shift()?.(32));
+  expect(firstPosition - scroller.scrollLeft).toBeGreaterThan(firstDistance);
 });
 
 it("clamps a moved clip to its final valid starting bar", () => {

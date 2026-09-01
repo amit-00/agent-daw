@@ -14,6 +14,7 @@ interface PlacementPreview {
   readonly lane: HTMLElement | null;
   readonly problem: string | null;
   readonly bars: number;
+  readonly visualStartBar: number;
 }
 
 interface PlacementDrag {
@@ -31,6 +32,7 @@ interface PlacementDrag {
   clientY: number;
   preview: PlacementPreview | null;
   scrollFrame: number | null;
+  lastScrollTime: number | null;
 }
 
 export function ArrangementGestures({ children, onPreviewEndBar = () => undefined }: Readonly<{
@@ -51,18 +53,22 @@ export function ArrangementGestures({ children, onPreviewEndBar = () => undefine
       return clientX >= Math.max(rect.left, viewport.left + 154) &&
         clientY >= Math.max(rect.top, viewport.top) && clientY < Math.min(rect.bottom, viewport.bottom);
     });
-    if (!lane) return { clip: current.clip, lane: null, bars: current.bars, problem: "Drop inside a track lane. Use clip settings for an exact placement." };
+    if (!lane) return { clip: current.clip, lane: null, bars: current.bars, visualStartBar: current.clip.startBar,
+      problem: "Drop inside a track lane. Use clip settings for an exact placement." };
     const rect = lane.getBoundingClientRect();
     const deltaBars = (clientX - current.startX + current.laneLeft - rect.left) / current.pixelsPerBar;
     const lastStartBar = PROJECT_CAPS.maxArrangementBars - current.lengthBars * current.clip.repeatCount;
+    const rawStartBar = current.kind === "place" ? (clientX - rect.left) / current.pixelsPerBar
+      : current.kind === "move" ? current.clip.startBar + deltaBars : current.clip.startBar;
+    const visualStartBar = Math.max(0, Math.min(lastStartBar, rawStartBar));
     const clip: ArrangementClip = { ...current.clip, trackId: lane.dataset.trackId!,
-      startBar: current.kind === "place" ? Math.max(0, Math.min(lastStartBar, Math.floor((clientX - rect.left) / current.pixelsPerBar)))
-        : current.kind === "move" ? Math.max(0, Math.min(lastStartBar, current.clip.startBar + Math.round(deltaBars))) : current.clip.startBar,
+      startBar: current.kind === "place" ? Math.floor(visualStartBar)
+        : current.kind === "move" ? Math.round(visualStartBar) : current.clip.startBar,
       repeatCount: current.kind === "resize"
         ? Math.max(1, Math.min(64, Math.round(current.clip.repeatCount + deltaBars / current.lengthBars))) : current.clip.repeatCount };
     const endBar = clip.startBar + current.lengthBars * clip.repeatCount;
     const bars = Math.min(PROJECT_CAPS.maxArrangementBars, Math.max(current.bars, endBar + ARRANGEMENT_BUFFER_BARS));
-    return { clip, lane, bars, problem: getPlacementProblem(project, clip) };
+    return { clip, lane, bars, visualStartBar, problem: getPlacementProblem(project, clip) };
   }
 
   function show(current: PlacementDrag, result: PlacementPreview): void {
@@ -71,28 +77,31 @@ export function ArrangementGestures({ children, onPreviewEndBar = () => undefine
     onPreviewEndBar(result.lane ? result.clip.startBar + current.lengthBars * result.clip.repeatCount : null);
   }
 
-  function scrollSpeed(current: PlacementDrag): number {
+  function scrollVelocity(current: PlacementDrag): number {
     const viewport = current.scroller.getBoundingClientRect();
     const rightStart = viewport.right - 48;
     const leftStart = viewport.left + 202;
-    if (current.clientX > rightStart) return Math.ceil((current.clientX - rightStart) / 3);
-    if (current.clientX < leftStart && current.clientX >= viewport.left + 154) return -Math.ceil((leftStart - current.clientX) / 3);
+    if (current.clientX > rightStart) return Math.min(1.5, (current.clientX - rightStart) / 32);
+    if (current.clientX < leftStart && current.clientX >= viewport.left + 154) return -Math.min(1.5, (leftStart - current.clientX) / 32);
     return 0;
   }
 
   function scheduleScroll(current: PlacementDrag): void {
-    const speed = scrollSpeed(current);
-    if (speed === 0) {
+    const velocity = scrollVelocity(current);
+    if (velocity === 0) {
       if (current.scrollFrame !== null) cancelAnimationFrame(current.scrollFrame);
       current.scrollFrame = null;
+      current.lastScrollTime = null;
       return;
     }
     if (current.scrollFrame !== null) return;
-    current.scrollFrame = requestAnimationFrame(() => {
+    current.scrollFrame = requestAnimationFrame((time) => {
       current.scrollFrame = null;
       if (drag.current !== current) return;
+      const elapsed = current.lastScrollTime === null ? 16 : Math.min(32, Math.max(0, time - current.lastScrollTime));
+      current.lastScrollTime = time;
       const next = Math.max(0, Math.min(current.scroller.scrollWidth - current.scroller.clientWidth,
-        current.scroller.scrollLeft + scrollSpeed(current)));
+        current.scroller.scrollLeft + scrollVelocity(current) * elapsed));
       if (next !== current.scroller.scrollLeft) {
         current.scroller.scrollLeft = next;
         show(current, candidateAt(current, current.clientX, current.clientY));
@@ -133,7 +142,8 @@ export function ArrangementGestures({ children, onPreviewEndBar = () => undefine
       clip: clip ?? { id: "", patternId: pattern.id, trackId: "", startBar: 0, repeatCount: 1 },
       pointerId: event.pointerId, startX: event.clientX, startY: event.clientY,
       clientX: event.clientX, clientY: event.clientY, laneLeft: rect.left,
-      pixelsPerBar: rect.width / bars, lengthBars: pattern.lengthBars, bars, scroller, preview: null, scrollFrame: null };
+      pixelsPerBar: rect.width / bars, lengthBars: pattern.lengthBars, bars, scroller, preview: null,
+      scrollFrame: null, lastScrollTime: null };
   }
 
   function move(clientX: number, clientY: number): void {
@@ -180,7 +190,7 @@ export function ArrangementGestures({ children, onPreviewEndBar = () => undefine
     {children}
     {preview?.lane?.isConnected && pattern && track && createPortal(
       <div aria-hidden="true" className="pointer-events-none absolute inset-y-0 z-[3] rounded-[3px] border-2"
-        style={{ left: `${preview.clip.startBar / preview.bars * 100}%`, width: `calc(${pattern.lengthBars * preview.clip.repeatCount / preview.bars * 100}% - 2px)`,
+        style={{ left: `${preview.visualStartBar / preview.bars * 100}%`, width: `calc(${pattern.lengthBars * preview.clip.repeatCount / preview.bars * 100}% - 2px)`,
           borderColor: preview.problem ? "#fb7185" : "#fff", background: `color-mix(in srgb, ${getTrackColor(track)} 40%, transparent)` }} />,
       preview.lane)}
     {(preview || message) && <p role={preview ? "status" : "alert"}
