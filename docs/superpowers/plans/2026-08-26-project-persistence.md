@@ -224,9 +224,6 @@ export interface ProjectPersistenceOptions {
   readonly debounceMs: number;
 }
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
-
 const persistenceError = (
   code: PersistenceErrorCode,
   message: string,
@@ -294,22 +291,29 @@ export class ProjectPersistenceService {
   }
 
   private decodeStoredValue(value: unknown): LoadResult {
-    if (!isRecord(value) || !isRecord(value.project)) {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
       this.recoveryRequired = true;
       return { status: "failed", error: persistenceError("corrupt_record", "Stored project record is malformed") };
     }
-    const schemaVersion = value.project.schemaVersion;
+    const record = value as Record<string, unknown>;
+    if (typeof record.project !== "object" || record.project === null
+      || Array.isArray(record.project)) {
+      this.recoveryRequired = true;
+      return { status: "failed", error: persistenceError("corrupt_record", "Stored project record is malformed") };
+    }
+    const project = record.project as Record<string, unknown>;
+    const schemaVersion = project.schemaVersion;
     if (typeof schemaVersion === "number" && Number.isInteger(schemaVersion)
       && schemaVersion !== SUPPORTED_PROJECT_SCHEMA_VERSION) {
       this.recoveryRequired = true;
       return { status: "failed", error: persistenceError("unsupported_schema", `Project schema ${schemaVersion} is unsupported`) };
     }
-    if (!Number.isInteger(value.updatedAt) || (value.updatedAt as number) < 0) {
+    if (!Number.isInteger(record.updatedAt) || (record.updatedAt as number) < 0) {
       this.recoveryRequired = true;
       return { status: "failed", error: persistenceError("corrupt_record", "Stored project update time is invalid") };
     }
     try {
-      validateProject(value.project as unknown as Project, this.options.catalog);
+      validateProject(project as unknown as Project, this.options.catalog);
     } catch (error: unknown) {
       if (!(error instanceof DomainError)) throw error;
       this.recoveryRequired = true;
@@ -317,8 +321,8 @@ export class ProjectPersistenceService {
     }
     return {
       status: "loaded",
-      project: value.project as unknown as Project,
-      updatedAt: value.updatedAt as number,
+      project: project as unknown as Project,
+      updatedAt: record.updatedAt as number,
     };
   }
 }

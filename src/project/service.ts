@@ -38,25 +38,7 @@ const invalidCommand = (path: string, message: string): never => {
   throw new InvalidInputError({ path, message });
 };
 
-const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
-
-const requireRecord = (value: unknown, path: string): Readonly<Record<string, unknown>> =>
-  isRecord(value) ? value : invalidCommand(path, "must be an object");
-
-const requireArray = (value: unknown, path: string): readonly unknown[] =>
-  Array.isArray(value) ? value : invalidCommand(path, "must be an array");
-
-const requireRecords = (value: unknown, path: string): void => {
-  requireArray(value, path).forEach((entry: unknown, index: number) => requireRecord(entry, `${path}[${index}]`));
-};
-
-const requireUpdates = (value: unknown, path: string): void => {
-  requireArray(value, path).forEach((entry: unknown, index: number) => {
-    const update = requireRecord(entry, `${path}[${index}]`);
-    requireRecord(update.changes, `${path}[${index}].changes`);
-  });
-};
+type UnknownRecord = Readonly<Record<string, unknown>>;
 
 const operationTypes: ReadonlySet<Operation["type"]> = new Set([
   "project.update",
@@ -68,52 +50,91 @@ const operationTypes: ReadonlySet<Operation["type"]> = new Set([
 ]);
 
 const validateOperation = (operation: unknown, path: string): void => {
-  const record = requireRecord(operation, path);
+  if (typeof operation !== "object" || operation === null || Array.isArray(operation)) {
+    invalidCommand(path, "must be an object");
+  }
+  const record = operation as UnknownRecord;
   if (typeof record.type !== "string" || !operationTypes.has(record.type as Operation["type"])) {
     invalidCommand(path, "must be a supported operation");
   }
   switch (record.type) {
     case "project.update":
-      requireRecord(record.changes, `${path}.changes`);
+    case "track.update":
+    case "pattern.update":
+    case "arrangement.update":
+      if (typeof record.changes !== "object" || record.changes === null
+        || Array.isArray(record.changes)) {
+        invalidCommand(`${path}.changes`, "must be an object");
+      }
       return;
     case "track.create":
-      requireRecord(record.track, `${path}.track`);
-      return;
-    case "track.update":
-      requireRecord(record.changes, `${path}.changes`);
+      if (typeof record.track !== "object" || record.track === null || Array.isArray(record.track)) {
+        invalidCommand(`${path}.track`, "must be an object");
+      }
       return;
     case "pattern.create":
-      requireRecord(record.pattern, `${path}.pattern`);
-      return;
-    case "pattern.duplicate":
-      requireArray(record.duplicateEventIds, `${path}.duplicateEventIds`);
-      return;
-    case "pattern.update":
-      requireRecord(record.changes, `${path}.changes`);
+      if (typeof record.pattern !== "object" || record.pattern === null
+        || Array.isArray(record.pattern)) {
+        invalidCommand(`${path}.pattern`, "must be an object");
+      }
       return;
     case "arrangement.place":
-      requireRecord(record.clip, `${path}.clip`);
+      if (typeof record.clip !== "object" || record.clip === null || Array.isArray(record.clip)) {
+        invalidCommand(`${path}.clip`, "must be an object");
+      }
       return;
-    case "arrangement.update":
-      requireRecord(record.changes, `${path}.changes`);
+    case "pattern.duplicate":
+      if (!Array.isArray(record.duplicateEventIds)) {
+        invalidCommand(`${path}.duplicateEventIds`, "must be an array");
+      }
       return;
-    case "drum-hits.add":
-      requireRecords(record.hits, `${path}.hits`);
+    case "drum-hits.add": {
+      const hits = record.hits;
+      if (!Array.isArray(hits)) {
+        invalidCommand(`${path}.hits`, "must be an array");
+      }
+      (hits as readonly unknown[]).forEach((entry: unknown, index: number) => {
+        if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+          invalidCommand(`${path}.hits[${index}]`, "must be an object");
+        }
+      });
       return;
+    }
     case "drum-hits.update":
-      requireUpdates(record.updates, `${path}.updates`);
+    case "synth-notes.update": {
+      const updates = record.updates;
+      if (!Array.isArray(updates)) {
+        invalidCommand(`${path}.updates`, "must be an array");
+      }
+      (updates as readonly unknown[]).forEach((entry: unknown, index: number) => {
+        if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+          invalidCommand(`${path}.updates[${index}]`, "must be an object");
+        }
+        const update = entry as UnknownRecord;
+        if (typeof update.changes !== "object" || update.changes === null
+          || Array.isArray(update.changes)) {
+          invalidCommand(`${path}.updates[${index}].changes`, "must be an object");
+        }
+      });
       return;
+    }
+    case "synth-notes.add": {
+      const notes = record.notes;
+      if (!Array.isArray(notes)) {
+        invalidCommand(`${path}.notes`, "must be an array");
+      }
+      (notes as readonly unknown[]).forEach((entry: unknown, index: number) => {
+        if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+          invalidCommand(`${path}.notes[${index}]`, "must be an object");
+        }
+      });
+      return;
+    }
     case "drum-hits.delete":
-      requireArray(record.hitIds, `${path}.hitIds`);
-      return;
-    case "synth-notes.add":
-      requireRecords(record.notes, `${path}.notes`);
-      return;
-    case "synth-notes.update":
-      requireUpdates(record.updates, `${path}.updates`);
+      if (!Array.isArray(record.hitIds)) invalidCommand(`${path}.hitIds`, "must be an array");
       return;
     case "synth-notes.delete":
-      requireArray(record.noteIds, `${path}.noteIds`);
+      if (!Array.isArray(record.noteIds)) invalidCommand(`${path}.noteIds`, "must be an array");
       return;
     case "track.delete":
     case "pattern.delete":
@@ -122,14 +143,20 @@ const validateOperation = (operation: unknown, path: string): void => {
 };
 
 const commandIdFor = (command: Command | RestoreCommand): string => {
-  const record = requireRecord(command, "command");
+  if (typeof command !== "object" || command === null || Array.isArray(command)) {
+    invalidCommand("command", "must be an object");
+  }
+  const record = command as unknown as UnknownRecord;
   return typeof record.id === "string" && record.id.length > 0
     ? record.id
     : invalidCommand("command.id", "must be a non-empty string");
 };
 
 const validateCommandMetadata = (command: unknown): Readonly<Record<string, unknown>> => {
-  const record = requireRecord(command, "command");
+  if (typeof command !== "object" || command === null || Array.isArray(command)) {
+    invalidCommand("command", "must be an object");
+  }
+  const record = command as UnknownRecord;
   if (record.source !== "manual" && record.source !== "agent") {
     invalidCommand("command.source", "must be manual or agent");
   }
@@ -145,7 +172,9 @@ const validateCommand = (command: Command): void => {
     return;
   }
   if (record.kind === "batch") {
-    requireArray(record.operations, "command.operations");
+    if (!Array.isArray(record.operations)) {
+      invalidCommand("command.operations", "must be an array");
+    }
     return;
   }
   invalidCommand("command.kind", "must be operation or batch");
