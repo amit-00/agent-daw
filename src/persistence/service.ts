@@ -1,10 +1,9 @@
-import { type Project } from "../project/index.ts";
+import { migrateProject, type Project, type ProjectV1 } from "../project/index.ts";
 
 const DATABASE_NAME = "agent-daw";
 const DATABASE_VERSION = 1;
 const STORE_NAME = "current-project";
 const RECORD_KEY = "current";
-const SUPPORTED_PROJECT_SCHEMA_VERSION = 1;
 
 export type PersistenceErrorCode =
   | "storage_unavailable"
@@ -200,7 +199,7 @@ export class ProjectPersistenceService {
     }
     const project = record.project as Record<string, unknown>;
     const schemaVersion = project.schemaVersion;
-    if (schemaVersion !== SUPPORTED_PROJECT_SCHEMA_VERSION) {
+    if (schemaVersion !== 1 && schemaVersion !== 2) {
       this.enterRecovery();
       if (typeof schemaVersion === "number" && Number.isInteger(schemaVersion)) {
         return { status: "failed", error: persistenceError("unsupported_schema", `Project schema ${schemaVersion} is unsupported`) };
@@ -211,11 +210,19 @@ export class ProjectPersistenceService {
       this.enterRecovery();
       return { status: "failed", error: persistenceError("corrupt_record", "Stored project update time is invalid") };
     }
-    return {
-      status: "loaded",
-      project: project as unknown as Project,
-      updatedAt: record.updatedAt as number,
-    };
+    try {
+      return {
+        status: "loaded",
+        project: migrateProject(project as unknown as ProjectV1 | Project),
+        updatedAt: record.updatedAt as number,
+      };
+    } catch (error: unknown) {
+      this.enterRecovery();
+      return {
+        status: "failed",
+        error: persistenceError("corrupt_record", "Stored project cannot be migrated", error),
+      };
+    }
   }
 
   private async openDatabase(): Promise<IDBDatabase> {
