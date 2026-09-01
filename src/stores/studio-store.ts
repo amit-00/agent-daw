@@ -44,7 +44,7 @@ export interface StudioState extends ProjectServiceState {
   }[]): void;
   addSynthNote(patternId: string, midiNote: number, startStep: number, lengthSteps: number): string | null;
   updateSynthNotes(patternId: string, updates: Extract<Operation, { type: "synth-notes.update" }>["updates"]): void;
-  duplicateSynthNotes(patternId: string, noteIds: readonly string[], offsetSteps: number): void;
+  duplicateSynthNotes(patternId: string, noteIds: readonly string[], offsetSteps: number, pitchOffset: number): readonly string[];
   deleteSynthNotes(patternId: string, noteIds: readonly string[]): void;
   setTrackVolume(trackId: string, volumeDb: number): void;
   setTrackPan(trackId: string, pan: number): void;
@@ -431,15 +431,15 @@ export function createStudioStore(initialProject: Project): StoreApi<StudioState
         if (unique.length > 0) commit(`Edit notes in ${pattern.name}`, { type: "synth-notes.update", patternId, updates: unique });
         else set({ errorMessage: null });
       },
-      duplicateSynthNotes(patternId, noteIds, offsetSteps): void {
+      duplicateSynthNotes(patternId, noteIds, offsetSteps, pitchOffset): readonly string[] {
         const pattern = get().project.patterns.find((item) => item.id === patternId);
         if (!pattern || pattern.kind !== "synth") {
           set({ errorMessage: "That synth pattern no longer exists. Select another pattern." });
-          return;
+          return [];
         }
-        if (!Number.isInteger(offsetSteps)) {
-          set({ errorMessage: "Choose a whole-step duplicate offset." });
-          return;
+        if (!Number.isInteger(offsetSteps) || !Number.isInteger(pitchOffset)) {
+          set({ errorMessage: "Choose whole-step time and pitch duplicate offsets." });
+          return [];
         }
         const uniqueIds = [...new Set(noteIds)];
         const selected: SynthNote[] = [];
@@ -447,19 +447,21 @@ export function createStudioStore(initialProject: Project): StoreApi<StudioState
           const note = pattern.events.find((item) => item.id === id);
           if (!note) {
             set({ errorMessage: "A selected note no longer exists. Select the current notes and try again." });
-            return;
+            return [];
           }
           selected.push(note);
         }
         if (pattern.events.length + selected.length > PROJECT_CAPS.maxEventsPerPattern) {
           set({ errorMessage: `A pattern supports ${PROJECT_CAPS.maxEventsPerPattern} events. Delete notes before duplicating.` });
-          return;
+          return [];
         }
-        const notes = selected.map((note) => ({ ...note, id: crypto.randomUUID(), startStep: note.startStep + offsetSteps }));
+        const notes = selected.map((note) => ({ ...note, id: crypto.randomUUID(),
+          midiNote: note.midiNote + pitchOffset, startStep: note.startStep + offsetSteps }));
         const problem = notes.find((note) => getSynthNoteProblem(pattern, note));
-        if (problem) { set({ errorMessage: getSynthNoteProblem(pattern, problem) }); return; }
+        if (problem) { set({ errorMessage: getSynthNoteProblem(pattern, problem) }); return []; }
         if (notes.length > 0) commit(`Duplicate notes in ${pattern.name}`, { type: "synth-notes.add", patternId, notes });
         else set({ errorMessage: null });
+        return notes.map((note) => note.id);
       },
       deleteSynthNotes(patternId, noteIds): void {
         const pattern = get().project.patterns.find((item) => item.id === patternId);

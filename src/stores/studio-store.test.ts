@@ -146,19 +146,20 @@ describe("studio session", () => {
     const store = createStudioStore({ ...EMPTY_PROJECT, patterns: [
       { id: "melody", name: "Melody", kind: "synth", lengthBars: 1, events: notes },
     ] });
-    store.getState().duplicateSynthNotes("melody", ["a", "a", "b"], 1);
+    const duplicateIds = store.getState().duplicateSynthNotes("melody", ["a", "a", "b"], 1, 2);
     const events = store.getState().project.patterns[0]?.events ?? [];
     expect(events).toHaveLength(4);
     expect(new Set(events.map((event) => event.id)).size).toBe(4);
     expect(events.slice(2)).toMatchObject([
-      { midiNote: 60, startStep: 1, lengthSteps: 4 },
-      { midiNote: 64, startStep: 5, lengthSteps: 4 },
+      { midiNote: 62, startStep: 1, lengthSteps: 4 },
+      { midiNote: 66, startStep: 5, lengthSteps: 4 },
     ]);
+    expect(duplicateIds).toEqual(events.slice(2).map((event) => event.id));
     expect(store.getState().history).toHaveLength(1);
     store.getState().undo();
     const before = store.getState().history.length;
-    store.getState().duplicateSynthNotes("melody", ["b"], 9);
-    store.getState().duplicateSynthNotes("melody", ["missing"], 1);
+    expect(store.getState().duplicateSynthNotes("melody", ["b"], 9, 0)).toEqual([]);
+    expect(store.getState().duplicateSynthNotes("melody", ["missing"], 1, 0)).toEqual([]);
     expect(store.getState().project.patterns[0]?.events).toEqual(notes);
     expect(store.getState().history).toHaveLength(before);
 
@@ -167,7 +168,7 @@ describe("studio session", () => {
         events: Array.from({ length: 512 }, (_, index) => ({ id: `note-${index}`, midiNote: 60, startStep: 0, lengthSteps: 1 })) },
     ] });
     expect(fullStore.getState().addSynthNote("full", 64, 1, 1)).toBeNull();
-    fullStore.getState().duplicateSynthNotes("full", ["note-0"], 1);
+    expect(fullStore.getState().duplicateSynthNotes("full", ["note-0"], 1, 0)).toEqual([]);
     expect(fullStore.getState().project.patterns[0]?.events).toHaveLength(512);
     expect(fullStore.getState().history).toHaveLength(0);
   });
