@@ -1,5 +1,6 @@
 export type WebMCPToolName =
   | "get_project" | "get_sound_catalog" | "get_history"
+  | "play" | "pause" | "stop" | "seek"
   | "rename_project" | "set_tempo" | "set_master_volume"
   | "create_track" | "rename_track" | "set_track_instrument"
   | "reorder_track" | "set_track_mix" | "set_track_mute"
@@ -19,7 +20,8 @@ export type ToolErrorCode =
   | "CAPACITY_EXCEEDED" | "BATCH_TOO_SMALL" | "BATCH_TOO_LARGE"
   | "DEPENDENCIES_EXIST" | "FORWARD_REFERENCE" | "DUPLICATE_REFERENCE"
   | "NOTHING_TO_UNDO" | "NOTHING_TO_REDO" | "HISTORY_ENTRY_NOT_FOUND"
-  | "AUDIO_BLOCKED" | "EXPORT_FAILED" | "EXECUTION_CANCELLED" | "INTERNAL_ERROR";
+  | "AUDIO_BLOCKED" | "AUDIO_UNAVAILABLE" | "NOTHING_TO_PLAY"
+  | "EXPORT_FAILED" | "EXECUTION_CANCELLED" | "INTERNAL_ERROR";
 
 export interface ToolError {
   readonly code: ToolErrorCode;
@@ -309,6 +311,17 @@ export const TOOL_CONTRACTS: readonly ToolContract[] = [
     cursor: string(1, 256),
     limit: integer(1, 100),
   }, ["view"]), true),
+
+  mutation("play", "Play", "Starts or resumes playback, optionally from a one-based bar and step.", object({
+    start_bar: integer(1, 256),
+    start_step: integer(1, 16),
+  })),
+  mutation("pause", "Pause", "Pauses playback at the current musical position.", object({})),
+  mutation("stop", "Stop", "Stops playback and returns to the start.", object({})),
+  mutation("seek", "Seek", "Moves playback to a one-based bar and optional step within that bar.", object({
+    bar: integer(1, 256),
+    step: integer(1, 16),
+  }, ["bar"])),
 
   mutation("rename_project", "Rename project", "Renames the current project." + BATCH_ADVICE, directSchema({ name: NAME_80 }, ["name"])),
   mutation("set_tempo", "Set tempo", "Sets the project tempo in beats per minute." + BATCH_ADVICE, directSchema({ bpm: number(40, 240) }, ["bpm"])),

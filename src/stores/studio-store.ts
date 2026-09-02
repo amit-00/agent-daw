@@ -67,9 +67,11 @@ export interface StudioState extends ProjectServiceState {
   undo(): void;
   redo(): void;
   restore(entryId: string): void;
+  playPlayback(startStep: number): Promise<AudioControlResult | null>;
+  pausePlayback(): AudioControlResult | null;
   playPause(): Promise<void>;
-  stopPlayback(): void;
-  seekPlayback(step: number): void;
+  stopPlayback(): AudioControlResult | null;
+  seekPlayback(step: number): AudioControlResult | null;
   refreshAudio(): void;
   beginPersistenceSave(): number;
   finishPersistenceSave(token: number, result: FlushResult): void;
@@ -264,19 +266,14 @@ export function createStudioStore(
           id: crypto.randomUUID(), source: "manual", label: "Restore history", targetEntryId: entryId,
         });
       },
-      async playPause(): Promise<void> {
+      async playPlayback(startStep): Promise<AudioControlResult | null> {
         const engine = getAudioEngine();
-        if (engine === null) return;
-        if (engine.getSnapshot().status === "playing") {
-          publishAudioResult(engine.pause());
-          refreshAudio();
-          return;
-        }
+        if (engine === null) return null;
         set((state) => ({ audio: { ...state.audio, pending: true, errorMessage: null } }));
-        const snapshot = engine.getSnapshot();
-        const startStep = snapshot.positionStep >= snapshot.arrangementEndStep ? 0 : snapshot.positionStep;
         try {
-          publishAudioResult(await engine.play(startStep));
+          const result = await engine.play(startStep);
+          publishAudioResult(result);
+          return result;
         } catch {
           set((state) => ({
             audio: {
@@ -286,21 +283,43 @@ export function createStudioStore(
               errorMessage: "Audio playback failed. Try again or reload.",
             },
           }));
+          return null;
         } finally {
           refreshAudio();
         }
       },
-      stopPlayback(): void {
+      pausePlayback(): AudioControlResult | null {
         const engine = getAudioEngine();
-        if (engine === null) return;
-        publishAudioResult(engine.stop());
+        if (engine === null) return null;
+        const result = engine.pause();
+        publishAudioResult(result);
         refreshAudio();
+        return result;
       },
-      seekPlayback(step): void {
+      async playPause(): Promise<void> {
+        const snapshot = get().audio.snapshot;
+        if (snapshot.status === "playing") {
+          get().pausePlayback();
+          return;
+        }
+        const startStep = snapshot.positionStep >= snapshot.arrangementEndStep ? 0 : snapshot.positionStep;
+        await get().playPlayback(startStep);
+      },
+      stopPlayback(): AudioControlResult | null {
         const engine = getAudioEngine();
-        if (engine === null) return;
-        publishAudioResult(engine.seek(step));
+        if (engine === null) return null;
+        const result = engine.stop();
+        publishAudioResult(result);
         refreshAudio();
+        return result;
+      },
+      seekPlayback(step): AudioControlResult | null {
+        const engine = getAudioEngine();
+        if (engine === null) return null;
+        const result = engine.seek(step);
+        publishAudioResult(result);
+        refreshAudio();
+        return result;
       },
       refreshAudio,
       beginPersistenceSave(): number {

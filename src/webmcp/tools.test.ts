@@ -1,9 +1,11 @@
 import { describe, expect, test, vi } from "vitest";
 import type { StoreApi } from "zustand/vanilla";
 
+import { AudioEngine } from "@/audio";
 import { PROJECT_CAPS, type Project } from "@/project";
 import { DEMO_PROJECT } from "@/data/studio-data";
 import { createStudioStore as createStudioStoreBase, type StudioState } from "@/stores/studio-store";
+import { FakeAudioContext, FakeTimers } from "../../test/audio-fakes";
 
 import { TOOL_CONTRACTS } from "./contracts.ts";
 import type { WebMCPToolName } from "./contracts.ts";
@@ -16,9 +18,32 @@ const createStudioStore = (project: Project): StoreApi<StudioState> => createStu
   { status: "unsaved", updatedAt: null, errorMessage: null },
 );
 
+const createAudioStore = (project: Project, context: FakeAudioContext): {
+  readonly engine: AudioEngine;
+  readonly store: StoreApi<StudioState>;
+} => {
+  const timers = new FakeTimers();
+  const engine = new AudioEngine({
+    createContext: () => context.asAudioContext(),
+    loadArrayBuffer: async () => new ArrayBuffer(8),
+    setInterval: (callback, milliseconds) => timers.setInterval(callback, milliseconds),
+    clearInterval: (handle) => timers.clearInterval(handle),
+  });
+  engine.replaceProject(project);
+  return {
+    engine,
+    store: createStudioStoreBase(
+      project,
+      () => engine,
+      { status: "unsaved", updatedAt: null, errorMessage: null },
+    ),
+  };
+};
+
 const readNames = ["get_project", "get_sound_catalog", "get_history"];
+const runtimeNames = ["play", "pause", "stop", "seek"];
 const futureAndDeferredNames = [
-  "play", "pause", "stop", "seek", "export_wav", "duplicate_track",
+  "export_wav", "duplicate_track",
   "quantize_notes", "transpose_notes", "humanize_notes", "edit_drum_hits",
   "update_track", "apply_operations", "toggle_mute", "get_tracks",
 ];
@@ -62,12 +87,13 @@ describe("WebMCP tool contracts", () => {
     }
   });
 
-  test("publish exactly the 36 approved unique tool names", () => {
+  test("publish exactly the 40 approved unique tool names", () => {
     const names = TOOL_CONTRACTS.map(({ name }) => name);
-    expect(names).toHaveLength(36);
-    expect(new Set(names)).toHaveLength(36);
+    expect(names).toHaveLength(40);
+    expect(new Set(names)).toHaveLength(40);
     expect(names).toEqual([
       "get_project", "get_sound_catalog", "get_history",
+      "play", "pause", "stop", "seek",
       "rename_project", "set_tempo", "set_master_volume",
       "create_track", "rename_track", "set_track_instrument",
       "reorder_track", "set_track_mix", "set_track_mute",
@@ -92,7 +118,8 @@ describe("WebMCP tool contracts", () => {
   });
 
   test("require bounded request IDs for mutations and only require batch revisions", () => {
-    for (const contract of TOOL_CONTRACTS.filter(({ name }) => !readNames.includes(name))) {
+    for (const contract of TOOL_CONTRACTS.filter(({ name }) =>
+      !readNames.includes(name) && !runtimeNames.includes(name))) {
       const schema = schemaOf(contract.name);
       expect(schema.required, contract.name).toContain("request_id");
       expect(schema.properties.request_id, contract.name).toMatchObject({
@@ -120,6 +147,25 @@ describe("WebMCP tool contracts", () => {
         untrustedContentHint: false,
       });
     }
+  });
+
+  test("publish bounded one-based playback position schemas without request IDs", () => {
+    expect(schemaOf("play")).toMatchObject({
+      additionalProperties: false,
+      properties: {
+        start_bar: { type: "integer", minimum: 1, maximum: 256 },
+        start_step: { type: "integer", minimum: 1, maximum: 16 },
+      },
+    });
+    expect(schemaOf("pause").properties).toEqual({});
+    expect(schemaOf("stop").properties).toEqual({});
+    expect(schemaOf("seek")).toMatchObject({
+      required: ["bar"],
+      properties: {
+        bar: { type: "integer", minimum: 1, maximum: 256 },
+        step: { type: "integer", minimum: 1, maximum: 16 },
+      },
+    });
   });
 
   test("omit future and deferred tool names", () => {
@@ -623,6 +669,63 @@ const executeMutation = async (
     error?: { code: string; field?: string; message?: string; change_index?: number; current_revision?: number };
   }>;
 };
+
+describe("playback controls", () => {
+  test("play, pause, seek, and stop share the store audio authority", async () => {
+    const { store } = createAudioStore(DEMO_PROJECT, new FakeAudioContext());
+
+    await expect(executeMutation(store, "play", { start_bar: 2, start_step: 3 }))
+      .resolves.toEqual({ success: true, result: { status: "playing", bar: 2, step: 3 } });
+    await expect(executeMutation(store, "pause", {}))
+      .resolves.toEqual({ success: true, result: { status: "paused", bar: 2, step: 3 } });
+    await expect(executeMutation(store, "seek", { bar: 1, step: 5 }))
+      .resolves.toEqual({ success: true, result: { status: "paused", bar: 1, step: 5 } });
+    await expect(executeMutation(store, "stop", {}))
+      .resolves.toEqual({ success: true, result: { status: "stopped", bar: 1, step: 1 } });
+    expect(store.getState()).toMatchObject({ revision: 0, history: [] });
+  });
+
+  test("maps unusable audio and invalid positions to actionable public errors", async () => {
+    const empty = createAudioStore({ ...DEMO_PROJECT, arrangement: [] }, new FakeAudioContext());
+    await expect(executeMutation(empty.store, "play", {}))
+      .resolves.toMatchObject({ success: false, error: { code: "NOTHING_TO_PLAY" } });
+
+    const closed = createAudioStore(DEMO_PROJECT, new FakeAudioContext());
+    await closed.engine.dispose();
+    await expect(executeMutation(closed.store, "play", {}))
+      .resolves.toMatchObject({ success: false, error: { code: "AUDIO_UNAVAILABLE" } });
+
+    const blockedContext = new FakeAudioContext();
+    blockedContext.resume = async () => { throw new DOMException("blocked", "NotAllowedError"); };
+    const blocked = createAudioStore(DEMO_PROJECT, blockedContext);
+    await expect(executeMutation(blocked.store, "play", {}))
+      .resolves.toMatchObject({ success: false, error: { code: "AUDIO_BLOCKED" } });
+
+    const available = createAudioStore(DEMO_PROJECT, new FakeAudioContext());
+    await expect(executeMutation(available.store, "seek", { bar: 9 }))
+      .resolves.toMatchObject({ success: false, error: { code: "OUT_OF_RANGE", field: "bar" } });
+    await expect(executeMutation(available.store, "play", { start_step: 17 }))
+      .resolves.toMatchObject({ success: false, error: { code: "INVALID_INPUT", field: "start_step" } });
+  });
+
+  test("cancelled play invalidates late audio preparation", async () => {
+    let finishResume!: () => void;
+    const context = new FakeAudioContext();
+    context.resume = () => new Promise<void>((resolve) => { finishResume = resolve; });
+    const { engine, store } = createAudioStore(DEMO_PROJECT, context);
+    const play = createWebMCPTools(store, () => "unused").find((candidate) => candidate.name === "play")!;
+    const controller = new AbortController();
+
+    const result = play.execute({}, { signal: controller.signal });
+    await vi.waitFor(() => expect(store.getState().audio.pending).toBe(true));
+    controller.abort();
+
+    await expect(result).resolves.toMatchObject({ success: false, error: { code: "EXECUTION_CANCELLED" } });
+    context.state = "running";
+    finishResume();
+    await vi.waitFor(() => expect(engine.getSnapshot().status).toBe("stopped"));
+  });
+});
 
 describe("project and track mutations", () => {
   test.each([

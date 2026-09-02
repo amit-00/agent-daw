@@ -150,7 +150,7 @@ describe("Studio persistence bootstrap", () => {
     expect(registration.tools).toHaveLength(0);
 
     await act(async () => finishLoad({ status: "empty" }));
-    await waitFor(() => expect(registration.tools).toHaveLength(36));
+    await waitFor(() => expect(registration.tools).toHaveLength(40));
   });
 
   it("does not register WebMCP while corrupt storage requires recovery", async () => {
@@ -422,6 +422,36 @@ describe("Studio", () => {
 
     await user.click(screen.getByRole("button", { name: "Stop" }));
     expect(screen.getByLabelText("Playback position")).toHaveTextContent("0:00.0");
+  });
+
+  it("reflects WebMCP playback controls in the visible transport", async () => {
+    const registration = installModelContext();
+    vi.stubGlobal("AudioContext", FakeAudioContext);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(new ArrayBuffer(8))));
+    renderSession(DEMO_PROJECT);
+    await waitFor(() => expect(webMCPStatus("Ready")).toBeVisible());
+
+    await act(async () => {
+      await registration.tools.get("seek")!.execute(
+        { bar: 2, step: 3 },
+        { signal: new AbortController().signal },
+      );
+      await registration.tools.get("play")!.execute(
+        {},
+        { signal: new AbortController().signal },
+      );
+    });
+    expect(sessionStore!.getState().audio.snapshot.positionStep).toBe(18);
+    expect(screen.getByRole("button", { name: "Pause" })).toBeEnabled();
+
+    await act(async () => {
+      await registration.tools.get("pause")!.execute(
+        {},
+        { signal: new AbortController().signal },
+      );
+    });
+    expect(screen.getByRole("button", { name: "Play" })).toBeEnabled();
+    expect(sessionStore!.getState()).toMatchObject({ revision: 0, history: [] });
   });
 
   it("lets Stop cancel playback while audio is still preparing", async () => {
@@ -857,7 +887,7 @@ describe("Studio", () => {
 
     view.unmount();
 
-    expect(registration.signals).toHaveLength(36);
+    expect(registration.signals).toHaveLength(40);
     expect(registration.signals.every((signal) => signal.aborted)).toBe(true);
     expect(registration.tools).toHaveLength(0);
   });

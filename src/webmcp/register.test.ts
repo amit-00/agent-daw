@@ -15,7 +15,7 @@ const createStudioStore = (project: Project): StoreApi<StudioState> => createStu
 );
 
 const deferredTools = [
-  "play", "pause", "stop", "seek", "export_wav",
+  "export_wav",
   "duplicate_track", "quantize_notes", "transpose_notes", "humanize_notes",
   "set_note_pitch", "set_note_start", "set_note_duration",
   "update_track", "update_pattern", "update_clip", "edit_project", "apply_operations",
@@ -51,15 +51,15 @@ describe("WebMCP browser registration", () => {
     expect(getModelContext(supported)).toBe(context);
   });
 
-  it("registers exactly the 36 current tools with one signal and no origin exposure", async () => {
+  it("registers exactly the 40 current tools with one signal and no origin exposure", async () => {
     const store = createStudioStore(DEMO_PROJECT);
     const { context, register, tools } = recordingContext();
     const registration = registerWebMCPTools(context, createWebMCPTools(store, () => "unused"));
 
     await registration.ready;
 
-    expect(register).toHaveBeenCalledTimes(36);
-    expect(tools).toHaveLength(36);
+    expect(register).toHaveBeenCalledTimes(40);
+    expect(tools).toHaveLength(40);
     const signals = register.mock.calls.map(([, options]) => options.signal);
     expect(new Set(signals)).toHaveLength(1);
     for (const [, options] of register.mock.calls) expect(Object.keys(options)).toEqual(["signal"]);
@@ -93,7 +93,7 @@ describe("WebMCP browser registration", () => {
     );
 
     await expect(registration.ready).rejects.toBe(failure);
-    expect(register).toHaveBeenCalledTimes(36);
+    expect(register).toHaveBeenCalledTimes(40);
     expect(register.mock.calls.every(([, options]) => options.signal.aborted)).toBe(true);
   });
 

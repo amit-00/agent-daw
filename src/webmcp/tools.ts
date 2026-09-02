@@ -1,3 +1,4 @@
+import type { AudioControlResult } from "@/audio";
 import { SOUND_CATALOG } from "@/audio/catalog";
 import { getTrackColor, INSTRUMENT_NAMES, TRACK_COLOR_WHEEL } from "@/data/studio-data";
 import {
@@ -1432,6 +1433,60 @@ const translateDirectChange = (
   references: new Map(), declaredReferences: new Set(), declarations: new Map(), changeIndex: -1, createId,
 });
 
+const audioResult = (result: AudioControlResult | null): Extract<AudioControlResult, { readonly ok: true }> => {
+  if (result === null || (!result.ok && result.code === "closed")) {
+    throw new ToolExecutionError("AUDIO_UNAVAILABLE", undefined, "Audio is unavailable; reload the studio and try again.", undefined, true);
+  }
+  if (!result.ok && result.code === "blocked") {
+    throw new ToolExecutionError("AUDIO_BLOCKED", undefined, "Audio is blocked; start playback from a browser gesture and retry.", undefined, true);
+  }
+  if (!result.ok) {
+    throw new ToolExecutionError("NOTHING_TO_PLAY", undefined, "Add an arrangement clip before starting playback.");
+  }
+  return result;
+};
+
+const publicPlayback = (status: "playing" | "paused" | "stopped", positionStep: number) => ({
+  status,
+  bar: Math.floor(positionStep / 16) + 1,
+  step: Math.floor(positionStep % 16) + 1,
+});
+
+const positionStep = (bar: number, step: number): number => (bar - 1) * 16 + step - 1;
+
+const checkedPosition = (state: StudioState, bar: number, step: number, field: string): number => {
+  const target = positionStep(bar, step);
+  if (state.audio.snapshot.arrangementEndStep === 0) {
+    throw new ToolExecutionError("NOTHING_TO_PLAY", undefined, "Add an arrangement clip before changing playback position.");
+  }
+  if (target >= state.audio.snapshot.arrangementEndStep) {
+    throw new ToolExecutionError("OUT_OF_RANGE", field, "The requested position is beyond the arrangement.");
+  }
+  return target;
+};
+
+const playWithCancellation = async (
+  store: Pick<StoreApi<StudioState>, "getState">,
+  startStep: number,
+  signal: AbortSignal,
+): Promise<AudioControlResult | null> => {
+  let cancel!: () => void;
+  const cancelled = new Promise<null>((resolve) => {
+    cancel = () => {
+      store.getState().stopPlayback();
+      resolve(null);
+    };
+    signal.addEventListener("abort", cancel, { once: true });
+  });
+  try {
+    const result = await Promise.race([store.getState().playPlayback(startStep), cancelled]);
+    signal.throwIfAborted();
+    return result;
+  } finally {
+    signal.removeEventListener("abort", cancel);
+  }
+};
+
 export function createWebMCPTools(
   store: Pick<StoreApi<StudioState>, "getState">,
   createId: () => string,
@@ -1474,6 +1529,43 @@ export function createWebMCPTools(
         input.limit,
       );
     }),
+    defineWebMCPTool(
+      contract("play"),
+      (input) => ({
+        startBar: optionalInteger(input, "start_bar", 1, 256),
+        startStep: optionalInteger(input, "start_step", 1, 16),
+      }),
+      async ({ startBar, startStep }, signal) => {
+        const state = store.getState();
+        const explicitPosition = startBar !== undefined || startStep !== undefined;
+        const start = explicitPosition
+          ? checkedPosition(state, startBar ?? 1, startStep ?? 1, startBar === undefined ? "start_step" : "start_bar")
+          : state.audio.snapshot.positionStep >= state.audio.snapshot.arrangementEndStep
+            ? 0
+            : state.audio.snapshot.positionStep;
+        const result = audioResult(await playWithCancellation(store, start, signal));
+        return publicPlayback(result.status, result.positionStep);
+      },
+    ),
+    defineWebMCPTool(contract("pause"), () => ({}), () => {
+      const result = audioResult(store.getState().pausePlayback());
+      return publicPlayback(result.status, result.positionStep);
+    }),
+    defineWebMCPTool(contract("stop"), () => ({}), () => {
+      const result = audioResult(store.getState().stopPlayback());
+      return publicPlayback(result.status, result.positionStep);
+    }),
+    defineWebMCPTool(
+      contract("seek"),
+      (input) => ({
+        bar: expectInteger(input.bar, "bar", 1, 256),
+        step: optionalInteger(input, "step", 1, 16) ?? 1,
+      }),
+      ({ bar, step }) => {
+        const result = audioResult(store.getState().seekPlayback(checkedPosition(store.getState(), bar, step, "bar")));
+        return publicPlayback(result.status, result.positionStep);
+      },
+    ),
     defineMutationTool(
       contract("rename_project"),
       store,
