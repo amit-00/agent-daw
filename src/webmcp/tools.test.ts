@@ -6,6 +6,7 @@ import { createStudioStore } from "@/stores/studio-store";
 
 import { TOOL_CONTRACTS } from "./contracts.ts";
 import type { WebMCPToolName } from "./contracts.ts";
+import toolSelectionCases from "./evals/tool-selection.json";
 import { createWebMCPTools, defineWebMCPTool, expectString } from "./tools.ts";
 
 const readNames = ["get_project", "get_sound_catalog", "get_history"];
@@ -14,6 +15,14 @@ const futureAndDeferredNames = [
   "quantize_notes", "transpose_notes", "humanize_notes", "edit_drum_hits",
   "update_track", "apply_operations", "toggle_mute", "get_tracks",
 ];
+type ToolSelectionCase = {
+  readonly id: string;
+  readonly messages: readonly { readonly role: "user" | "assistant"; readonly content: string }[];
+  readonly expectedCall: {
+    readonly name: WebMCPToolName;
+    readonly arguments: Readonly<Record<string, unknown>>;
+  };
+};
 
 const schemaOf = (name: string) => {
   const contract = TOOL_CONTRACTS.find((candidate) => candidate.name === name);
@@ -26,6 +35,26 @@ const schemaOf = (name: string) => {
 };
 
 describe("WebMCP tool contracts", () => {
+  test("tool-selection fixture has unique typed cases for registered tools", () => {
+    const cases = toolSelectionCases as readonly ToolSelectionCase[];
+    const registeredNames: readonly string[] = TOOL_CONTRACTS.map(({ name }) => name);
+
+    expect(cases.length).toBeGreaterThanOrEqual(16);
+    expect(new Set(cases.map(({ id }) => id)).size).toBe(cases.length);
+    for (const selectionCase of cases) {
+      expect(selectionCase.id).toEqual(expect.any(String));
+      expect(selectionCase.id).not.toBe("");
+      expect(selectionCase.messages.length, selectionCase.id).toBeGreaterThan(0);
+      for (const message of selectionCase.messages) {
+        expect(["user", "assistant"], selectionCase.id).toContain(message.role);
+        expect(message.content, selectionCase.id).toEqual(expect.any(String));
+      }
+      expect(registeredNames, selectionCase.id).toContain(selectionCase.expectedCall.name);
+      expect(selectionCase.expectedCall.arguments, selectionCase.id).toEqual(expect.any(Object));
+      expect(Array.isArray(selectionCase.expectedCall.arguments), selectionCase.id).toBe(false);
+    }
+  });
+
   test("publish exactly the 36 approved unique tool names", () => {
     const names = TOOL_CONTRACTS.map(({ name }) => name);
     expect(names).toHaveLength(36);

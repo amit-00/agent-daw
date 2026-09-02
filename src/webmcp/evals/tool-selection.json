@@ -1,0 +1,176 @@
+[
+  {
+    "id": "inspect-overview-before-edit",
+    "messages": [
+      { "role": "user", "content": "Before changing anything, inspect the current project overview." }
+    ],
+    "expectedCall": { "name": "get_project", "arguments": { "view": "overview" } }
+  },
+  {
+    "id": "inspect-pattern-notes",
+    "messages": [
+      { "role": "user", "content": "Show me the notes in the Afterglow pattern with ID afterglow." }
+    ],
+    "expectedCall": { "name": "get_project", "arguments": { "view": "pattern", "pattern_id": "afterglow" } }
+  },
+  {
+    "id": "inspect-history",
+    "messages": [
+      { "role": "user", "content": "List the latest 20 project history entries." }
+    ],
+    "expectedCall": { "name": "get_history", "arguments": { "view": "list", "limit": 20 } }
+  },
+  {
+    "id": "rename-bass-track",
+    "messages": [
+      { "role": "user", "content": "Rename the track with ID bass to Sub Orbit. Use request ID eval-rename-bass." }
+    ],
+    "expectedCall": { "name": "rename_track", "arguments": { "request_id": "eval-rename-bass", "track_id": "bass", "name": "Sub Orbit" } }
+  },
+  {
+    "id": "mute-pad-explicitly",
+    "messages": [
+      { "role": "user", "content": "Set the track with ID pad to muted, explicitly. Use request ID eval-mute-pad." }
+    ],
+    "expectedCall": { "name": "set_track_mute", "arguments": { "request_id": "eval-mute-pad", "track_id": "pad", "muted": true } }
+  },
+  {
+    "id": "create-unplaced-drum-pattern",
+    "messages": [
+      { "role": "user", "content": "Create an unplaced one-bar drum pattern named Break Fill. Use request ID eval-create-break." }
+    ],
+    "expectedCall": { "name": "create_pattern", "arguments": { "request_id": "eval-create-break", "kind": "drum", "name": "Break Fill", "length_bars": 1 } }
+  },
+  {
+    "id": "place-existing-pattern",
+    "messages": [
+      { "role": "user", "content": "Place the existing pattern unused-idea on the melody track at bar 9 for 2 repeats. Use request ID eval-place-idea." }
+    ],
+    "expectedCall": { "name": "place_pattern", "arguments": { "request_id": "eval-place-idea", "pattern_id": "unused-idea", "track_id": "melody", "start_bar": 9, "repeat_count": 2 } }
+  },
+  {
+    "id": "add-several-notes",
+    "messages": [
+      { "role": "user", "content": "Add C4, E4, and G4 to pattern unused-idea at steps 1, 5, and 9, each four steps long. Use request ID eval-add-chord." }
+    ],
+    "expectedCall": {
+      "name": "add_notes",
+      "arguments": {
+        "request_id": "eval-add-chord",
+        "pattern_id": "unused-idea",
+        "notes": [
+          { "midi_note": 60, "start_step": 1, "length_steps": 4 },
+          { "midi_note": 64, "start_step": 5, "length_steps": 4 },
+          { "midi_note": 67, "start_step": 9, "length_steps": 4 }
+        ]
+      }
+    }
+  },
+  {
+    "id": "edit-several-existing-notes",
+    "messages": [
+      { "role": "user", "content": "In pattern afterglow, change note lead-1 to MIDI 74 and move note lead-2 to step 8. Use request ID eval-edit-lead." }
+    ],
+    "expectedCall": {
+      "name": "edit_notes",
+      "arguments": {
+        "request_id": "eval-edit-lead",
+        "pattern_id": "afterglow",
+        "notes": [
+          { "note_id": "lead-1", "midi_note": 74 },
+          { "note_id": "lead-2", "start_step": 8 }
+        ]
+      }
+    }
+  },
+  {
+    "id": "duplicate-existing-notes",
+    "messages": [
+      { "role": "user", "content": "Duplicate notes lead-1 and lead-2 in pattern afterglow 16 steps later and one octave lower. Use request ID eval-duplicate-lead." }
+    ],
+    "expectedCall": {
+      "name": "duplicate_notes",
+      "arguments": {
+        "request_id": "eval-duplicate-lead",
+        "pattern_id": "afterglow",
+        "note_ids": ["lead-1", "lead-2"],
+        "step_offset": 16,
+        "pitch_offset": -12
+      }
+    }
+  },
+  {
+    "id": "delete-track-with-clips",
+    "messages": [
+      { "role": "user", "content": "Delete the pad track and explicitly delete its clips too. Use request ID eval-delete-pad." }
+    ],
+    "expectedCall": { "name": "delete_track", "arguments": { "request_id": "eval-delete-pad", "track_id": "pad", "delete_clips": true } }
+  },
+  {
+    "id": "create-chain-with-refs",
+    "messages": [
+      { "role": "user", "content": "At project revision 0, atomically create a synth lead track named Counterline, a one-bar synth pattern named Counterline, add MIDI notes 72 and 76 at steps 1 and 9 for four steps each, and place it on the new track at bar 9. Use request ID eval-create-counterline and label Create counterline." }
+    ],
+    "expectedCall": {
+      "name": "apply_project_changes",
+      "arguments": {
+        "request_id": "eval-create-counterline",
+        "base_revision": 0,
+        "label": "Create counterline",
+        "changes": [
+          { "type": "create_track", "ref": "counterline-track", "kind": "synth", "instrument_id": "synth.lead", "name": "Counterline" },
+          { "type": "create_pattern", "ref": "counterline-pattern", "kind": "synth", "name": "Counterline", "length_bars": 1 },
+          {
+            "type": "add_notes",
+            "pattern_id": { "ref": "counterline-pattern" },
+            "notes": [
+              { "midi_note": 72, "start_step": 1, "length_steps": 4 },
+              { "midi_note": 76, "start_step": 9, "length_steps": 4 }
+            ]
+          },
+          { "type": "place_pattern", "pattern_id": { "ref": "counterline-pattern" }, "track_id": { "ref": "counterline-track" }, "start_bar": 9 }
+        ]
+      }
+    }
+  },
+  {
+    "id": "move-and-repeat-clip-atomically",
+    "messages": [
+      { "role": "user", "content": "At project revision 0, atomically move clip bass-b to bar 9 and set it to repeat 4 times. Use request ID eval-move-bass and label Move bass outro." }
+    ],
+    "expectedCall": {
+      "name": "apply_project_changes",
+      "arguments": {
+        "request_id": "eval-move-bass",
+        "base_revision": 0,
+        "label": "Move bass outro",
+        "changes": [
+          { "type": "move_clip", "clip_id": { "id": "bass-b" }, "start_bar": 9 },
+          { "type": "set_clip_repeats", "clip_id": { "id": "bass-b" }, "repeat_count": 4 }
+        ]
+      }
+    }
+  },
+  {
+    "id": "single-setter-not-batch",
+    "messages": [
+      { "role": "user", "content": "Set the project tempo to 124 BPM. This is one setter, so do not batch it. Use request ID eval-tempo-124." }
+    ],
+    "expectedCall": { "name": "set_tempo", "arguments": { "request_id": "eval-tempo-124", "bpm": 124 } }
+  },
+  {
+    "id": "undo-mistaken-edit",
+    "messages": [
+      { "role": "user", "content": "Undo my mistaken last edit. Use request ID eval-undo-mistake." }
+    ],
+    "expectedCall": { "name": "undo", "arguments": { "request_id": "eval-undo-mistake" } }
+  },
+  {
+    "id": "restore-named-history-entry",
+    "messages": [
+      { "role": "assistant", "content": "The retained history entry named Before bass rewrite has ID history-before-bass-rewrite." },
+      { "role": "user", "content": "Restore Before bass rewrite by its ID. Use request ID eval-restore-bass." }
+    ],
+    "expectedCall": { "name": "restore_history", "arguments": { "request_id": "eval-restore-bass", "history_entry_id": "history-before-bass-rewrite" } }
+  }
+]
