@@ -1,13 +1,22 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { StoreApi } from "zustand/vanilla";
 
 import { Studio } from "@/components/Studio";
 import { Transport } from "@/components/Transport";
 import { ActivityPanel } from "@/components/ActivityPanel";
 import { DEMO_PROJECT, EMPTY_PROJECT } from "@/data/studio-data";
-import { StudioProvider, useStudioStore } from "@/stores/studio-provider";
+import { StudioProvider, useStudioStore, useStudioStoreApi } from "@/stores/studio-provider";
 import type { StudioState } from "@/stores/studio-store";
+import { FakeAudioContext } from "../../test/audio-fakes";
+
+function StoreApiProbe({ onStore }: Readonly<{
+  onStore: (store: StoreApi<StudioState>) => void;
+}>): null {
+  onStore(useStudioStoreApi());
+  return null;
+}
 
 beforeEach(() => {
   HTMLDivElement.prototype.setPointerCapture = vi.fn();
@@ -19,6 +28,101 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe("Studio", () => {
+  it("forwards each changed project identity to the mounted audio engine", () => {
+    let store: StoreApi<StudioState> | undefined;
+    const project = { ...DEMO_PROJECT, arrangement: [{ ...DEMO_PROJECT.arrangement[0]!, id: "only" }] };
+    render(<StudioProvider initialProject={project}><StoreApiProbe onStore={(value) => { store = value; }} /></StudioProvider>);
+    expect(store!.getState().audio.snapshot.arrangementEndStep).toBeGreaterThan(0);
+
+    act(() => store!.getState().deleteClip("only"));
+
+    expect(store!.getState().audio.snapshot.arrangementEndStep).toBe(0);
+  });
+
+  it("polls one animation frame while playing and cancels it after pause", async () => {
+    let store: StoreApi<StudioState> | undefined;
+    const contexts: FakeAudioContext[] = [];
+    const frames: FrameRequestCallback[] = [];
+    const requestFrame = vi.fn((callback: FrameRequestCallback): number => {
+      frames.push(callback);
+      return frames.length;
+    });
+    const cancelFrame = vi.fn();
+    vi.stubGlobal("AudioContext", class extends FakeAudioContext {
+      constructor() {
+        super();
+        contexts.push(this);
+      }
+    });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(new ArrayBuffer(8))));
+    vi.stubGlobal("requestAnimationFrame", requestFrame);
+    vi.stubGlobal("cancelAnimationFrame", cancelFrame);
+    render(<StudioProvider initialProject={DEMO_PROJECT}><StoreApiProbe onStore={(value) => { store = value; }} /></StudioProvider>);
+
+    await act(() => store!.getState().playPause());
+    expect(contexts).toHaveLength(1);
+    expect(requestFrame).toHaveBeenCalledTimes(1);
+
+    await act(() => store!.getState().playPause());
+    expect(cancelFrame).toHaveBeenCalledWith(1);
+  });
+
+  it("stops animation frame polling at the arrangement end", async () => {
+    let store: StoreApi<StudioState> | undefined;
+    let scheduler: (() => void) | undefined;
+    const contexts: FakeAudioContext[] = [];
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal("AudioContext", class extends FakeAudioContext {
+      constructor() {
+        super();
+        contexts.push(this);
+      }
+    });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(new ArrayBuffer(8))));
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback): number => {
+      frames.push(callback);
+      return frames.length;
+    });
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    vi.stubGlobal("setInterval", (callback: () => void): number => {
+      scheduler = callback;
+      return 1;
+    });
+    vi.stubGlobal("clearInterval", vi.fn());
+    render(<StudioProvider initialProject={DEMO_PROJECT}><StoreApiProbe onStore={(value) => { store = value; }} /></StudioProvider>);
+
+    await act(() => store!.getState().playPause());
+    contexts[0]!.currentTime = 60;
+    act(() => scheduler!());
+    act(() => frames[0]!(0));
+
+    expect(store!.getState().audio.snapshot.status).toBe("stopped");
+    expect(frames).toHaveLength(1);
+  });
+
+  it("cancels polling and closes the audio context when the provider unmounts", async () => {
+    let store: StoreApi<StudioState> | undefined;
+    const contexts: FakeAudioContext[] = [];
+    const requestFrame = vi.fn(() => 1);
+    const cancelFrame = vi.fn();
+    vi.stubGlobal("AudioContext", class extends FakeAudioContext {
+      constructor() {
+        super();
+        contexts.push(this);
+      }
+    });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(new ArrayBuffer(8))));
+    vi.stubGlobal("requestAnimationFrame", requestFrame);
+    vi.stubGlobal("cancelAnimationFrame", cancelFrame);
+    const { unmount } = render(<StudioProvider initialProject={DEMO_PROJECT}><StoreApiProbe onStore={(value) => { store = value; }} /></StudioProvider>);
+
+    await act(() => store!.getState().playPause());
+    await act(async () => { unmount(); });
+
+    expect(cancelFrame).toHaveBeenCalledWith(1);
+    expect(contexts[0]!.state).toBe("closed");
+  });
+
   it("uses a track's assigned color for its clips and pattern notes", async () => {
     const user = userEvent.setup();
     render(<Studio initialProject={{ ...DEMO_PROJECT,
