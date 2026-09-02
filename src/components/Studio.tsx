@@ -75,7 +75,8 @@ export function StudioSession(): ReactElement {
   const audioMessage = audio.snapshot.status === "closed"
     ? "Audio engine is closed. Reload to restore playback."
     : audio.errorMessage ?? (audio.snapshot.unavailableSoundIds.length > 0
-      ? `Playback is degraded: ${audio.snapshot.unavailableSoundIds.join(", ")} unavailable.` : null);
+      ? `Playback is degraded: ${audio.snapshot.unavailableSoundIds.join(", ")} unavailable.`
+      : audio.snapshot.lastIssue?.message ?? null);
 
   function handleKeyboard(event: KeyboardEvent<HTMLElement>): void {
     const target = event.target;

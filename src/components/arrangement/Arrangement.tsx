@@ -104,7 +104,9 @@ export function Arrangement({ previewEndBar = null }: Readonly<{ previewEndBar?:
     event.preventDefault();
     event.currentTarget.focus({ preventScroll: true });
     const headX = arrangement.current!.getBoundingClientRect().left + playheadLeft;
-    playheadDrag.current = { pointerId: event.pointerId, grabOffset: event.clientX - headX };
+    const grabOffset = event.clientX - headX;
+    playheadDrag.current = { pointerId: event.pointerId, grabOffset };
+    setSeekPreviewStep(playheadStepAt(event.clientX, grabOffset));
     event.currentTarget.setPointerCapture(event.pointerId);
   }
 

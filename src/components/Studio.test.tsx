@@ -143,6 +143,16 @@ describe("Studio persistence bootstrap", () => {
     expect(screen.getByText(/Not saved yet/)).toBeVisible();
   });
 
+  it("blocks a present undefined record until explicit clear", async () => {
+    vi.stubGlobal("indexedDB", await indexedDBWithRawRecord(undefined));
+
+    render(<Studio initialProject={DEMO_PROJECT} />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/cannot be loaded/i);
+    expect(screen.queryByRole("region", { name: "Song arrangement" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Clear stored project" })).toBeEnabled();
+  });
+
   it("blocks editing until corrupt storage is explicitly cleared", async () => {
     vi.stubGlobal("indexedDB", await indexedDBWithRawRecord({ project: { broken: true }, updatedAt: 1 }));
     const user = userEvent.setup();
@@ -320,6 +330,72 @@ describe("Studio", () => {
 
     await user.click(screen.getByRole("button", { name: "Stop" }));
     expect(screen.getByLabelText("Playback position")).toHaveTextContent("0:00.0");
+  });
+
+  it("lets Stop cancel playback while audio is still preparing", async () => {
+    const user = userEvent.setup();
+    let finishResume: (() => void) | undefined;
+    class SlowResumeAudioContext extends FakeAudioContext {
+      resume(): Promise<void> {
+        return new Promise((resolve) => {
+          finishResume = () => {
+            this.state = "running";
+            resolve();
+          };
+        });
+      }
+    }
+    vi.stubGlobal("AudioContext", SlowResumeAudioContext);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(new ArrayBuffer(8))));
+    renderSession(DEMO_PROJECT);
+
+    await user.click(screen.getByRole("button", { name: "Play" }));
+    expect(screen.getByText(/Preparing audio/)).toBeVisible();
+    expect(screen.getByRole("button", { name: "Stop" })).toBeEnabled();
+
+    await user.click(screen.getByRole("button", { name: "Stop" }));
+    expect(screen.queryByText(/Preparing audio/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Play" })).toBeEnabled();
+
+    await act(async () => { finishResume!(); });
+    expect(sessionStore!.getState().audio.snapshot).toMatchObject({ status: "stopped", positionStep: 0 });
+  });
+
+  it.each([
+    ["late_scheduler", "Scheduler woke after its look-ahead horizon"],
+    ["source_failed", "Audio source could not be scheduled"],
+  ] as const)("surfaces the %s engine issue accessibly", (code, message) => {
+    renderSession(DEMO_PROJECT);
+
+    act(() => sessionStore!.setState((current) => ({
+      audio: {
+        ...current.audio,
+        snapshot: { ...current.audio.snapshot, lastIssue: { code, message } },
+      },
+    })));
+
+    expect(screen.getByRole("alert")).toHaveTextContent(`Audio: ${message}`);
+    expect(screen.getByLabelText(message)).toBeVisible();
+  });
+
+  it("states that saved project history remains session-only", async () => {
+    vi.stubGlobal("indexedDB", await indexedDBWithProject(DEMO_PROJECT));
+
+    render(<Studio initialProject={EMPTY_PROJECT} />);
+
+    expect(await screen.findByText(/Saved locally; Activity\/history is session-only/)).toBeVisible();
+  });
+
+  it("carries rounded playback seconds into the next minute", () => {
+    renderSession({
+      ...DEMO_PROJECT,
+      bpm: 40,
+      arrangement: [{ ...DEMO_PROJECT.arrangement[0]!, repeatCount: 10 }],
+    });
+
+    act(() => sessionStore!.getState().seekPlayback(159.9));
+
+    expect(screen.getByLabelText("Playback position")).toHaveTextContent("1:00.0");
   });
 
   it("restarts playback from zero at the arrangement end", async () => {

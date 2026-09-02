@@ -125,8 +125,8 @@ export class ProjectPersistenceService {
   async load(): Promise<LoadResult> {
     this.activeLoads += 1;
     try {
-      const value = await this.readStoredValue();
-      if (value === undefined) return { status: "empty" };
+      const { exists, value } = await this.readStoredValue();
+      if (!exists) return { status: "empty" };
       return this.decodeStoredValue(value);
     } catch (error: unknown) {
       return { status: "failed", error: mapStorageError(error, "Project load") };
@@ -260,10 +260,15 @@ export class ProjectPersistenceService {
     }
   }
 
-  private async readStoredValue(): Promise<unknown> {
+  private async readStoredValue(): Promise<{ readonly exists: boolean; readonly value: unknown }> {
     const database = await this.openDatabase();
     const transaction = database.transaction(STORE_NAME, "readonly");
-    return requestValue(transaction.objectStore(STORE_NAME).get(RECORD_KEY));
+    const store = transaction.objectStore(STORE_NAME);
+    const [value, key] = await Promise.all([
+      requestValue(store.get(RECORD_KEY)),
+      requestValue(store.getKey(RECORD_KEY)),
+    ]);
+    return { exists: key !== undefined, value };
   }
 
   private resetTimer(): void {

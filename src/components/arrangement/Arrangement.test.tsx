@@ -111,6 +111,26 @@ it("previews pointer movement but seeks the engine once on release", () => {
   expect(store.getState().audio.snapshot.positionStep).toBe(previewStep);
 });
 
+it("holds the integer pointer-down preview while the engine advances", () => {
+  const playhead = screen.getByRole("slider", { name: "Playhead" });
+  const arrangement = screen.getByRole("region", { name: "Song arrangement" });
+  vi.spyOn(arrangement, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 1_754, 650));
+  Object.defineProperties(playhead, {
+    setPointerCapture: { value: vi.fn(), configurable: true },
+    hasPointerCapture: { value: () => true, configurable: true },
+    releasePointerCapture: { value: vi.fn(), configurable: true },
+  });
+  act(() => store.getState().seekPlayback(7.8));
+  const pointerDownX = 154 + 7.8 / 16 * 100;
+
+  fireEvent.pointerDown(playhead, { pointerId: 5, button: 0, clientX: pointerDownX });
+  act(() => store.getState().seekPlayback(20));
+
+  expect(playhead).toHaveAttribute("aria-valuenow", "8");
+  fireEvent.pointerUp(playhead, { pointerId: 5, clientX: pointerDownX });
+  expect(store.getState().audio.snapshot.positionStep).toBe(8);
+});
+
 it.each(["pointercancel", "lostcapture"])("discards a playhead preview on %s without seeking", (cancel) => {
   const playhead = screen.getByRole("slider", { name: "Playhead" });
   const arrangement = screen.getByRole("region", { name: "Song arrangement" });

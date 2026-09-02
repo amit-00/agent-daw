@@ -35,6 +35,9 @@ const arrayAt = (value: unknown, path: string, maximum: number): readonly unknow
   if (!Array.isArray(value) || value.length > maximum) {
     return fail(path, `must be an array with at most ${maximum} items`);
   }
+  for (let index = 0; index < value.length; index += 1) {
+    if (!Object.hasOwn(value, index)) fail(`${path}[${index}]`, "must be present");
+  }
   return value;
 };
 

@@ -6,20 +6,23 @@ import { Icon, TransportIcon } from "@/components/icons";
 import { useStudioStore } from "@/stores/studio-provider";
 
 const formatPosition = (step: number, bpm: number): string => {
-  const seconds = step * 60 / bpm / 4;
-  const minutes = Math.floor(seconds / 60);
-  return `${minutes}:${(seconds % 60).toFixed(1).padStart(4, "0")}`;
+  const tenths = Math.round(step * 600 / bpm / 4);
+  const minutes = Math.floor(tenths / 600);
+  return `${minutes}:${((tenths % 600) / 10).toFixed(1).padStart(4, "0")}`;
 };
 
 export function Transport(): ReactElement {
   const { project, audio, persistence, playPause, stopPlayback, history, historyCursor, undo, redo, activityOpen, toggleActivity } = useStudioStore((state) => state);
   const isClosed = audio.snapshot.status === "closed";
-  const controlsDisabled = !audio.engineReady || audio.pending || isClosed;
+  const playDisabled = !audio.engineReady || audio.pending || isClosed;
+  const stopDisabled = !audio.engineReady || isClosed
+    || (!audio.pending && audio.snapshot.status === "stopped" && audio.snapshot.positionStep === 0);
   const playbackLabel = audio.snapshot.status === "playing" ? "Pause" : "Play";
   const audioSubtitle = audio.pending ? "Preparing audio" : isClosed || audio.errorMessage ? "Audio unavailable"
     : audio.snapshot.status === "blocked" ? "Audio blocked"
-      : audio.snapshot.unavailableSoundIds.length > 0 ? "Degraded audio" : "Audio ready";
-  const persistenceSubtitle = persistence.status === "saving" ? "Saving" : persistence.status === "saved" ? "Saved locally"
+      : audio.snapshot.unavailableSoundIds.length > 0 ? "Degraded audio"
+        : audio.snapshot.lastIssue?.message ?? "Audio ready";
+  const persistenceSubtitle = persistence.status === "saving" ? "Saving" : persistence.status === "saved" ? "Saved locally; Activity/history is session-only"
     : persistence.status === "memory-only" ? "In memory" : persistence.status === "failed" ? "Storage unavailable" : "Not saved yet";
   return (
     <header className="relative z-[4] grid min-h-[58px] grid-cols-[1fr_auto_1fr] items-center gap-4 border-b border-white/10 bg-zinc-950/95 px-3.5 backdrop-blur-[18px]" role="banner">
@@ -37,8 +40,8 @@ export function Transport(): ReactElement {
           <span className="min-w-[49px] rounded-md border border-white/10 bg-black/30 px-2 py-1.5 text-center font-mono text-[11px] text-zinc-400" aria-label="Playback position">{formatPosition(audio.snapshot.positionStep, project.bpm)}</span>
         </div>
         <div className="flex items-center gap-px rounded-[9px] border border-white/10 bg-zinc-900 p-[3px]" aria-label="Playback controls">
-          <button type="button" aria-label={playbackLabel} disabled={controlsDisabled} onClick={() => { void playPause(); }} className="grid h-[29px] w-8 place-items-center rounded-[7px] border-0 bg-white text-zinc-950"><TransportIcon name={audio.snapshot.status === "playing" ? "pause" : "play"} /></button>
-          <button type="button" aria-label="Stop" disabled={controlsDisabled || (audio.snapshot.status === "stopped" && audio.snapshot.positionStep === 0)} onClick={stopPlayback} className="grid h-[29px] w-[29px] place-items-center rounded-[7px] border-0 bg-transparent text-zinc-500"><TransportIcon name="stop" /></button>
+          <button type="button" aria-label={playbackLabel} disabled={playDisabled} onClick={() => { void playPause(); }} className="grid h-[29px] w-8 place-items-center rounded-[7px] border-0 bg-white text-zinc-950"><TransportIcon name={audio.snapshot.status === "playing" ? "pause" : "play"} /></button>
+          <button type="button" aria-label="Stop" disabled={stopDisabled} onClick={stopPlayback} className="grid h-[29px] w-[29px] place-items-center rounded-[7px] border-0 bg-transparent text-zinc-500"><TransportIcon name="stop" /></button>
           <button disabled type="button" aria-label="Record" className="grid h-[29px] w-[29px] place-items-center rounded-[7px] border-0 bg-transparent text-rose-400"><TransportIcon name="record" /></button>
           <button disabled type="button" aria-label="Loop playback" className="grid h-[29px] w-[29px] place-items-center rounded-[7px] border-0 bg-transparent text-zinc-500"><TransportIcon name="loop" /></button>
         </div>

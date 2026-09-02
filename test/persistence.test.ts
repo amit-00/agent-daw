@@ -335,6 +335,40 @@ test("load returns empty when no project is stored", async () => {
   assert.deepEqual(result, { status: "empty" });
 });
 
+test("load preserves a present undefined record for explicit recovery", async () => {
+  const indexedDB = new IDBFactory();
+  await seedRawRecord(indexedDB, undefined);
+  const service = createService(indexedDB);
+
+  const result = await service.load();
+
+  assert.equal(result.status, "failed");
+  if (result.status === "failed") assert.equal(result.error.code, "corrupt_record");
+  const save = await service.scheduleSave(blankProject());
+  assert.equal(save.status, "failed");
+  if (save.status === "failed") assert.equal(save.error.code, "recovery_required");
+});
+
+for (const [name, project] of [
+  ["tracks", { ...blankProject(), tracks: new Array<unknown>(1) }],
+  ["patterns", { ...blankProject(), patterns: new Array<unknown>(1) }],
+  ["arrangement", { ...blankProject(), arrangement: new Array<unknown>(1) }],
+  ["pattern events", {
+    ...projectWithBasicDrums(),
+    patterns: [{ ...projectWithBasicDrums().patterns[0]!, events: new Array<unknown>(1) }],
+  }],
+] as const) {
+  test(`load rejects a sparse ${name} collection`, async () => {
+    const indexedDB = new IDBFactory();
+    await seedRawRecord(indexedDB, { project, updatedAt: 123 });
+
+    const result = await createService(indexedDB).load();
+
+    assert.equal(result.status, "failed");
+    if (result.status === "failed") assert.equal(result.error.code, "corrupt_record");
+  });
+}
+
 test("an unexpected database close reopens on the next operation", async () => {
   const connections: IDBDatabase[] = [];
   const service = createService(observingOpenFactory(new IDBFactory(), connections));
