@@ -194,6 +194,35 @@ const publicValidationField = (toolName: WebMCPToolName, field: string): string 
       return field === "clip_id" ? field : undefined;
     case "delete_clip":
       return field === "clip_id" ? field : undefined;
+    case "add_drum_hits": {
+      const item = field.match(/^hits\[(\d+)\]\.(sound_id|step)$/);
+      if (item !== null) return `hits.${item[1]}.${item[2]}`;
+      return ["pattern_id", "hits"].includes(field) ? field : undefined;
+    }
+    case "delete_drum_hits": {
+      const item = field.match(/^hit_ids\[(\d+)\]$/);
+      return item === null ? (["pattern_id", "hit_ids"].includes(field) ? field : undefined) : `hit_ids.${item[1]}`;
+    }
+    case "add_notes": {
+      const item = field.match(/^notes\[(\d+)\]\.(midi_note|step|length_steps)$/);
+      if (item !== null) return `notes.${item[1]}.${item[2] === "step" ? "start_step" : item[2]}`;
+      return ["pattern_id", "notes"].includes(field) ? field : undefined;
+    }
+    case "edit_notes": {
+      const item = field.match(/^updates\[(\d+)\]\.(note_id|changes)$/);
+      if (item !== null) return `notes.${item[1]}${item[2] === "note_id" ? ".note_id" : ""}`;
+      if (/^events\[\d+\]\.(midi_note|step|length_steps)$/.test(field)) return "notes";
+      return field === "pattern_id" ? field : undefined;
+    }
+    case "duplicate_notes":
+      if (/^notes\[\d+\]\.midi_note$/.test(field)) return "pitch_offset";
+      if (/^notes\[\d+\]\.(step|length_steps)$/.test(field)) return "step_offset";
+      if (field === "notes") return "note_ids";
+      return field === "pattern_id" ? field : undefined;
+    case "delete_notes": {
+      const item = field.match(/^note_ids\[(\d+)\]$/);
+      return item === null ? (["pattern_id", "note_ids"].includes(field) ? field : undefined) : `note_ids.${item[1]}`;
+    }
     default:
       return field;
   }
@@ -600,6 +629,20 @@ const parseClipId = (input: Readonly<Record<string, unknown>>) => ({
   ...parseMutationMetadata(input),
   clipId: expectString(input.clip_id, "clip_id"),
 });
+
+const expectEventItems = (value: unknown, field: string): readonly unknown[] => {
+  const items = expectArray(value, field);
+  if (items.length < 1 || items.length > PROJECT_CAPS.maxEventsPerPattern) {
+    invalid(field, `must contain 1 to ${PROJECT_CAPS.maxEventsPerPattern} items`);
+  }
+  return items;
+};
+
+const expectUniqueIds = (value: unknown, field: string): readonly string[] => {
+  const ids = expectEventItems(value, field).map((id, index) => expectString(id, `${field}.${index}`));
+  if (new Set(ids).size !== ids.length) invalid(field, "must contain unique items");
+  return ids;
+};
 
 const mutationResult = (
   state: StudioState,
@@ -1017,6 +1060,137 @@ export function createWebMCPTools(
       parseClipId,
       (input, signal) => runDirectMutation(store, "delete_clip", input, signal,
         () => [{ type: "arrangement.delete", clipId: input.clipId }]),
+    ),
+    defineMutationTool(
+      contract("add_drum_hits"),
+      store,
+      (input) => ({
+        ...parsePatternId(input),
+        hits: expectEventItems(input.hits, "hits").map((value, index) => {
+          const hit = expectObject(value, `hits.${index}`);
+          expectAllowedKeys(hit, ["sound_id", "step"], `hits.${index}`);
+          return {
+            soundId: expectString(hit.sound_id, `hits.${index}.sound_id`),
+            startStep: expectInteger(hit.step, `hits.${index}.step`, 1) - 1,
+          };
+        }),
+      }),
+      (input, signal) => runDirectMutation(store, "add_drum_hits", input, signal, (project) => {
+        const pattern = project.patterns.find(({ id }) => id === input.patternId);
+        const occupied = new Set(pattern?.kind === "drum"
+          ? pattern.events.map(({ soundId, startStep }) => `${soundId}:${startStep}`)
+          : []);
+        const hits: DrumHit[] = [];
+        for (const hit of input.hits) {
+          const cell = `${hit.soundId}:${hit.startStep}`;
+          if (occupied.has(cell)) continue;
+          occupied.add(cell);
+          hits.push({ id: createId(), ...hit });
+        }
+        return hits.length === 0 ? [] : [{ type: "drum-hits.add", patternId: input.patternId, hits }];
+      }, (result) => ({ hit_ids: [...result.changes.created.drumHitIds] })),
+      (result) => ({ hit_ids: [...result.changes.created.drumHitIds] }),
+    ),
+    defineMutationTool(
+      contract("delete_drum_hits"),
+      store,
+      (input) => ({ ...parsePatternId(input), hitIds: expectUniqueIds(input.hit_ids, "hit_ids") }),
+      (input, signal) => runDirectMutation(store, "delete_drum_hits", input, signal,
+        () => [{ type: "drum-hits.delete", patternId: input.patternId, hitIds: input.hitIds }]),
+    ),
+    defineMutationTool(
+      contract("add_notes"),
+      store,
+      (input) => ({
+        ...parsePatternId(input),
+        notes: expectEventItems(input.notes, "notes").map((value, index) => {
+          const note = expectObject(value, `notes.${index}`);
+          expectAllowedKeys(note, ["midi_note", "start_step", "length_steps"], `notes.${index}`);
+          return {
+            midiNote: expectInteger(note.midi_note, `notes.${index}.midi_note`, 24, 96),
+            startStep: expectInteger(note.start_step, `notes.${index}.start_step`, 1) - 1,
+            lengthSteps: expectInteger(note.length_steps, `notes.${index}.length_steps`, 1),
+          };
+        }),
+      }),
+      (input, signal) => runDirectMutation(store, "add_notes", input, signal,
+        () => [{ type: "synth-notes.add", patternId: input.patternId,
+          notes: input.notes.map((note) => ({ id: createId(), ...note })) }],
+        (result) => ({ note_ids: [...result.changes.created.synthNoteIds] })),
+      (result) => ({ note_ids: [...result.changes.created.synthNoteIds] }),
+    ),
+    defineMutationTool(
+      contract("edit_notes"),
+      store,
+      (input) => {
+        const notes = expectEventItems(input.notes, "notes").map((value, index) => {
+          const note = expectObject(value, `notes.${index}`);
+          expectAllowedKeys(note, ["note_id", "midi_note", "start_step", "length_steps"], `notes.${index}`);
+          const parsed = {
+            noteId: expectString(note.note_id, `notes.${index}.note_id`),
+            midiNote: note.midi_note === undefined
+              ? undefined
+              : expectInteger(note.midi_note, `notes.${index}.midi_note`, 24, 96),
+            startStep: note.start_step === undefined
+              ? undefined
+              : expectInteger(note.start_step, `notes.${index}.start_step`, 1) - 1,
+            lengthSteps: note.length_steps === undefined
+              ? undefined
+              : expectInteger(note.length_steps, `notes.${index}.length_steps`, 1),
+          };
+          if (parsed.midiNote === undefined && parsed.startStep === undefined && parsed.lengthSteps === undefined) {
+            invalid(`notes.${index}`, "must contain midi_note, start_step, or length_steps");
+          }
+          return parsed;
+        });
+        if (new Set(notes.map(({ noteId }) => noteId)).size !== notes.length) {
+          invalid("notes", "must contain unique note_id values");
+        }
+        return { ...parsePatternId(input), notes };
+      },
+      (input, signal) => runDirectMutation(store, "edit_notes", input, signal,
+        () => [{ type: "synth-notes.update", patternId: input.patternId,
+          updates: input.notes.map(({ noteId, midiNote, startStep, lengthSteps }) => ({
+            noteId, changes: { midiNote, startStep, lengthSteps },
+          })) }]),
+    ),
+    defineMutationTool(
+      contract("duplicate_notes"),
+      store,
+      (input) => ({
+        ...parsePatternId(input),
+        noteIds: expectUniqueIds(input.note_ids, "note_ids"),
+        stepOffset: expectInteger(input.step_offset, "step_offset"),
+        pitchOffset: expectInteger(input.pitch_offset, "pitch_offset"),
+      }),
+      (input, signal) => runDirectMutation(store, "duplicate_notes", input, signal, (project) => {
+        const pattern = project.patterns.find(({ id }) => id === input.patternId);
+        if (pattern === undefined) {
+          toolError("PATTERN_NOT_FOUND", "pattern_id", `Pattern ${input.patternId} was not found.`);
+        }
+        if (pattern.kind !== "synth") {
+          toolError("KIND_MISMATCH", "pattern_id", `Pattern ${input.patternId} is not a synth pattern.`);
+        }
+        const sources = input.noteIds.map((noteId, index) => {
+          const note = pattern.events.find(({ id }) => id === noteId);
+          if (note === undefined) toolError("NOTE_NOT_FOUND", `note_ids.${index}`, `Note ${noteId} was not found.`);
+          return note;
+        });
+        const notes = sources.map((note) => ({
+          ...note, id: createId(),
+          midiNote: note.midiNote + input.pitchOffset,
+          startStep: note.startStep + input.stepOffset,
+        }));
+        return [{ type: "synth-notes.add", patternId: input.patternId, notes }];
+      }, (result) => ({ note_ids: [...result.changes.created.synthNoteIds] })),
+      (result) => ({ note_ids: [...result.changes.created.synthNoteIds] }),
+    ),
+    defineMutationTool(
+      contract("delete_notes"),
+      store,
+      (input) => ({ ...parsePatternId(input), noteIds: expectUniqueIds(input.note_ids, "note_ids") }),
+      (input, signal) => runDirectMutation(store, "delete_notes", input, signal,
+        () => [{ type: "synth-notes.delete", patternId: input.patternId, noteIds: input.noteIds }]),
     ),
   ];
 }

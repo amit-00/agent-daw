@@ -1232,3 +1232,285 @@ describe("pattern and arrangement mutations", () => {
     expect(store.getState().history).toHaveLength(1);
   });
 });
+
+describe("event mutations", () => {
+  const snapshot = (store: ReturnType<typeof createStudioStore>) => {
+    const state = store.getState();
+    return {
+      project: state.project,
+      history: state.history,
+      revision: state.revision,
+      historyCursor: state.historyCursor,
+      selectedClipId: state.selectedClipId,
+      selectedPatternId: state.selectedPatternId,
+      selectedTrackId: state.selectedTrackId,
+    };
+  };
+
+  const expectUnchanged = (store: ReturnType<typeof createStudioStore>, before: ReturnType<typeof snapshot>) => {
+    const after = store.getState();
+    expect(after).toMatchObject(before);
+    expect(after.project).toBe(before.project);
+    expect(after.history).toBe(before.history);
+  };
+
+  test("add_drum_hits converts steps, deduplicates cells, omits existing cells, and reports no-op requests", async () => {
+    const store = createStudioStore(DEMO_PROJECT);
+    const ids = ["new-snare", "new-hat"];
+    const createId = vi.fn(() => ids.shift()!);
+
+    const added = await executeMutation(store, "add_drum_hits", {
+      request_id: "add-hits", pattern_id: "neon", hits: [
+        { sound_id: "kick", step: 1 },
+        { sound_id: "snare", step: 1 },
+        { sound_id: "snare", step: 1 },
+        { sound_id: "hat", step: 16 },
+      ],
+    }, createId);
+
+    expect(added).toMatchObject({ success: true, result: {
+      changed: true, hit_ids: ["new-snare", "new-hat"],
+      changes: { created: { drum_hit_ids: ["new-snare", "new-hat"] } },
+    } });
+    expect(store.getState().history[0]).toMatchObject({
+      toolName: "add_drum_hits", action: { kind: "operation", operation: {
+        type: "drum-hits.add", patternId: "neon", hits: [
+          { id: "new-snare", soundId: "snare", startStep: 0 },
+          { id: "new-hat", soundId: "hat", startStep: 15 },
+        ],
+      } },
+    });
+
+    const noOp = await executeMutation(store, "add_drum_hits", {
+      request_id: "existing-hits", pattern_id: "neon", hits: [
+        { sound_id: "kick", step: 1 }, { sound_id: "snare", step: 1 },
+      ],
+    }, createId);
+    expect(noOp).toEqual({ success: true, result: {
+      changed: false, deduplicated: false, project_revision: 1, history_cursor: 0,
+      changes: { created: {}, updated: {}, deleted: {} }, hit_ids: [],
+    } });
+    expect(createId).toHaveBeenCalledTimes(2);
+    expect(store.getState().history).toHaveLength(1);
+  });
+
+  test("delete_drum_hits rejects duplicate IDs and hits outside the named pattern atomically", async () => {
+    const project: Project = { ...DEMO_PROJECT, patterns: [...DEMO_PROJECT.patterns, {
+      id: "other-drums", name: "Other drums", kind: "drum", lengthBars: 1, events: [
+        { id: "other-hit", soundId: "kick", startStep: 1 },
+      ],
+    }] };
+
+    for (const [requestId, hitIds, code, field] of [
+      ["duplicate-hits", ["kick-0", "kick-0"], "INVALID_INPUT", "hit_ids"],
+      ["foreign-hit", ["kick-0", "other-hit"], "HIT_NOT_FOUND", "hit_ids.1"],
+    ] as const) {
+      const store = createStudioStore(project);
+      store.getState().selectPattern("neon");
+      const before = snapshot(store);
+      const response = await executeMutation(store, "delete_drum_hits", {
+        request_id: requestId, pattern_id: "neon", hit_ids: hitIds,
+      });
+
+      expect(response).toMatchObject({ success: false, error: { code, field } });
+      expectUnchanged(store, before);
+    }
+  });
+
+  test("add_notes converts starts, preserves positive lengths, and returns generated IDs in request order", async () => {
+    const store = createStudioStore(DEMO_PROJECT);
+    const ids = ["note-first", "note-second"];
+
+    const response = await executeMutation(store, "add_notes", {
+      request_id: "add-notes", pattern_id: "afterglow", notes: [
+        { midi_note: 61, start_step: 2, length_steps: 5 },
+        { midi_note: 65, start_step: 17, length_steps: 2 },
+      ],
+    }, () => ids.shift()!);
+
+    expect(response).toMatchObject({ success: true, result: {
+      note_ids: ["note-first", "note-second"],
+      changes: { created: { synth_note_ids: ["note-first", "note-second"] } },
+    } });
+    expect(store.getState().history[0]).toMatchObject({ action: { kind: "operation", operation: {
+      type: "synth-notes.add", patternId: "afterglow", notes: [
+        { id: "note-first", midiNote: 61, startStep: 1, lengthSteps: 5 },
+        { id: "note-second", midiNote: 65, startStep: 16, lengthSteps: 2 },
+      ],
+    } } });
+  });
+
+  test("edit_notes converts changed fields and rejects empty or duplicate note edits", async () => {
+    const store = createStudioStore(DEMO_PROJECT);
+    const edited = await executeMutation(store, "edit_notes", {
+      request_id: "edit-notes", pattern_id: "afterglow", notes: [
+        { note_id: "lead-1", midi_note: 70, start_step: 3, length_steps: 4 },
+      ],
+    });
+
+    expect(edited).toMatchObject({ success: true, result: {
+      changes: { updated: { synth_note_ids: ["lead-1"] } },
+    } });
+    expect(store.getState().history[0]).toMatchObject({ action: { kind: "operation", operation: {
+      type: "synth-notes.update", patternId: "afterglow", updates: [{
+        noteId: "lead-1", changes: { midiNote: 70, startStep: 2, lengthSteps: 4 },
+      }],
+    } } });
+
+    for (const [requestId, notes, field] of [
+      ["empty-edit", [{ note_id: "lead-2" }], "notes.0"],
+      ["duplicate-edit", [{ note_id: "lead-2", midi_note: 75 },
+        { note_id: "lead-2", length_steps: 2 }], "notes"],
+    ] as const) {
+      const before = snapshot(store);
+      const response = await executeMutation(store, "edit_notes", {
+        request_id: requestId, pattern_id: "afterglow", notes,
+      });
+      expect(response).toMatchObject({ success: false, error: { code: "INVALID_INPUT", field } });
+      expectUnchanged(store, before);
+    }
+  });
+
+  test("duplicate_notes applies signed offsets, preserves durations, and generates in source order", async () => {
+    const store = createStudioStore(DEMO_PROJECT);
+    const ids = ["copy-two", "copy-one"];
+
+    const response = await executeMutation(store, "duplicate_notes", {
+      request_id: "duplicate-notes", pattern_id: "afterglow",
+      note_ids: ["lead-2", "lead-1"], step_offset: 2, pitch_offset: -12,
+    }, () => ids.shift()!);
+
+    expect(response).toMatchObject({ success: true, result: { note_ids: ["copy-two", "copy-one"] } });
+    expect(store.getState().history[0]).toMatchObject({ action: { kind: "operation", operation: {
+      type: "synth-notes.add", patternId: "afterglow", notes: [
+        { id: "copy-two", midiNote: 64, startStep: 8, lengthSteps: 3 },
+        { id: "copy-one", midiNote: 60, startStep: 2, lengthSteps: 3 },
+      ],
+    } } });
+  });
+
+  test("duplicate_notes resolves every source before generating IDs or mutating", async () => {
+    const store = createStudioStore(DEMO_PROJECT);
+    store.getState().selectPattern("afterglow");
+    const before = snapshot(store);
+    const createId = vi.fn(() => "unused");
+
+    const response = await executeMutation(store, "duplicate_notes", {
+      request_id: "missing-source", pattern_id: "afterglow",
+      note_ids: ["lead-1", "missing"], step_offset: 1, pitch_offset: 0,
+    }, createId);
+
+    expect(response).toMatchObject({ success: false, error: {
+      code: "NOTE_NOT_FOUND", field: "note_ids.1",
+    } });
+    expect(createId).not.toHaveBeenCalled();
+    expectUnchanged(store, before);
+  });
+
+  test("delete_notes rejects duplicate IDs and notes outside the named pattern atomically", async () => {
+    for (const [requestId, noteIds, code, field] of [
+      ["duplicate-notes", ["lead-1", "lead-1"], "INVALID_INPUT", "note_ids"],
+      ["foreign-note", ["lead-1", "bass-1"], "NOTE_NOT_FOUND", "note_ids.1"],
+    ] as const) {
+      const store = createStudioStore(DEMO_PROJECT);
+      store.getState().selectPattern("afterglow");
+      const before = snapshot(store);
+      const response = await executeMutation(store, "delete_notes", {
+        request_id: requestId, pattern_id: "afterglow", note_ids: noteIds,
+      });
+
+      expect(response).toMatchObject({ success: false, error: { code, field } });
+      expectUnchanged(store, before);
+    }
+  });
+
+  test.each([
+    ["add_drum_hits", "hits", { pattern_id: "neon", hits: [{ sound_id: "hat", step: 1 }] }],
+    ["delete_drum_hits", "hit_ids", { pattern_id: "neon", hit_ids: ["kick-0"] }],
+    ["add_notes", "notes", { pattern_id: "afterglow", notes: [{ midi_note: 60, start_step: 1, length_steps: 1 }] }],
+    ["edit_notes", "notes", { pattern_id: "afterglow", notes: [{ note_id: "lead-1", midi_note: 60 }] }],
+    ["duplicate_notes", "note_ids", { pattern_id: "afterglow", note_ids: ["lead-1"], step_offset: 1, pitch_offset: 0 }],
+    ["delete_notes", "note_ids", { pattern_id: "afterglow", note_ids: ["lead-1"] }],
+  ] as const)("%s enforces 1-512 input items", async (name, field, validInput) => {
+    for (const count of [0, 513]) {
+      const store = createStudioStore(DEMO_PROJECT);
+      const before = snapshot(store);
+      const item = (Reflect.get(validInput, field) as readonly unknown[])[0];
+      const response = await executeMutation(store, name, {
+        request_id: `${name}-${count}`, ...validInput, [field]: Array.from({ length: count }, () => item),
+      });
+
+      expect(response).toMatchObject({ success: false, error: { code: "INVALID_INPUT", field } });
+      expectUnchanged(store, before);
+    }
+  });
+
+  test.each([
+    ["add_drum_hits", "full-drums", "hits", { pattern_id: "full-drums", hits: [{ sound_id: "snare", step: 2 }] }],
+    ["add_notes", "full-notes", "notes", { pattern_id: "full-notes", notes: [{ midi_note: 60, start_step: 1, length_steps: 1 }] }],
+    ["duplicate_notes", "full-notes", "note_ids", { pattern_id: "full-notes", note_ids: ["full-note-0"], step_offset: 0, pitch_offset: 1 }],
+  ] as const)("%s enforces the 512-event result cap", async (name, patternId, field, input) => {
+    const events = Array.from({ length: PROJECT_CAPS.maxEventsPerPattern }, (_, index) => name === "add_drum_hits"
+      ? { id: `full-hit-${index}`, soundId: "kick", startStep: 0 }
+      : { id: `full-note-${index}`, midiNote: 60, startStep: 0, lengthSteps: 1 });
+    const pattern = name === "add_drum_hits"
+      ? { id: patternId, name: "Full drums", kind: "drum" as const, lengthBars: 4 as const, events }
+      : { id: patternId, name: "Full notes", kind: "synth" as const, lengthBars: 4 as const, events };
+    const store = createStudioStore({ ...DEMO_PROJECT, patterns: [...DEMO_PROJECT.patterns, pattern] } as Project);
+    const before = snapshot(store);
+
+    const response = await executeMutation(store, name, { request_id: `capacity-${name}`, ...input }, () => "overflow");
+
+    expect(response).toMatchObject({ success: false, error: { code: "CAPACITY_EXCEEDED", field } });
+    expectUnchanged(store, before);
+  });
+
+  test.each([
+    ["add_drum_hits", { pattern_id: "neon", hits: [{ sound_id: "missing", step: 1 }] },
+      "INCOMPATIBLE_INSTRUMENT", "hits.0.sound_id"],
+    ["add_notes", { pattern_id: "afterglow", notes: [{ midi_note: 60, start_step: 32, length_steps: 2 }] },
+      "OUT_OF_RANGE", "notes.0.length_steps"],
+    ["edit_notes", { pattern_id: "afterglow", notes: [{ note_id: "lead-4", start_step: 32 }] },
+      "OUT_OF_RANGE", "notes"],
+    ["duplicate_notes", { pattern_id: "afterglow", note_ids: ["lead-1"], step_offset: 0, pitch_offset: 30 },
+      "OUT_OF_RANGE", "pitch_offset"],
+    ["duplicate_notes", { pattern_id: "afterglow", note_ids: ["lead-1"], step_offset: -1, pitch_offset: 0 },
+      "OUT_OF_RANGE", "step_offset"],
+  ] as const)("%s maps canonical validation to caller-visible fields", async (name, input, code, field) => {
+    const store = createStudioStore(DEMO_PROJECT);
+    const before = snapshot(store);
+
+    const response = await executeMutation(store, name, { request_id: `field-${name}-${field}`, ...input });
+
+    expect(response).toMatchObject({ success: false, error: { code, field } });
+    expectUnchanged(store, before);
+  });
+
+  test.each([
+    ["add_drum_hits", { pattern_id: "neon", hits: [{ sound_id: "snare", step: 1 }] }],
+    ["delete_drum_hits", { pattern_id: "neon", hit_ids: ["kick-0"] }],
+    ["add_notes", { pattern_id: "afterglow", notes: [{ midi_note: 60, start_step: 1, length_steps: 1 }] }],
+    ["edit_notes", { pattern_id: "afterglow", notes: [{ note_id: "lead-1", midi_note: 71 }] }],
+    ["duplicate_notes", { pattern_id: "afterglow", note_ids: ["lead-1"], step_offset: 1, pitch_offset: 0 }],
+    ["delete_notes", { pattern_id: "afterglow", note_ids: ["lead-1"] }],
+  ] as const)("%s replays before parsing or generating further IDs", async (name, input) => {
+    const store = createStudioStore(DEMO_PROJECT);
+    let id = 0;
+    const createId = vi.fn(() => `${name}-id-${++id}`);
+    const request = { request_id: `replay-${name}`, ...input };
+
+    const first = await executeMutation(store, name, request, createId);
+    const generated = createId.mock.calls.length;
+    const revision = store.getState().revision;
+    const replayed = await executeMutation(store, name, {
+      request_id: `replay-${name}`, extra: "ignored",
+    }, createId);
+
+    expect(first).toMatchObject({ success: true, result: { changed: true, deduplicated: false } });
+    expect(replayed).toMatchObject({ success: true, result: {
+      changed: true, deduplicated: true, project_revision: revision,
+    } });
+    expect(createId).toHaveBeenCalledTimes(generated);
+    expect(store.getState().history).toHaveLength(1);
+  });
+});
