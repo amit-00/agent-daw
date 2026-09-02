@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -14,7 +15,8 @@ import { FakeAudioContext } from "../../test/audio-fakes";
 function StoreApiProbe({ onStore }: Readonly<{
   onStore: (store: StoreApi<StudioState>) => void;
 }>): null {
-  onStore(useStudioStoreApi());
+  const store = useStudioStoreApi();
+  useEffect(() => { onStore(store); }, [onStore, store]);
   return null;
 }
 
@@ -438,7 +440,8 @@ describe("Studio", () => {
   it("publishes history and undo/redo to the transport", async () => {
     let state: StudioState | undefined;
     function Probe(): null {
-      state = useStudioStore((value) => value);
+      const value = useStudioStore((store) => store);
+      useEffect(() => { state = value; }, [value]);
       return null;
     }
     const user = userEvent.setup();
@@ -460,7 +463,8 @@ describe("Studio", () => {
   it("confirms restore from real attributed history and makes it undoable", async () => {
     let state: StudioState | undefined;
     function Probe(): null {
-      state = useStudioStore((value) => value);
+      const value = useStudioStore((store) => store);
+      useEffect(() => { state = value; }, [value]);
       return null;
     }
     const user = userEvent.setup();
