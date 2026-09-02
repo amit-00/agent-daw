@@ -239,7 +239,7 @@ describe("PianoRoll", () => {
     events = state.project.patterns[0]?.events ?? [];
     expect(events).toHaveLength(1);
     expect(state.history).toHaveLength(0);
-    expect(state.errorMessage).toMatch(/past step 16/i);
+    expect(state.errorMessage).toMatch(/integer from 0 to 15/i);
   });
 
   it("deletes with Delete or Backspace and clears with Escape", () => {

@@ -196,7 +196,7 @@ it.each(["source", "destination"])("refuses a release after the %s is deleted", 
     fireEvent.click(screen.getByRole("button", { name: "Delete track" }));
   }
   release(414, 300);
-  expect(screen.getByRole("alert")).toHaveTextContent(/no longer exists/i);
+  expect(screen.getByRole("alert")).toHaveTextContent(deleted === "source" ? /no longer exists/i : /not found/i);
   expect(historyCount()).toBe(1);
 });
 
@@ -297,7 +297,7 @@ it.each(["pointercancel", "escape", "lostcapture"])("cancels a clip preview on %
 });
 
 it.each([
-  { x: 414, y: 90, error: /compatible instrument/i },
+  { x: 414, y: 90, error: /same kind/i },
   { x: 40, y: 200, error: /track lane/i },
   { x: 414, y: 550, error: /track lane/i },
 ])("refuses an invalid clip drop at $x,$y without history", ({ x, y, error }) => {

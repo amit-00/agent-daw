@@ -4,10 +4,29 @@ import { arrangementEndStep, type AudioControlResult, type AudioEngine, type Aud
 import { SOUND_CATALOG } from "@/audio/catalog";
 import { getTrackColor, INSTRUMENT_NAMES, TRACK_COLOR_WHEEL } from "@/data/studio-data";
 import type { FlushResult } from "@/persistence/service";
-import { PROJECT_CAPS, ProjectService, type Command, type DispatchResult, type Operation, type Pattern, type PatternLengthBars, type Project, type ProjectServiceState, type SynthNote, type SynthPattern, type TrackKind } from "@/project";
+import {
+  PROJECT_CAPS,
+  ProjectService,
+  ProjectValidationError,
+  validateOperations,
+  type Command,
+  type DispatchResult,
+  type HistoryControlCommand,
+  type HistoryControlResult,
+  type Operation,
+  type Pattern,
+  type PatternLengthBars,
+  type Project,
+  type ProjectServiceState,
+  type RestoreCommand,
+  type SynthNote,
+  type SynthPattern,
+  type TrackKind,
+} from "@/project";
 import { getDrumKitProblem, getPatternLengthProblem, getPlacementProblem } from "@/stores/studio-edits";
 
 type EditorTab = "mixer" | "pattern";
+export type WebMCPStatus = "unsupported" | "registering" | "ready" | "failed";
 
 export interface StudioAudioState {
   readonly engineReady: boolean;
@@ -39,7 +58,12 @@ export interface StudioState extends ProjectServiceState {
   readonly selectedPatternId: string | null;
   readonly selectedTrackId: string | null;
   readonly errorMessage: string | null;
+  readonly webMCPStatus: WebMCPStatus;
   dispatch(command: Command): DispatchResult;
+  replayDispatch(commandId: string): DispatchResult | null;
+  replayHistoryControl(commandId: string): HistoryControlResult | null;
+  executeHistoryControl(command: HistoryControlCommand): HistoryControlResult;
+  executeRestore(command: RestoreCommand): DispatchResult;
   undo(): void;
   redo(): void;
   restore(entryId: string): void;
@@ -50,6 +74,7 @@ export interface StudioState extends ProjectServiceState {
   beginPersistenceSave(): number;
   finishPersistenceSave(token: number, result: FlushResult): void;
   failPersistenceSave(token: number, message: string): void;
+  setWebMCPStatus(status: WebMCPStatus): void;
   toggleActivity(): void;
   selectEditorTab(tab: EditorTab): void;
   selectClip(clipId: string): void;
@@ -124,13 +149,28 @@ export function createStudioStore(
     initialProject, createHistoryId: () => crypto.randomUUID(), now: Date.now,
   });
   return createStore<StudioState>((set, get) => {
-    function commit(label: string, operation: Operation): void {
-      get().dispatch({ id: crypto.randomUUID(), source: "manual", label, kind: "operation", operation });
+    function validateAndDispatch(command: Command): DispatchResult | null {
+      try {
+        validateOperations(
+          get().project,
+          command.kind === "operation" ? [command.operation] : command.operations,
+          SOUND_CATALOG,
+        );
+        return get().dispatch(command);
+      } catch (error) {
+        if (!(error instanceof ProjectValidationError)) throw error;
+        set({ errorMessage: error.message });
+        return null;
+      }
     }
 
-    function commitBatch(label: string, operations: readonly Operation[]): void {
-      get().dispatch({ id: crypto.randomUUID(), source: "manual", label, kind: "batch", operations });
-    }
+    const commit = (label: string, operation: Operation): boolean => validateAndDispatch({
+      id: crypto.randomUUID(), source: "manual", label, kind: "operation", operation,
+    }) !== null;
+
+    const commitBatch = (label: string, operations: readonly Operation[]): boolean => validateAndDispatch({
+      id: crypto.randomUUID(), source: "manual", label, kind: "batch", operations,
+    }) !== null;
 
     function publish(): void {
       const snapshot = service.getState();
@@ -185,7 +225,7 @@ export function createStudioStore(
       ...snapshot,
       audio: initialAudioState(initialProject),
       persistence: { ...persistenceBaseline, latestSaveToken: 0 },
-      activityOpen: false, editorTab: "pattern", errorMessage: null,
+      activityOpen: false, editorTab: "pattern", errorMessage: null, webMCPStatus: "unsupported",
       selectedClipId: firstClip?.id ?? null,
       selectedPatternId: firstClip?.patternId ?? snapshot.project.patterns[0]?.id ?? null,
       selectedTrackId: firstClip?.trackId ?? null,
@@ -194,29 +234,31 @@ export function createStudioStore(
         publish();
         return result;
       },
-      undo(): void {
-        if (get().historyCursor < 0) return;
-        stopAudioForHistory();
-        service.undo();
+      replayDispatch: service.replayDispatch,
+      replayHistoryControl: service.replayHistoryControl,
+      executeHistoryControl(command): HistoryControlResult {
+        const result = service.controlHistory(command);
+        if (result.changed) stopAudioForHistory();
         publish();
+        return result;
       },
-      redo(): void {
-        const { history, historyCursor } = get();
-        if (historyCursor + 1 >= history.length) return;
+      executeRestore(command): DispatchResult {
+        if (!get().history.some((entry) => entry.id === command.targetEntryId)) return service.restore(command);
         stopAudioForHistory();
-        service.redo();
+        const result = service.restore(command);
         publish();
+        return result;
       },
+      undo(): void { get().executeHistoryControl({ id: crypto.randomUUID(), kind: "undo" }); },
+      redo(): void { get().executeHistoryControl({ id: crypto.randomUUID(), kind: "redo" }); },
       restore(entryId): void {
         if (!get().history.some((entry) => entry.id === entryId)) {
           set({ errorMessage: "That history entry is no longer available. Choose a retained entry." });
           return;
         }
-        stopAudioForHistory();
-        service.restore({
+        get().executeRestore({
           id: crypto.randomUUID(), source: "manual", label: "Restore history", targetEntryId: entryId,
         });
-        publish();
       },
       async playPause(): Promise<void> {
         const engine = getAudioEngine();
@@ -292,6 +334,7 @@ export function createStudioStore(
           errorMessage: message,
         } });
       },
+      setWebMCPStatus: (webMCPStatus) => set({ webMCPStatus }),
       toggleActivity: () => set((state) => ({ activityOpen: !state.activityOpen })),
       selectEditorTab: (editorTab) => set({ editorTab }),
       selectClip(clipId): void {
@@ -317,23 +360,14 @@ export function createStudioStore(
         });
       },
       createTrack(kind, instrumentId): string | null {
-        if (get().project.tracks.length >= PROJECT_CAPS.maxTracks) {
-          set({ errorMessage: `A project supports ${PROJECT_CAPS.maxTracks} tracks. Delete a track before adding another.` });
-          return null;
-        }
-        const instruments = kind === "drum" ? SOUND_CATALOG.drumKits : SOUND_CATALOG.synthPresets;
-        if (!instruments.some((instrument) => instrument.id === instrumentId)) {
-          set({ errorMessage: `Choose an available ${kind} instrument.` });
-          return null;
-        }
         const id = crypto.randomUUID();
         const name = INSTRUMENT_NAMES[instrumentId] ?? instrumentId;
         const lastTrack = get().project.tracks.at(-1);
         const colorIndex = lastTrack ? (TRACK_COLOR_WHEEL.indexOf(getTrackColor(lastTrack)) + 1) % TRACK_COLOR_WHEEL.length : 0;
-        commit(`Create ${name}`, { type: "track.create", track: {
+        if (!commit(`Create ${name}`, { type: "track.create", track: {
           id, name, kind, instrumentId, volumeDb: 0, pan: 0, muted: false, soloed: false,
           color: TRACK_COLOR_WHEEL[colorIndex]!,
-        } });
+        } })) return null;
         get().selectTrack(id);
         return id;
       },
@@ -344,44 +378,20 @@ export function createStudioStore(
           return;
         }
         const trimmed = name.trim();
-        if (trimmed.length < 1 || trimmed.length > 40) {
-          set({ errorMessage: "Track names must contain 1–40 characters after trimming spaces." });
-          return;
-        }
         commit(`Rename ${track.name} to ${trimmed}`, { type: "track.update", trackId, changes: { name: trimmed } });
       },
       setTrackPreset(trackId, instrumentId): void {
-        const { project } = get();
-        const track = project.tracks.find((item) => item.id === trackId);
+        const track = get().project.tracks.find((item) => item.id === trackId);
         if (!track) {
           set({ errorMessage: "That track no longer exists. Select another track." });
           return;
-        }
-        const instruments = track.kind === "drum" ? SOUND_CATALOG.drumKits : SOUND_CATALOG.synthPresets;
-        if (!instruments.some((instrument) => instrument.id === instrumentId)) {
-          set({ errorMessage: `Choose an available ${track.kind} instrument.` });
-          return;
-        }
-        if (track.kind === "drum") {
-          const placedIds = new Set(project.arrangement.filter((clip) => clip.trackId === trackId).map((clip) => clip.patternId));
-          for (const pattern of project.patterns) {
-            if (pattern.kind !== "drum" || !placedIds.has(pattern.id)) continue;
-            const problem = getDrumKitProblem({ ...track, instrumentId }, pattern.events.map((hit) => hit.soundId));
-            if (problem) {
-              set({ errorMessage: problem });
-              return;
-            }
-          }
         }
         commit(`Change ${track.name} instrument`, { type: "track.update", trackId, changes: { instrumentId } });
       },
       reorderTrack(trackId, toIndex): void {
         const { tracks } = get().project;
         const track = tracks.find((item) => item.id === trackId);
-        if (!track || !Number.isInteger(toIndex) || toIndex < 0 || toIndex >= tracks.length) {
-          set({ errorMessage: "That track position is no longer available. Choose a position in the current track list." });
-          return;
-        }
+        if (!track) { set({ errorMessage: "That track no longer exists. Select another track." }); return; }
         commit(`Move ${track.name} to track ${toIndex + 1}`, { type: "track.reorder", trackId, toIndex });
       },
       deleteTrack(trackId): void {
@@ -393,13 +403,9 @@ export function createStudioStore(
         commit(`Delete ${track.name}`, { type: "track.delete", trackId });
       },
       createPattern(kind): string | null {
-        if (get().project.patterns.length >= PROJECT_CAPS.maxPatterns) {
-          set({ errorMessage: `A project supports ${PROJECT_CAPS.maxPatterns} patterns. Delete one before creating another.` });
-          return null;
-        }
         const id = crypto.randomUUID();
         const name = kind === "drum" ? "New beat" : "New melody";
-        commit(`Create ${name}`, { type: "pattern.create", pattern: { id, name, kind, lengthBars: 1, events: [] } });
+        if (!commit(`Create ${name}`, { type: "pattern.create", pattern: { id, name, kind, lengthBars: 1, events: [] } })) return null;
         get().selectPattern(id);
         return id;
       },
@@ -410,30 +416,21 @@ export function createStudioStore(
           set({ errorMessage: "That track no longer exists. Select another track." });
           return null;
         }
-        if (project.patterns.length >= PROJECT_CAPS.maxPatterns || project.arrangement.length >= PROJECT_CAPS.maxArrangementClips) {
-          set({ errorMessage: `Creation needs a free pattern and clip slot (${PROJECT_CAPS.maxPatterns} patterns / ${PROJECT_CAPS.maxArrangementClips} clips maximum). Delete an unused item first.` });
-          return null;
-        }
         const pattern: Pattern = { id: crypto.randomUUID(), name: track.kind === "drum" ? "New beat" : "New melody",
           kind: track.kind, lengthBars: 1, events: [] };
         const clip = { id: crypto.randomUUID(), patternId: pattern.id, trackId, startBar, repeatCount: 1 };
-        const problem = getPlacementProblem({ ...project, patterns: [...project.patterns, pattern] }, clip);
-        if (problem) { set({ errorMessage: problem }); return null; }
-        commitBatch(`Create ${pattern.name} on ${track.name}`, [{ type: "pattern.create", pattern }, { type: "arrangement.place", clip }]);
+        if (!commitBatch(`Create ${pattern.name} on ${track.name}`, [
+          { type: "pattern.create", pattern }, { type: "arrangement.place", clip },
+        ])) return null;
         get().selectClip(clip.id);
         return clip.id;
       },
       placePattern(patternId, trackId, startBar): string | null {
         const { project } = get();
-        if (project.arrangement.length >= PROJECT_CAPS.maxArrangementClips) {
-          set({ errorMessage: `A project supports ${PROJECT_CAPS.maxArrangementClips} clips. Delete one before placing another.` });
-          return null;
-        }
+        const pattern = project.patterns.find((item) => item.id === patternId);
+        if (!pattern) { set({ errorMessage: "That pattern no longer exists. Select another pattern." }); return null; }
         const clip = { id: crypto.randomUUID(), patternId, trackId, startBar, repeatCount: 1 };
-        const problem = getPlacementProblem(project, clip);
-        if (problem) { set({ errorMessage: problem }); return null; }
-        const pattern = project.patterns.find((item) => item.id === patternId)!;
-        commit(`Place ${pattern.name} at bar ${startBar + 1}`, { type: "arrangement.place", clip });
+        if (!commit(`Place ${pattern.name} at bar ${startBar + 1}`, { type: "arrangement.place", clip })) return null;
         get().selectClip(clip.id);
         return clip.id;
       },
@@ -441,29 +438,19 @@ export function createStudioStore(
         const pattern = get().project.patterns.find((item) => item.id === patternId);
         if (!pattern) { set({ errorMessage: "That pattern no longer exists. Select another pattern." }); return; }
         const trimmed = name.trim();
-        if (trimmed.length < 1 || trimmed.length > 40) {
-          set({ errorMessage: "Pattern names must contain 1–40 characters after trimming spaces." });
-          return;
-        }
         commit(`Rename ${pattern.name} to ${trimmed}`, { type: "pattern.update", patternId, changes: { name: trimmed } });
       },
       setPatternLength(patternId, lengthBars): void {
-        const { project } = get();
-        const problem = getPatternLengthProblem(project, patternId, lengthBars);
-        if (problem) { set({ errorMessage: problem }); return; }
-        const pattern = project.patterns.find((item) => item.id === patternId)!;
+        const pattern = get().project.patterns.find((item) => item.id === patternId);
+        if (!pattern) { set({ errorMessage: "That pattern no longer exists. Select another pattern." }); return; }
         commit(`Set ${pattern.name} to ${lengthBars} bars`, { type: "pattern.update", patternId, changes: { lengthBars } });
       },
       duplicatePattern(patternId): string | null {
         const { project } = get();
         const pattern = project.patterns.find((item) => item.id === patternId);
         if (!pattern) { set({ errorMessage: "That pattern no longer exists. Select another pattern." }); return null; }
-        if (project.patterns.length >= PROJECT_CAPS.maxPatterns) {
-          set({ errorMessage: `A project supports ${PROJECT_CAPS.maxPatterns} patterns. Delete one before duplicating.` });
-          return null;
-        }
         const id = crypto.randomUUID();
-        commit(`Duplicate ${pattern.name}`, duplicatePatternOperation(pattern, id));
+        if (!commit(`Duplicate ${pattern.name}`, duplicatePatternOperation(pattern, id))) return null;
         get().selectPattern(id);
         return id;
       },
@@ -476,8 +463,6 @@ export function createStudioStore(
         const { project } = get();
         const clip = project.arrangement.find((item) => item.id === clipId);
         if (!clip) { set({ errorMessage: "That clip no longer exists. Select another clip." }); return; }
-        const problem = getPlacementProblem(project, { ...clip, ...changes });
-        if (problem) { set({ errorMessage: problem }); return; }
         const pattern = project.patterns.find((item) => item.id === clip.patternId)!;
         commit(`Update ${pattern.name} placement`, { type: "arrangement.update", clipId, changes });
       },
@@ -485,15 +470,9 @@ export function createStudioStore(
         const { project } = get();
         const clip = project.arrangement.find((item) => item.id === clipId);
         if (!clip) { set({ errorMessage: "That clip no longer exists. Select another clip." }); return null; }
-        if (project.arrangement.length >= PROJECT_CAPS.maxArrangementClips) {
-          set({ errorMessage: `A project supports ${PROJECT_CAPS.maxArrangementClips} clips. Delete one before duplicating.` });
-          return null;
-        }
         const pattern = project.patterns.find((item) => item.id === clip.patternId)!;
         const copy = { ...clip, id: crypto.randomUUID(), startBar: clip.startBar + pattern.lengthBars * clip.repeatCount };
-        const problem = getPlacementProblem(project, copy);
-        if (problem) { set({ errorMessage: problem }); return null; }
-        commit(`Duplicate ${pattern.name} clip`, { type: "arrangement.place", clip: copy });
+        if (!commit(`Duplicate ${pattern.name} clip`, { type: "arrangement.place", clip: copy })) return null;
         get().selectClip(copy.id);
         return copy.id;
       },
@@ -508,10 +487,6 @@ export function createStudioStore(
         const { project } = get();
         const clip = project.arrangement.find((item) => item.id === clipId);
         if (!clip) { set({ errorMessage: "That clip no longer exists. Select another clip." }); return; }
-        if (project.patterns.length >= PROJECT_CAPS.maxPatterns) {
-          set({ errorMessage: `Making a clip unique needs a free pattern slot (${PROJECT_CAPS.maxPatterns} maximum). Delete an unused pattern first.` });
-          return;
-        }
         const pattern = project.patterns.find((item) => item.id === clip.patternId)!;
         const id = crypto.randomUUID();
         commitBatch(`Make ${pattern.name} unique`, [duplicatePatternOperation(pattern, id),
@@ -525,40 +500,15 @@ export function createStudioStore(
           return;
         }
         const edits = [...new Map(cells.map((cell) => [`${cell.soundId}:${cell.startStep}`, cell])).values()];
-        const endStep = pattern.lengthBars * 16;
-        if (edits.some((cell) => !Number.isInteger(cell.startStep) || cell.startStep < 0 || cell.startStep >= endStep)) {
-          set({ errorMessage: `Choose whole steps from 1 to ${endStep} for this pattern.` });
-          return;
-        }
-        const sounds = new Set(SOUND_CATALOG.drumKits.flatMap((kit) => kit.soundIds));
-        const unavailable = edits.find((cell) => !sounds.has(cell.soundId));
-        if (unavailable) {
-          set({ errorMessage: `${unavailable.soundId} is unavailable. Choose a sound from the drum catalog.` });
-          return;
-        }
         const additions = edits.filter((cell) => cell.active &&
           !pattern.events.some((hit) => hit.soundId === cell.soundId && hit.startStep === cell.startStep));
         const deletedIds = pattern.events.filter((hit) => edits.some((cell) => !cell.active &&
           cell.soundId === hit.soundId && cell.startStep === hit.startStep)).map((hit) => hit.id);
-        if (pattern.events.length - deletedIds.length + additions.length > PROJECT_CAPS.maxEventsPerPattern) {
-          set({ errorMessage: `A pattern supports ${PROJECT_CAPS.maxEventsPerPattern} events. Erase a hit before adding another.` });
-          return;
-        }
-        const deleted = new Set(deletedIds);
-        const resultingSoundIds = [
-          ...pattern.events.filter((hit) => !deleted.has(hit.id)).map((hit) => hit.soundId),
-          ...additions.map((cell) => cell.soundId),
-        ];
-        for (const clip of project.arrangement.filter((item) => item.patternId === patternId)) {
-          const track = project.tracks.find((item) => item.id === clip.trackId)!;
-          const problem = getDrumKitProblem(track, resultingSoundIds);
-          if (problem) { set({ errorMessage: problem }); return; }
-        }
         const operations: Operation[] = [];
+        if (deletedIds.length > 0) operations.push({ type: "drum-hits.delete", patternId, hitIds: deletedIds });
         if (additions.length > 0) operations.push({ type: "drum-hits.add", patternId, hits: additions.map((cell) => ({
           id: crypto.randomUUID(), soundId: cell.soundId, startStep: cell.startStep,
         })) });
-        if (deletedIds.length > 0) operations.push({ type: "drum-hits.delete", patternId, hitIds: deletedIds });
         if (operations.length === 1) commit(`Edit ${pattern.name}`, operations[0]!);
         else if (operations.length > 1) commitBatch(`Edit ${pattern.name}`, operations);
         else set({ errorMessage: null });
@@ -569,15 +519,9 @@ export function createStudioStore(
           set({ errorMessage: "That synth pattern no longer exists. Select another pattern." });
           return null;
         }
-        const problem = getSynthNoteProblem(pattern, { midiNote, startStep, lengthSteps });
-        if (problem) { set({ errorMessage: problem }); return null; }
-        if (pattern.events.length >= PROJECT_CAPS.maxEventsPerPattern) {
-          set({ errorMessage: `A pattern supports ${PROJECT_CAPS.maxEventsPerPattern} events. Delete a note before adding another.` });
-          return null;
-        }
         const id = crypto.randomUUID();
-        commit(`Add note to ${pattern.name}`, { type: "synth-notes.add", patternId,
-          notes: [{ id, midiNote, startStep, lengthSteps }] });
+        if (!commit(`Add note to ${pattern.name}`, { type: "synth-notes.add", patternId,
+          notes: [{ id, midiNote, startStep, lengthSteps }] })) return null;
         return id;
       },
       updateSynthNotes(patternId, updates): void {
@@ -587,18 +531,6 @@ export function createStudioStore(
           return;
         }
         const unique = [...new Map(updates.map((update) => [update.noteId, update])).values()];
-        const candidates = unique.map((update) => {
-          const note = pattern.events.find((item) => item.id === update.noteId);
-          return note ? { update, note: { ...note, ...update.changes } } : null;
-        });
-        for (const candidate of candidates) {
-          if (!candidate) {
-            set({ errorMessage: "A selected note no longer exists. Select the current notes and try again." });
-            return;
-          }
-          const problem = getSynthNoteProblem(pattern, candidate.note);
-          if (problem) { set({ errorMessage: problem }); return; }
-        }
         if (unique.length > 0) commit(`Edit notes in ${pattern.name}`, { type: "synth-notes.update", patternId, updates: unique });
         else set({ errorMessage: null });
       },
@@ -606,10 +538,6 @@ export function createStudioStore(
         const pattern = get().project.patterns.find((item) => item.id === patternId);
         if (!pattern || pattern.kind !== "synth") {
           set({ errorMessage: "That synth pattern no longer exists. Select another pattern." });
-          return [];
-        }
-        if (!Number.isInteger(offsetSteps) || !Number.isInteger(pitchOffset)) {
-          set({ errorMessage: "Choose whole-step time and pitch duplicate offsets." });
           return [];
         }
         const uniqueIds = [...new Set(noteIds)];
@@ -622,16 +550,10 @@ export function createStudioStore(
           }
           selected.push(note);
         }
-        if (pattern.events.length + selected.length > PROJECT_CAPS.maxEventsPerPattern) {
-          set({ errorMessage: `A pattern supports ${PROJECT_CAPS.maxEventsPerPattern} events. Delete notes before duplicating.` });
-          return [];
-        }
         const notes = selected.map((note) => ({ ...note, id: crypto.randomUUID(),
           midiNote: note.midiNote + pitchOffset, startStep: note.startStep + offsetSteps }));
-        const problem = notes.find((note) => getSynthNoteProblem(pattern, note));
-        if (problem) { set({ errorMessage: getSynthNoteProblem(pattern, problem) }); return []; }
-        if (notes.length > 0) commit(`Duplicate notes in ${pattern.name}`, { type: "synth-notes.add", patternId, notes });
-        else set({ errorMessage: null });
+        if (notes.length === 0) { set({ errorMessage: null }); return []; }
+        if (!commit(`Duplicate notes in ${pattern.name}`, { type: "synth-notes.add", patternId, notes })) return [];
         return notes.map((note) => note.id);
       },
       deleteSynthNotes(patternId, noteIds): void {
@@ -641,29 +563,17 @@ export function createStudioStore(
           return;
         }
         const uniqueIds = [...new Set(noteIds)];
-        if (uniqueIds.some((id) => !pattern.events.some((note) => note.id === id))) {
-          set({ errorMessage: "A selected note no longer exists. Select the current notes and try again." });
-          return;
-        }
         if (uniqueIds.length > 0) commit(`Delete notes from ${pattern.name}`, { type: "synth-notes.delete", patternId, noteIds: uniqueIds });
         else set({ errorMessage: null });
       },
       setTrackVolume(trackId, volumeDb): void {
         const track = get().project.tracks.find((item) => item.id === trackId);
         if (!track) { set({ errorMessage: "That track no longer exists. Select another track." }); return; }
-        if (!Number.isFinite(volumeDb) || volumeDb < -60 || volumeDb > 6) {
-          set({ errorMessage: "Choose a track volume from -60 to 6 dB." });
-          return;
-        }
         commit(`Set ${track.name} volume`, { type: "track.update", trackId, changes: { volumeDb } });
       },
       setTrackPan(trackId, pan): void {
         const track = get().project.tracks.find((item) => item.id === trackId);
         if (!track) { set({ errorMessage: "That track no longer exists. Select another track." }); return; }
-        if (!Number.isFinite(pan) || pan < -1 || pan > 1) {
-          set({ errorMessage: "Choose a track pan from -1 to 1." });
-          return;
-        }
         commit(`Set ${track.name} pan`, { type: "track.update", trackId, changes: { pan } });
       },
       toggleMute(trackId): void {
@@ -677,10 +587,6 @@ export function createStudioStore(
         commit(`${track.soloed ? "Unsolo" : "Solo"} ${track.name}`, { type: "track.update", trackId, changes: { soloed: !track.soloed } });
       },
       setMasterVolume(volumeDb): void {
-        if (!Number.isFinite(volumeDb) || volumeDb < -60 || volumeDb > 0) {
-          set({ errorMessage: "Choose a master volume from -60 to 0 dB." });
-          return;
-        }
         commit("Set master volume", { type: "project.update", changes: { masterVolumeDb: volumeDb } });
       },
     };

@@ -253,3 +253,101 @@ test("validateOperations validates each operation against the preceding result",
   assert.equal(result.project.arrangement.length, 1);
   expectError(operations[1]!, "PATTERN_NOT_FOUND", "pattern_id", input);
 });
+
+test("arrangement validation preserves the manual placement boundaries", () => {
+  const input = project({
+    tracks: [
+      { ...drumTrack(), id: "a", kind: "synth", instrumentId: "synth.bass" },
+      { ...drumTrack(), id: "b", kind: "synth", instrumentId: "synth.bass" },
+      drumTrack({ id: "d" }),
+    ],
+    patterns: [synthPattern({ id: "p", events: [] })],
+    arrangement: [{ id: "original", patternId: "p", trackId: "a", startBar: 1, repeatCount: 2 }],
+  });
+  const candidate = { id: "new", patternId: "p", trackId: "a", startBar: 3, repeatCount: 1 };
+  const cases: readonly { readonly changes: Partial<typeof candidate>; readonly valid: boolean }[] = [
+    { changes: { startBar: 0 }, valid: true },
+    { changes: { startBar: 3 }, valid: true },
+    { changes: { startBar: 2 }, valid: false },
+    { changes: { startBar: 1, trackId: "b" }, valid: true },
+    { changes: { trackId: "d" }, valid: false },
+    { changes: { trackId: "gone" }, valid: false },
+    { changes: { patternId: "gone" }, valid: false },
+    { changes: { startBar: -1 }, valid: false },
+    { changes: { startBar: 0.5 }, valid: false },
+    { changes: { startBar: Number.NaN }, valid: false },
+    { changes: { startBar: Number.POSITIVE_INFINITY }, valid: false },
+    { changes: { startBar: 255 }, valid: true },
+    { changes: { startBar: 256 }, valid: false },
+    { changes: { repeatCount: 64 }, valid: true },
+    { changes: { repeatCount: 65 }, valid: false },
+    { changes: { repeatCount: 0 }, valid: false },
+    { changes: { repeatCount: 1.5 }, valid: false },
+    { changes: { repeatCount: Number.NaN }, valid: false },
+  ];
+
+  for (const item of cases) {
+    const operation: Operation = { type: "arrangement.place", clip: { ...candidate, ...item.changes } };
+    if (item.valid) assert.doesNotThrow(() => validateOperation(input, operation, catalog));
+    else assert.throws(() => validateOperation(input, operation, catalog), ProjectValidationError);
+  }
+  assert.doesNotThrow(() => validateOperation(input, {
+    type: "arrangement.update", clipId: "original", changes: { startBar: 1, repeatCount: 1 },
+  }, catalog));
+});
+
+test("arrangement validation checks drum kits and the exact arrangement limit", () => {
+  const drums = project({
+    tracks: [drumTrack({ instrumentId: "kit.no-kick" })],
+    patterns: [drumPattern()],
+  });
+  const place: Operation = {
+    type: "arrangement.place",
+    clip: { id: "clip", patternId: "beat", trackId: "drums", startBar: 0, repeatCount: 1 },
+  };
+  assert.throws(() => validateOperation(drums, place, catalog), ProjectValidationError);
+  assert.throws(
+    () => validateOperation({ ...drums, tracks: [drumTrack({ instrumentId: "missing" })] }, place, catalog),
+    ProjectValidationError,
+  );
+
+  const longPattern = project({
+    tracks: [drumTrack()], patterns: [drumPattern({ lengthBars: 4, events: [] })],
+  });
+  assert.doesNotThrow(() => validateOperation(longPattern, {
+    ...place, clip: { ...place.clip, repeatCount: 64 },
+  }, catalog));
+  assert.throws(() => validateOperation(longPattern, {
+    ...place, clip: { ...place.clip, startBar: 1, repeatCount: 64 },
+  }, catalog), ProjectValidationError);
+});
+
+test("pattern length validation checks shared placements and refuses truncation", () => {
+  const shared = project({
+    tracks: [{ ...drumTrack(), id: "a", kind: "synth", instrumentId: "synth.bass" }],
+    patterns: [synthPattern({ id: "p", events: [] })],
+    arrangement: [
+      { id: "first", patternId: "p", trackId: "a", startBar: 0, repeatCount: 1 },
+      { id: "second", patternId: "p", trackId: "a", startBar: 1, repeatCount: 1 },
+    ],
+  });
+  assert.throws(() => validateOperation(shared, {
+    type: "pattern.update", patternId: "p", changes: { lengthBars: 2 },
+  }, catalog), ProjectValidationError);
+  assert.doesNotThrow(() => validateOperation({ ...shared, arrangement: [shared.arrangement[0]!] }, {
+    type: "pattern.update", patternId: "p", changes: { lengthBars: 4 },
+  }, catalog));
+  assert.throws(() => validateOperation({
+    ...shared, arrangement: [{ ...shared.arrangement[0]!, startBar: 255 }],
+  }, { type: "pattern.update", patternId: "p", changes: { lengthBars: 2 } }, catalog), ProjectValidationError);
+
+  for (const pattern of [
+    synthPattern({ lengthBars: 2, events: [{ id: "note", midiNote: 60, startStep: 15, lengthSteps: 2 }] }),
+    drumPattern({ lengthBars: 2, events: [{ id: "hit", soundId: "kick", startStep: 16 }] }),
+  ]) {
+    assert.throws(() => validateOperation(project({ patterns: [pattern] }), {
+      type: "pattern.update", patternId: pattern.id, changes: { lengthBars: 1 },
+    }, catalog), ProjectValidationError);
+  }
+  expectError({ type: "pattern.update", patternId: "gone", changes: { lengthBars: 1 } }, "PATTERN_NOT_FOUND", "pattern_id");
+});
