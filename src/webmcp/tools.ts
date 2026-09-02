@@ -3,6 +3,7 @@ import { getTrackColor, INSTRUMENT_NAMES, TRACK_COLOR_WHEEL } from "@/data/studi
 import {
   PROJECT_CAPS,
   ProjectValidationError,
+  validateOperation,
   validateOperations,
   type ChangeSummary,
   type DispatchResult,
@@ -19,8 +20,10 @@ import type { StudioState } from "@/stores/studio-store";
 import type { StoreApi } from "zustand/vanilla";
 
 import {
+  LOCAL_REFERENCE_PATTERN,
   TOOL_CONTRACTS,
   type EntityReference,
+  type PublicChange,
   type ToolContract,
   type ToolErrorCode,
   type ToolResult,
@@ -44,6 +47,17 @@ class ToolExecutionError extends Error {
   ) {
     super(message);
     this.name = "ToolExecutionError";
+  }
+}
+
+class BatchChangeError extends Error {
+  constructor(
+    readonly changeType: WebMCPToolName,
+    readonly changeIndex: number,
+    readonly error: unknown,
+  ) {
+    super("A batch change failed.");
+    this.name = "BatchChangeError";
   }
 }
 
@@ -129,16 +143,29 @@ export const expectEnum = <T extends string | number>(
 
 export const expectEntityReference = (value: unknown, field: string): EntityReference => {
   const reference = expectObject(value, field);
-  expectAllowedKeys(reference, ["id", "ref"], field);
+  const unexpected = Object.keys(reference).find((key) => !["id", "ref"].includes(key));
+  if (unexpected !== undefined) {
+    return toolError("INVALID_REFERENCE", `${field}.${unexpected}`, `${field} contains an unsupported reference field.`);
+  }
   const hasId = Object.hasOwn(reference, "id");
   const hasRef = Object.hasOwn(reference, "ref");
-  if (hasId === hasRef) return invalid(field, "must contain exactly one of id or ref");
-  if (hasId) return { id: expectString(reference.id, `${field}.id`) };
-  const ref = expectString(reference.ref, `${field}.ref`, 1, 64);
-  if (!/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(ref)) {
-    return invalid(`${field}.ref`, "must start with a letter and contain only letters, digits, underscores, or hyphens");
+  if (hasId === hasRef) {
+    return toolError("INVALID_REFERENCE", field, `${field} must contain exactly one of id or ref.`);
   }
-  return { ref };
+  if (hasId) {
+    if (typeof reference.id !== "string" || reference.id.trim().length === 0) {
+      return toolError("INVALID_REFERENCE", `${field}.id`, `${field}.id must be a non-empty string.`);
+    }
+    return { id: reference.id };
+  }
+  if (typeof reference.ref !== "string" || !LOCAL_REFERENCE_PATTERN.test(reference.ref)) {
+    return toolError(
+      "INVALID_REFERENCE",
+      `${field}.ref`,
+      `${field}.ref must start with a letter and contain only letters, digits, underscores, or hyphens.`,
+    );
+  }
+  return { ref: reference.ref };
 };
 
 type ToolFailure = Extract<ToolResult<never>, { readonly success: false }>;
@@ -149,11 +176,13 @@ const failure = (
   retryable: boolean,
   field?: string,
   currentRevision?: number,
+  changeIndex?: number,
 ): ToolFailure => ({
   success: false, error: {
     code, message, retryable,
     ...(field === undefined ? {} : { field }),
     ...(currentRevision === undefined ? {} : { current_revision: currentRevision }),
+    ...(changeIndex === undefined ? {} : { change_index: changeIndex }),
   },
 });
 
@@ -229,6 +258,17 @@ const publicValidationField = (toolName: WebMCPToolName, field: string): string 
 };
 
 const mapKnownError = (toolName: WebMCPToolName, error: unknown): ToolFailure => {
+  if (error instanceof BatchChangeError) {
+    const mapped = mapKnownError(error.changeType, error.error);
+    return failure(
+      mapped.error.code,
+      mapped.error.message,
+      mapped.error.retryable,
+      mapped.error.field,
+      mapped.error.current_revision,
+      error.changeIndex,
+    );
+  }
   if (error instanceof InputError) return failure("INVALID_INPUT", error.message, false, error.field);
   if (error instanceof ToolExecutionError) {
     return failure(error.code, error.message, false, error.field, error.currentRevision);
@@ -644,6 +684,630 @@ const expectUniqueIds = (value: unknown, field: string): readonly string[] => {
   return ids;
 };
 
+const PUBLIC_CHANGE_TYPES: readonly PublicChange["type"][] = [
+  "rename_project", "set_tempo", "set_master_volume", "create_track", "rename_track",
+  "set_track_instrument", "reorder_track", "set_track_mix", "set_track_mute", "set_track_solo",
+  "delete_track", "create_pattern", "rename_pattern", "resize_pattern", "duplicate_pattern",
+  "delete_pattern", "place_pattern", "move_clip", "change_clip_pattern", "set_clip_repeats",
+  "duplicate_clip", "make_clip_unique", "delete_clip", "add_drum_hits", "delete_drum_hits",
+  "add_notes", "edit_notes", "duplicate_notes", "delete_notes",
+];
+
+const expectLocalReference = (value: unknown, field: string): string => {
+  if (typeof value !== "string" || !LOCAL_REFERENCE_PATTERN.test(value)) {
+    toolError(
+      "INVALID_REFERENCE",
+      field,
+      `${field} must start with a letter and contain only letters, digits, underscores, or hyphens.`,
+    );
+  }
+  return value;
+};
+
+const optionalLocalReference = (
+  input: Readonly<Record<string, unknown>>,
+  field: string,
+): string | undefined => input[field] === undefined ? undefined : expectLocalReference(input[field], field);
+
+const parsePublicChange = (value: unknown): PublicChange => {
+  const change = expectObject(value, "$");
+  const type = expectEnum(change.type, "type", PUBLIC_CHANGE_TYPES);
+  const allowed = (...keys: readonly string[]): void => expectAllowedKeys(change, ["type", ...keys], "$");
+  const reference = (field: string): EntityReference => expectEntityReference(change[field], field);
+  const optionalName = (field: string): string | undefined => change[field] === undefined
+    ? undefined
+    : expectString(change[field], field).trim();
+
+  switch (type) {
+    case "rename_project":
+      allowed("name");
+      return { type, name: expectString(change.name, "name").trim() };
+    case "set_tempo":
+      allowed("bpm");
+      return { type, bpm: expectFiniteNumber(change.bpm, "bpm") };
+    case "set_master_volume":
+      allowed("volume_db");
+      return { type, volume_db: expectFiniteNumber(change.volume_db, "volume_db") };
+    case "create_track":
+      allowed("ref", "kind", "instrument_id", "name");
+      return {
+        type,
+        ref: optionalLocalReference(change, "ref"),
+        kind: expectEnum(change.kind, "kind", ["drum", "synth"] as const),
+        instrument_id: expectString(change.instrument_id, "instrument_id"),
+        name: optionalName("name"),
+      };
+    case "rename_track":
+      allowed("track_id", "name");
+      return { type, track_id: reference("track_id"), name: expectString(change.name, "name").trim() };
+    case "set_track_instrument":
+      allowed("track_id", "instrument_id");
+      return { type, track_id: reference("track_id"), instrument_id: expectString(change.instrument_id, "instrument_id") };
+    case "reorder_track":
+      allowed("track_id", "position");
+      return { type, track_id: reference("track_id"), position: expectInteger(change.position, "position", 1) };
+    case "set_track_mix": {
+      allowed("track_id", "volume_db", "pan");
+      const result: Extract<PublicChange, { type: "set_track_mix" }> = {
+        type,
+        track_id: reference("track_id"),
+        volume_db: change.volume_db === undefined ? undefined : expectFiniteNumber(change.volume_db, "volume_db"),
+        pan: change.pan === undefined ? undefined : expectFiniteNumber(change.pan, "pan"),
+      };
+      if (result.volume_db === undefined && result.pan === undefined) invalid("$", "must contain volume_db or pan");
+      return result;
+    }
+    case "set_track_mute":
+      allowed("track_id", "muted");
+      return { type, track_id: reference("track_id"), muted: expectBoolean(change.muted, "muted") };
+    case "set_track_solo":
+      allowed("track_id", "soloed");
+      return { type, track_id: reference("track_id"), soloed: expectBoolean(change.soloed, "soloed") };
+    case "delete_track":
+      allowed("track_id", "delete_clips");
+      return { type, track_id: reference("track_id"),
+        delete_clips: change.delete_clips === undefined ? false : expectBoolean(change.delete_clips, "delete_clips") };
+    case "create_pattern": {
+      allowed("ref", "kind", "name", "length_bars", "placement");
+      const placement = change.placement === undefined ? undefined : expectObject(change.placement, "placement");
+      if (placement !== undefined) {
+        expectAllowedKeys(placement, ["clip_ref", "track_id", "start_bar", "repeat_count"], "placement");
+      }
+      return {
+        type,
+        ref: optionalLocalReference(change, "ref"),
+        kind: expectEnum(change.kind, "kind", ["drum", "synth"] as const),
+        name: optionalName("name"),
+        length_bars: expectEnum(change.length_bars, "length_bars", [1, 2, 4] as const),
+        placement: placement === undefined ? undefined : {
+          clip_ref: optionalLocalReference(placement, "clip_ref"),
+          track_id: expectEntityReference(placement.track_id, "placement.track_id"),
+          start_bar: expectInteger(placement.start_bar, "placement.start_bar", 1),
+          repeat_count: placement.repeat_count === undefined
+            ? undefined
+            : expectInteger(placement.repeat_count, "placement.repeat_count", 1, 64),
+        },
+      };
+    }
+    case "rename_pattern":
+      allowed("pattern_id", "name");
+      return { type, pattern_id: reference("pattern_id"), name: expectString(change.name, "name").trim() };
+    case "resize_pattern":
+      allowed("pattern_id", "length_bars");
+      return { type, pattern_id: reference("pattern_id"),
+        length_bars: expectEnum(change.length_bars, "length_bars", [1, 2, 4] as const) };
+    case "duplicate_pattern":
+      allowed("pattern_id", "ref", "name");
+      return { type, pattern_id: reference("pattern_id"), ref: optionalLocalReference(change, "ref"),
+        name: optionalName("name") };
+    case "delete_pattern":
+      allowed("pattern_id", "delete_clips");
+      return { type, pattern_id: reference("pattern_id"),
+        delete_clips: change.delete_clips === undefined ? false : expectBoolean(change.delete_clips, "delete_clips") };
+    case "place_pattern":
+      allowed("ref", "pattern_id", "track_id", "start_bar", "repeat_count");
+      return { type, ref: optionalLocalReference(change, "ref"), pattern_id: reference("pattern_id"),
+        track_id: reference("track_id"), start_bar: expectInteger(change.start_bar, "start_bar", 1),
+        repeat_count: change.repeat_count === undefined ? undefined : expectInteger(change.repeat_count, "repeat_count", 1, 64) };
+    case "move_clip": {
+      allowed("clip_id", "track_id", "start_bar");
+      const result: Extract<PublicChange, { type: "move_clip" }> = {
+        type,
+        clip_id: reference("clip_id"),
+        track_id: change.track_id === undefined ? undefined : reference("track_id"),
+        start_bar: change.start_bar === undefined ? undefined : expectInteger(change.start_bar, "start_bar", 1),
+      };
+      if (result.track_id === undefined && result.start_bar === undefined) invalid("$", "must contain track_id or start_bar");
+      return result;
+    }
+    case "change_clip_pattern":
+      allowed("clip_id", "pattern_id");
+      return { type, clip_id: reference("clip_id"), pattern_id: reference("pattern_id") };
+    case "set_clip_repeats":
+      allowed("clip_id", "repeat_count");
+      return { type, clip_id: reference("clip_id"), repeat_count: expectInteger(change.repeat_count, "repeat_count", 1, 64) };
+    case "duplicate_clip":
+      allowed("clip_id", "ref");
+      return { type, clip_id: reference("clip_id"), ref: optionalLocalReference(change, "ref") };
+    case "make_clip_unique":
+      allowed("clip_id", "pattern_ref", "pattern_name");
+      return { type, clip_id: reference("clip_id"), pattern_ref: optionalLocalReference(change, "pattern_ref"),
+        pattern_name: optionalName("pattern_name") };
+    case "delete_clip":
+      allowed("clip_id");
+      return { type, clip_id: reference("clip_id") };
+    case "add_drum_hits": {
+      allowed("pattern_id", "hits");
+      const hits = expectEventItems(change.hits, "hits").map((value, index) => {
+        const hit = expectObject(value, `hits.${index}`);
+        expectAllowedKeys(hit, ["ref", "sound_id", "step"], `hits.${index}`);
+        return { ref: hit.ref === undefined ? undefined : expectLocalReference(hit.ref, `hits.${index}.ref`),
+          sound_id: expectString(hit.sound_id, `hits.${index}.sound_id`),
+          step: expectInteger(hit.step, `hits.${index}.step`, 1) };
+      });
+      return { type, pattern_id: reference("pattern_id"), hits };
+    }
+    case "delete_drum_hits": {
+      allowed("pattern_id", "hit_ids");
+      const hit_ids = expectEventItems(change.hit_ids, "hit_ids")
+        .map((item, index) => expectEntityReference(item, `hit_ids.${index}`));
+      return { type, pattern_id: reference("pattern_id"), hit_ids };
+    }
+    case "add_notes": {
+      allowed("pattern_id", "notes");
+      const notes = expectEventItems(change.notes, "notes").map((value, index) => {
+        const note = expectObject(value, `notes.${index}`);
+        expectAllowedKeys(note, ["ref", "midi_note", "start_step", "length_steps"], `notes.${index}`);
+        return { ref: note.ref === undefined ? undefined : expectLocalReference(note.ref, `notes.${index}.ref`),
+          midi_note: expectInteger(note.midi_note, `notes.${index}.midi_note`, 24, 96),
+          start_step: expectInteger(note.start_step, `notes.${index}.start_step`, 1),
+          length_steps: expectInteger(note.length_steps, `notes.${index}.length_steps`, 1) };
+      });
+      return { type, pattern_id: reference("pattern_id"), notes };
+    }
+    case "edit_notes": {
+      allowed("pattern_id", "notes");
+      const notes = expectEventItems(change.notes, "notes").map((value, index) => {
+        const note = expectObject(value, `notes.${index}`);
+        expectAllowedKeys(note, ["note_id", "midi_note", "start_step", "length_steps"], `notes.${index}`);
+        const result = {
+          note_id: expectEntityReference(note.note_id, `notes.${index}.note_id`),
+          midi_note: note.midi_note === undefined ? undefined : expectInteger(note.midi_note, `notes.${index}.midi_note`, 24, 96),
+          start_step: note.start_step === undefined ? undefined : expectInteger(note.start_step, `notes.${index}.start_step`, 1),
+          length_steps: note.length_steps === undefined ? undefined : expectInteger(note.length_steps, `notes.${index}.length_steps`, 1),
+        };
+        if (result.midi_note === undefined && result.start_step === undefined && result.length_steps === undefined) {
+          invalid(`notes.${index}`, "must contain midi_note, start_step, or length_steps");
+        }
+        return result;
+      });
+      return { type, pattern_id: reference("pattern_id"), notes };
+    }
+    case "duplicate_notes": {
+      allowed("pattern_id", "note_ids", "step_offset", "pitch_offset", "note_refs");
+      const note_ids = expectEventItems(change.note_ids, "note_ids")
+        .map((item, index) => expectEntityReference(item, `note_ids.${index}`));
+      const note_refs = change.note_refs === undefined
+        ? undefined
+        : expectEventItems(change.note_refs, "note_refs")
+          .map((item, index) => expectLocalReference(item, `note_refs.${index}`));
+      if (note_refs !== undefined && note_refs.length !== note_ids.length) {
+        invalid("note_refs", "must contain one ref for every note_id");
+      }
+      return { type, pattern_id: reference("pattern_id"), note_ids,
+        step_offset: expectInteger(change.step_offset, "step_offset"),
+        pitch_offset: expectInteger(change.pitch_offset, "pitch_offset"), note_refs };
+    }
+    case "delete_notes": {
+      allowed("pattern_id", "note_ids");
+      const note_ids = expectEventItems(change.note_ids, "note_ids")
+        .map((item, index) => expectEntityReference(item, `note_ids.${index}`));
+      return { type, pattern_id: reference("pattern_id"), note_ids };
+    }
+  }
+};
+
+interface ReferenceDeclaration {
+  readonly ref: string;
+  readonly field: string;
+}
+
+interface ReferenceContext {
+  readonly references: Map<string, string>;
+  readonly declaredReferences: Set<string>;
+  readonly declarations: ReadonlyMap<string, readonly number[]>;
+  readonly changeIndex: number;
+  readonly createId: () => string;
+}
+
+const referenceDeclarations = (change: PublicChange): readonly ReferenceDeclaration[] => {
+  switch (change.type) {
+    case "create_track":
+    case "duplicate_pattern":
+    case "place_pattern":
+    case "duplicate_clip":
+      return change.ref === undefined ? [] : [{ ref: change.ref, field: "ref" }];
+    case "create_pattern":
+      return [
+        ...(change.ref === undefined ? [] : [{ ref: change.ref, field: "ref" }]),
+        ...(change.placement?.clip_ref === undefined
+          ? []
+          : [{ ref: change.placement.clip_ref, field: "placement.clip_ref" }]),
+      ];
+    case "make_clip_unique":
+      return change.pattern_ref === undefined ? [] : [{ ref: change.pattern_ref, field: "pattern_ref" }];
+    case "add_drum_hits":
+      return change.hits.flatMap((hit, index) => hit.ref === undefined
+        ? []
+        : [{ ref: hit.ref, field: `hits.${index}.ref` }]);
+    case "add_notes":
+      return change.notes.flatMap((note, index) => note.ref === undefined
+        ? []
+        : [{ ref: note.ref, field: `notes.${index}.ref` }]);
+    case "duplicate_notes":
+      return change.note_refs?.map((ref, index) => ({ ref, field: `note_refs.${index}` })) ?? [];
+    default:
+      return [];
+  }
+};
+
+const rawReferenceNames = (value: unknown): readonly string[] => {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return [];
+  const change = value as Readonly<Record<string, unknown>>;
+  const stringValue = (candidate: unknown): readonly string[] => typeof candidate === "string" ? [candidate] : [];
+  switch (change.type) {
+    case "create_track":
+    case "duplicate_pattern":
+    case "place_pattern":
+    case "duplicate_clip":
+      return stringValue(change.ref);
+    case "create_pattern": {
+      const placement = typeof change.placement === "object" && change.placement !== null && !Array.isArray(change.placement)
+        ? change.placement as Readonly<Record<string, unknown>>
+        : undefined;
+      return [...stringValue(change.ref), ...stringValue(placement?.clip_ref)];
+    }
+    case "make_clip_unique":
+      return stringValue(change.pattern_ref);
+    case "add_drum_hits":
+      return Array.isArray(change.hits) ? change.hits.flatMap((hit) => rawReferenceNames({
+        type: "create_track", ref: typeof hit === "object" && hit !== null ? Reflect.get(hit, "ref") : undefined,
+      })) : [];
+    case "add_notes":
+      return Array.isArray(change.notes) ? change.notes.flatMap((note) => rawReferenceNames({
+        type: "create_track", ref: typeof note === "object" && note !== null ? Reflect.get(note, "ref") : undefined,
+      })) : [];
+    case "duplicate_notes":
+      return Array.isArray(change.note_refs) ? change.note_refs.flatMap(stringValue) : [];
+    default:
+      return [];
+  }
+};
+
+const referenceDeclarationIndexes = (changes: readonly unknown[]): ReadonlyMap<string, readonly number[]> => {
+  const indexes = new Map<string, number[]>();
+  changes.forEach((change, index) => {
+    for (const ref of rawReferenceNames(change)) indexes.set(ref, [...(indexes.get(ref) ?? []), index]);
+  });
+  return indexes;
+};
+
+const resolveReference = (reference: EntityReference, field: string, context: ReferenceContext): string => {
+  if (reference.id !== undefined) return reference.id;
+  const resolved = context.references.get(reference.ref);
+  if (resolved !== undefined) return resolved;
+  const future = context.declarations.get(reference.ref)?.some((index) => index >= context.changeIndex) ?? false;
+  toolError(
+    future ? "FORWARD_REFERENCE" : "INVALID_REFERENCE",
+    `${field}.ref`,
+    future ? `${field}.ref must be declared by an earlier change.` : `${field}.ref was not declared in this batch.`,
+  );
+};
+
+const assertUniqueReferences = (change: PublicChange, context: ReferenceContext): void => {
+  const current = new Set<string>();
+  for (const declaration of referenceDeclarations(change)) {
+    if (current.has(declaration.ref) || context.declaredReferences.has(declaration.ref)) {
+      toolError("DUPLICATE_REFERENCE", declaration.field, `${declaration.field} must be unique within the batch.`);
+    }
+    current.add(declaration.ref);
+  }
+  for (const ref of current) context.declaredReferences.add(ref);
+};
+
+const createEntityId = (
+  declaration: ReferenceDeclaration | undefined,
+  context: ReferenceContext,
+): string => {
+  const id = context.createId();
+  if (declaration !== undefined) context.references.set(declaration.ref, id);
+  return id;
+};
+
+const uniqueResolvedReferences = (
+  references: readonly EntityReference[],
+  field: string,
+  context: ReferenceContext,
+): readonly string[] => {
+  const ids = references.map((reference, index) => resolveReference(reference, `${field}.${index}`, context));
+  if (new Set(ids).size !== ids.length) invalid(field, "must contain unique items");
+  return ids;
+};
+
+const translateChange = (
+  project: Project,
+  change: PublicChange,
+  context: ReferenceContext,
+): readonly Operation[] => {
+  assertUniqueReferences(change, context);
+  const declaration = (ref: string | undefined, field: string): ReferenceDeclaration | undefined =>
+    ref === undefined ? undefined : { ref, field };
+
+  switch (change.type) {
+    case "rename_project":
+      return [{ type: "project.update", changes: { name: change.name } }];
+    case "set_tempo":
+      return [{ type: "project.update", changes: { bpm: change.bpm } }];
+    case "set_master_volume":
+      return [{ type: "project.update", changes: { masterVolumeDb: change.volume_db } }];
+    case "create_track": {
+      const lastTrack = project.tracks.at(-1);
+      const colorIndex = lastTrack === undefined
+        ? 0
+        : (TRACK_COLOR_WHEEL.indexOf(getTrackColor(lastTrack)) + 1) % TRACK_COLOR_WHEEL.length;
+      return [{ type: "track.create", track: {
+        id: createEntityId(declaration(change.ref, "ref"), context),
+        name: change.name ?? INSTRUMENT_NAMES[change.instrument_id] ?? change.instrument_id,
+        kind: change.kind,
+        instrumentId: change.instrument_id,
+        volumeDb: 0,
+        pan: 0,
+        muted: false,
+        soloed: false,
+        color: TRACK_COLOR_WHEEL[colorIndex]!,
+      } }];
+    }
+    case "rename_track":
+      return [{ type: "track.update", trackId: resolveReference(change.track_id, "track_id", context),
+        changes: { name: change.name } }];
+    case "set_track_instrument":
+      return [{ type: "track.update", trackId: resolveReference(change.track_id, "track_id", context),
+        changes: { instrumentId: change.instrument_id } }];
+    case "reorder_track":
+      return [{ type: "track.reorder", trackId: resolveReference(change.track_id, "track_id", context),
+        toIndex: change.position - 1 }];
+    case "set_track_mix":
+      return [{ type: "track.update", trackId: resolveReference(change.track_id, "track_id", context),
+        changes: { volumeDb: change.volume_db, pan: change.pan } }];
+    case "set_track_mute":
+      return [{ type: "track.update", trackId: resolveReference(change.track_id, "track_id", context),
+        changes: { muted: change.muted } }];
+    case "set_track_solo":
+      return [{ type: "track.update", trackId: resolveReference(change.track_id, "track_id", context),
+        changes: { soloed: change.soloed } }];
+    case "delete_track": {
+      const trackId = resolveReference(change.track_id, "track_id", context);
+      const clipIds = project.arrangement.filter(({ trackId: candidate }) => candidate === trackId).map(({ id }) => id);
+      if (!change.delete_clips && clipIds.length > 0) {
+        toolError("DEPENDENCIES_EXIST", "delete_clips", `Dependent clip IDs: ${clipIds.join(", ")}.`);
+      }
+      return [{ type: "track.delete", trackId }];
+    }
+    case "create_pattern": {
+      const trackId = change.placement === undefined
+        ? undefined
+        : resolveReference(change.placement.track_id, "placement.track_id", context);
+      const pattern: Pattern = {
+        id: createEntityId(declaration(change.ref, "ref"), context),
+        name: change.name ?? (change.kind === "drum" ? "New beat" : "New melody"),
+        kind: change.kind,
+        lengthBars: change.length_bars,
+        events: [],
+      };
+      return change.placement === undefined
+        ? [{ type: "pattern.create", pattern }]
+        : [
+            { type: "pattern.create", pattern },
+            { type: "arrangement.place", clip: {
+              id: createEntityId(declaration(change.placement.clip_ref, "placement.clip_ref"), context),
+              patternId: pattern.id,
+              trackId: trackId!,
+              startBar: change.placement.start_bar - 1,
+              repeatCount: change.placement.repeat_count ?? 1,
+            } },
+          ];
+    }
+    case "rename_pattern":
+      return [{ type: "pattern.update", patternId: resolveReference(change.pattern_id, "pattern_id", context),
+        changes: { name: change.name } }];
+    case "resize_pattern":
+      return [{ type: "pattern.update", patternId: resolveReference(change.pattern_id, "pattern_id", context),
+        changes: { lengthBars: change.length_bars } }];
+    case "duplicate_pattern": {
+      const patternId = resolveReference(change.pattern_id, "pattern_id", context);
+      const pattern = project.patterns.find(({ id }) => id === patternId);
+      const duplicatePatternId = createEntityId(declaration(change.ref, "ref"), context);
+      return [{
+        type: "pattern.duplicate",
+        patternId,
+        duplicatePatternId,
+        duplicateName: change.name ?? `${pattern?.name.slice(0, 35) ?? "Pattern"} copy`,
+        duplicateEventIds: pattern?.events.map(() => context.createId()) ?? [],
+      }];
+    }
+    case "delete_pattern": {
+      const patternId = resolveReference(change.pattern_id, "pattern_id", context);
+      const clipIds = project.arrangement.filter(({ patternId: candidate }) => candidate === patternId).map(({ id }) => id);
+      if (!change.delete_clips && clipIds.length > 0) {
+        toolError("DEPENDENCIES_EXIST", "delete_clips", `Dependent clip IDs: ${clipIds.join(", ")}.`);
+      }
+      return [{ type: "pattern.delete", patternId }];
+    }
+    case "place_pattern": {
+      const patternId = resolveReference(change.pattern_id, "pattern_id", context);
+      const trackId = resolveReference(change.track_id, "track_id", context);
+      return [{ type: "arrangement.place", clip: {
+        id: createEntityId(declaration(change.ref, "ref"), context),
+        patternId,
+        trackId,
+        startBar: change.start_bar - 1,
+        repeatCount: change.repeat_count ?? 1,
+      } }];
+    }
+    case "move_clip":
+      return [{ type: "arrangement.update", clipId: resolveReference(change.clip_id, "clip_id", context), changes: {
+        ...(change.track_id === undefined ? {} : { trackId: resolveReference(change.track_id, "track_id", context) }),
+        ...(change.start_bar === undefined ? {} : { startBar: change.start_bar - 1 }),
+      } }];
+    case "change_clip_pattern":
+      return [{ type: "arrangement.update", clipId: resolveReference(change.clip_id, "clip_id", context),
+        changes: { patternId: resolveReference(change.pattern_id, "pattern_id", context) } }];
+    case "set_clip_repeats":
+      return [{ type: "arrangement.update", clipId: resolveReference(change.clip_id, "clip_id", context),
+        changes: { repeatCount: change.repeat_count } }];
+    case "duplicate_clip": {
+      const clipId = resolveReference(change.clip_id, "clip_id", context);
+      const clip = project.arrangement.find(({ id }) => id === clipId);
+      if (clip === undefined) toolError("CLIP_NOT_FOUND", "clip_id", `Clip ${clipId} was not found.`);
+      const pattern = project.patterns.find(({ id }) => id === clip.patternId)!;
+      return [{ type: "arrangement.place", clip: {
+        ...clip,
+        id: createEntityId(declaration(change.ref, "ref"), context),
+        startBar: clip.startBar + pattern.lengthBars * clip.repeatCount,
+      } }];
+    }
+    case "make_clip_unique": {
+      const clipId = resolveReference(change.clip_id, "clip_id", context);
+      const clip = project.arrangement.find(({ id }) => id === clipId);
+      if (clip === undefined) toolError("CLIP_NOT_FOUND", "clip_id", `Clip ${clipId} was not found.`);
+      const pattern = project.patterns.find(({ id }) => id === clip.patternId)!;
+      const duplicatePatternId = createEntityId(declaration(change.pattern_ref, "pattern_ref"), context);
+      return [
+        { type: "pattern.duplicate", patternId: pattern.id, duplicatePatternId,
+          duplicateName: change.pattern_name ?? `${pattern.name.slice(0, 35)} copy`,
+          duplicateEventIds: pattern.events.map(() => context.createId()) },
+        { type: "arrangement.update", clipId: clip.id, changes: { patternId: duplicatePatternId } },
+      ];
+    }
+    case "delete_clip":
+      return [{ type: "arrangement.delete", clipId: resolveReference(change.clip_id, "clip_id", context) }];
+    case "add_drum_hits": {
+      const patternId = resolveReference(change.pattern_id, "pattern_id", context);
+      const pattern = project.patterns.find(({ id }) => id === patternId);
+      const occupied = new Set(pattern?.kind === "drum"
+        ? pattern.events.map(({ soundId, startStep }) => `${soundId}:${startStep}`)
+        : []);
+      const hits: DrumHit[] = [];
+      for (const [index, hit] of change.hits.entries()) {
+        const startStep = hit.step - 1;
+        const cell = `${hit.sound_id}:${startStep}`;
+        if (occupied.has(cell)) continue;
+        occupied.add(cell);
+        hits.push({ id: createEntityId(declaration(hit.ref, `hits.${index}.ref`), context),
+          soundId: hit.sound_id, startStep });
+      }
+      return hits.length === 0 ? [] : [{ type: "drum-hits.add", patternId, hits }];
+    }
+    case "delete_drum_hits":
+      return [{ type: "drum-hits.delete", patternId: resolveReference(change.pattern_id, "pattern_id", context),
+        hitIds: uniqueResolvedReferences(change.hit_ids, "hit_ids", context) }];
+    case "add_notes":
+      return [{ type: "synth-notes.add", patternId: resolveReference(change.pattern_id, "pattern_id", context),
+        notes: change.notes.map((note, index) => ({
+          id: createEntityId(declaration(note.ref, `notes.${index}.ref`), context),
+          midiNote: note.midi_note,
+          startStep: note.start_step - 1,
+          lengthSteps: note.length_steps,
+        })) }];
+    case "edit_notes": {
+      const noteIds = change.notes.map((note, index) => resolveReference(note.note_id, `notes.${index}.note_id`, context));
+      if (new Set(noteIds).size !== noteIds.length) invalid("notes", "must contain unique note_id values");
+      return [{ type: "synth-notes.update", patternId: resolveReference(change.pattern_id, "pattern_id", context),
+        updates: change.notes.map((note, index) => ({ noteId: noteIds[index]!, changes: {
+          midiNote: note.midi_note,
+          startStep: note.start_step === undefined ? undefined : note.start_step - 1,
+          lengthSteps: note.length_steps,
+        } })) }];
+    }
+    case "duplicate_notes": {
+      const patternId = resolveReference(change.pattern_id, "pattern_id", context);
+      const noteIds = uniqueResolvedReferences(change.note_ids, "note_ids", context);
+      const pattern = project.patterns.find(({ id }) => id === patternId);
+      if (pattern === undefined) toolError("PATTERN_NOT_FOUND", "pattern_id", `Pattern ${patternId} was not found.`);
+      if (pattern.kind !== "synth") toolError("KIND_MISMATCH", "pattern_id", `Pattern ${patternId} is not a synth pattern.`);
+      const sources = noteIds.map((noteId, index) => {
+        const note = pattern.events.find(({ id }) => id === noteId);
+        if (note === undefined) toolError("NOTE_NOT_FOUND", `note_ids.${index}`, `Note ${noteId} was not found.`);
+        return note;
+      });
+      return [{ type: "synth-notes.add", patternId, notes: sources.map((note, index) => ({
+        ...note,
+        id: createEntityId(declaration(change.note_refs?.[index], `note_refs.${index}`), context),
+        midiNote: note.midiNote + change.pitch_offset,
+        startStep: note.startStep + change.step_offset,
+      })) }];
+    }
+    case "delete_notes":
+      return [{ type: "synth-notes.delete", patternId: resolveReference(change.pattern_id, "pattern_id", context),
+        noteIds: uniqueResolvedReferences(change.note_ids, "note_ids", context) }];
+  }
+};
+
+export interface ResolvedBatch {
+  readonly operations: readonly Operation[];
+  readonly references: Readonly<Record<string, string>>;
+}
+
+export function resolveBatch(
+  project: Project,
+  changes: readonly unknown[],
+  createId: () => string,
+): ResolvedBatch {
+  let temporaryProject = project;
+  const operations: Operation[] = [];
+  const references = new Map<string, string>();
+  const declaredReferences = new Set<string>();
+  const declarations = referenceDeclarationIndexes(changes);
+  for (const [changeIndex, value] of changes.entries()) {
+    let changeType: WebMCPToolName = "apply_project_changes";
+    try {
+      const change = parsePublicChange(value);
+      changeType = change.type;
+      const context: ReferenceContext = { references, declaredReferences, declarations, changeIndex, createId };
+      const changeOperations = translateChange(temporaryProject, change, context);
+      let candidate = temporaryProject;
+      for (const operation of changeOperations) candidate = validateOperation(candidate, operation, SOUND_CATALOG).project;
+      temporaryProject = candidate;
+      operations.push(...changeOperations);
+    } catch (error) {
+      if (error instanceof InputError || error instanceof ToolExecutionError || error instanceof ProjectValidationError) {
+        throw new BatchChangeError(changeType, changeIndex, error);
+      }
+      throw error;
+    }
+  }
+  return { operations, references: Object.fromEntries(references) };
+}
+
+interface BatchResultMetadata {
+  readonly appliedChanges: number;
+  readonly references: Readonly<Record<string, string>>;
+}
+
+const BATCH_RESULT = Symbol("webmcp.batch-result");
+type RetainedBatchChanges = ChangeSummary & { readonly [BATCH_RESULT]?: BatchResultMetadata };
+
+const batchResultExtras = (result: DispatchResult): Readonly<Record<string, unknown>> => {
+  const metadata = (result.changes as RetainedBatchChanges)[BATCH_RESULT];
+  return metadata === undefined
+    ? {}
+    : { applied_changes: metadata.appliedChanges, references: metadata.references };
+};
+
+const retainBatchResult = (result: DispatchResult, metadata: BatchResultMetadata): void => {
+  Object.defineProperty(result.changes, BATCH_RESULT, { value: metadata });
+};
+
 const mutationResult = (
   state: StudioState,
   result: DispatchResult,
@@ -706,22 +1370,13 @@ const runDirectMutation = (
   return mutationResult(state, result, extras(result));
 };
 
-const projectUpdate = (
-  store: Pick<StoreApi<StudioState>, "getState">,
-  toolName: "rename_project" | "set_tempo" | "set_master_volume",
-  input: ReturnType<typeof parseMutationMetadata>,
-  signal: AbortSignal,
-  changes: Extract<Operation, { type: "project.update" }>["changes"],
-) => runDirectMutation(store, toolName, input, signal, () => [{ type: "project.update", changes }]);
-
-const trackUpdate = (
-  store: Pick<StoreApi<StudioState>, "getState">,
-  toolName: "rename_track" | "set_track_instrument" | "set_track_mix" | "set_track_mute" | "set_track_solo",
-  input: ReturnType<typeof parseTrackId>,
-  signal: AbortSignal,
-  changes: Extract<Operation, { type: "track.update" }>["changes"],
-) => runDirectMutation(store, toolName, input, signal,
-  () => [{ type: "track.update", trackId: input.trackId, changes }]);
+const translateDirectChange = (
+  project: Project,
+  change: PublicChange,
+  createId: () => string,
+): readonly Operation[] => translateChange(project, change, {
+  references: new Map(), declaredReferences: new Set(), declarations: new Map(), changeIndex: -1, createId,
+});
 
 export function createWebMCPTools(
   store: Pick<StoreApi<StudioState>, "getState">,
@@ -769,13 +1424,15 @@ export function createWebMCPTools(
       contract("rename_project"),
       store,
       (input) => ({ ...parseMutationMetadata(input), name: expectString(input.name, "name").trim() }),
-      (input, signal) => projectUpdate(store, "rename_project", input, signal, { name: input.name }),
+      (input, signal) => runDirectMutation(store, "rename_project", input, signal, (project) =>
+        translateDirectChange(project, { type: "rename_project", name: input.name }, createId)),
     ),
     defineMutationTool(
       contract("set_tempo"),
       store,
       (input) => ({ ...parseMutationMetadata(input), bpm: expectFiniteNumber(input.bpm, "bpm") }),
-      (input, signal) => projectUpdate(store, "set_tempo", input, signal, { bpm: input.bpm }),
+      (input, signal) => runDirectMutation(store, "set_tempo", input, signal, (project) =>
+        translateDirectChange(project, { type: "set_tempo", bpm: input.bpm }, createId)),
     ),
     defineMutationTool(
       contract("set_master_volume"),
@@ -783,8 +1440,8 @@ export function createWebMCPTools(
       (input) => ({
         ...parseMutationMetadata(input), volumeDb: expectFiniteNumber(input.volume_db, "volume_db"),
       }),
-      (input, signal) => projectUpdate(store, "set_master_volume", input, signal,
-        { masterVolumeDb: input.volumeDb }),
+      (input, signal) => runDirectMutation(store, "set_master_volume", input, signal, (project) =>
+        translateDirectChange(project, { type: "set_master_volume", volume_db: input.volumeDb }, createId)),
     ),
     defineMutationTool(
       contract("create_track"),
@@ -795,39 +1452,34 @@ export function createWebMCPTools(
         instrumentId: expectString(input.instrument_id, "instrument_id"),
         name: input.name === undefined ? undefined : expectString(input.name, "name").trim(),
       }),
-      (input, signal) => runDirectMutation(store, "create_track", input, signal, (project) => {
-        const id = createId();
-        const lastTrack = project.tracks.at(-1);
-        const colorIndex = lastTrack === undefined
-          ? 0
-          : (TRACK_COLOR_WHEEL.indexOf(getTrackColor(lastTrack)) + 1) % TRACK_COLOR_WHEEL.length;
-        return [{ type: "track.create", track: {
-          id, name: input.name ?? INSTRUMENT_NAMES[input.instrumentId] ?? input.instrumentId,
-          kind: input.kind, instrumentId: input.instrumentId, volumeDb: 0, pan: 0,
-          muted: false, soloed: false, color: TRACK_COLOR_WHEEL[colorIndex]!,
-        } }];
-      }, (result) => ({ track_id: result.changes.created.trackIds[0] })),
+      (input, signal) => runDirectMutation(store, "create_track", input, signal, (project) =>
+        translateDirectChange(project, {
+          type: "create_track", kind: input.kind, instrument_id: input.instrumentId, name: input.name,
+        }, createId), (result) => ({ track_id: result.changes.created.trackIds[0] })),
       (result) => ({ track_id: result.changes.created.trackIds[0] }),
     ),
     defineMutationTool(
       contract("rename_track"),
       store,
       (input) => ({ ...parseTrackId(input), name: expectString(input.name, "name").trim() }),
-      (input, signal) => trackUpdate(store, "rename_track", input, signal, { name: input.name }),
+      (input, signal) => runDirectMutation(store, "rename_track", input, signal, (project) =>
+        translateDirectChange(project, { type: "rename_track", track_id: { id: input.trackId }, name: input.name }, createId)),
     ),
     defineMutationTool(
       contract("set_track_instrument"),
       store,
       (input) => ({ ...parseTrackId(input), instrumentId: expectString(input.instrument_id, "instrument_id") }),
-      (input, signal) => trackUpdate(store, "set_track_instrument", input, signal,
-        { instrumentId: input.instrumentId }),
+      (input, signal) => runDirectMutation(store, "set_track_instrument", input, signal, (project) =>
+        translateDirectChange(project, { type: "set_track_instrument", track_id: { id: input.trackId },
+          instrument_id: input.instrumentId }, createId)),
     ),
     defineMutationTool(
       contract("reorder_track"),
       store,
       (input) => ({ ...parseTrackId(input), position: expectInteger(input.position, "position", 1) }),
-      (input, signal) => runDirectMutation(store, "reorder_track", input, signal,
-        () => [{ type: "track.reorder", trackId: input.trackId, toIndex: input.position - 1 }]),
+      (input, signal) => runDirectMutation(store, "reorder_track", input, signal, (project) =>
+        translateDirectChange(project, { type: "reorder_track", track_id: { id: input.trackId },
+          position: input.position }, createId)),
     ),
     defineMutationTool(
       contract("set_track_mix"),
@@ -841,20 +1493,25 @@ export function createWebMCPTools(
         if (parsed.volumeDb === undefined && parsed.pan === undefined) invalid("$", "must contain volume_db or pan");
         return parsed;
       },
-      (input, signal) => trackUpdate(store, "set_track_mix", input, signal,
-        { volumeDb: input.volumeDb, pan: input.pan }),
+      (input, signal) => runDirectMutation(store, "set_track_mix", input, signal, (project) =>
+        translateDirectChange(project, { type: "set_track_mix", track_id: { id: input.trackId },
+          volume_db: input.volumeDb, pan: input.pan }, createId)),
     ),
     defineMutationTool(
       contract("set_track_mute"),
       store,
       (input) => ({ ...parseTrackId(input), muted: expectBoolean(input.muted, "muted") }),
-      (input, signal) => trackUpdate(store, "set_track_mute", input, signal, { muted: input.muted }),
+      (input, signal) => runDirectMutation(store, "set_track_mute", input, signal, (project) =>
+        translateDirectChange(project, { type: "set_track_mute", track_id: { id: input.trackId },
+          muted: input.muted }, createId)),
     ),
     defineMutationTool(
       contract("set_track_solo"),
       store,
       (input) => ({ ...parseTrackId(input), soloed: expectBoolean(input.soloed, "soloed") }),
-      (input, signal) => trackUpdate(store, "set_track_solo", input, signal, { soloed: input.soloed }),
+      (input, signal) => runDirectMutation(store, "set_track_solo", input, signal, (project) =>
+        translateDirectChange(project, { type: "set_track_solo", track_id: { id: input.trackId },
+          soloed: input.soloed }, createId)),
     ),
     defineMutationTool(
       contract("delete_track"),
@@ -863,13 +1520,9 @@ export function createWebMCPTools(
         ...parseTrackId(input),
         deleteClips: input.delete_clips === undefined ? false : expectBoolean(input.delete_clips, "delete_clips"),
       }),
-      (input, signal) => runDirectMutation(store, "delete_track", input, signal, (project) => {
-        const clipIds = project.arrangement.filter(({ trackId }) => trackId === input.trackId).map(({ id }) => id);
-        if (!input.deleteClips && clipIds.length > 0) {
-          toolError("DEPENDENCIES_EXIST", "delete_clips", `Dependent clip IDs: ${clipIds.join(", ")}.`);
-        }
-        return [{ type: "track.delete", trackId: input.trackId }];
-      }),
+      (input, signal) => runDirectMutation(store, "delete_track", input, signal, (project) =>
+        translateDirectChange(project, { type: "delete_track", track_id: { id: input.trackId },
+          delete_clips: input.deleteClips }, createId)),
     ),
     defineMutationTool(
       contract("create_pattern"),
@@ -891,21 +1544,18 @@ export function createWebMCPTools(
           },
         };
       },
-      (input, signal) => runDirectMutation(store, "create_pattern", input, signal, () => {
-        const pattern: Pattern = {
-          id: createId(), name: input.name ?? (input.kind === "drum" ? "New beat" : "New melody"),
-          kind: input.kind, lengthBars: input.lengthBars, events: [],
-        };
-        return input.placement === undefined
-          ? [{ type: "pattern.create", pattern }]
-          : [
-              { type: "pattern.create", pattern },
-              { type: "arrangement.place", clip: {
-                id: createId(), patternId: pattern.id, trackId: input.placement.trackId,
-                startBar: input.placement.startBar, repeatCount: input.placement.repeatCount,
-              } },
-            ];
-      }, (result) => ({
+      (input, signal) => runDirectMutation(store, "create_pattern", input, signal, (project) =>
+        translateDirectChange(project, {
+          type: "create_pattern",
+          kind: input.kind,
+          name: input.name,
+          length_bars: input.lengthBars,
+          placement: input.placement === undefined ? undefined : {
+            track_id: { id: input.placement.trackId },
+            start_bar: input.placement.startBar + 1,
+            repeat_count: input.placement.repeatCount,
+          },
+        }, createId), (result) => ({
         pattern_id: result.changes.created.patternIds[0],
         ...(result.changes.created.arrangementClipIds[0] === undefined
           ? {}
@@ -922,8 +1572,9 @@ export function createWebMCPTools(
       contract("rename_pattern"),
       store,
       (input) => ({ ...parsePatternId(input), name: expectString(input.name, "name").trim() }),
-      (input, signal) => runDirectMutation(store, "rename_pattern", input, signal,
-        () => [{ type: "pattern.update", patternId: input.patternId, changes: { name: input.name } }]),
+      (input, signal) => runDirectMutation(store, "rename_pattern", input, signal, (project) =>
+        translateDirectChange(project, { type: "rename_pattern", pattern_id: { id: input.patternId },
+          name: input.name }, createId)),
     ),
     defineMutationTool(
       contract("resize_pattern"),
@@ -932,8 +1583,9 @@ export function createWebMCPTools(
         ...parsePatternId(input),
         lengthBars: expectEnum(input.length_bars, "length_bars", [1, 2, 4] as const),
       }),
-      (input, signal) => runDirectMutation(store, "resize_pattern", input, signal,
-        () => [{ type: "pattern.update", patternId: input.patternId, changes: { lengthBars: input.lengthBars } }]),
+      (input, signal) => runDirectMutation(store, "resize_pattern", input, signal, (project) =>
+        translateDirectChange(project, { type: "resize_pattern", pattern_id: { id: input.patternId },
+          length_bars: input.lengthBars }, createId)),
     ),
     defineMutationTool(
       contract("duplicate_pattern"),
@@ -942,15 +1594,9 @@ export function createWebMCPTools(
         ...parsePatternId(input),
         name: input.name === undefined ? undefined : expectString(input.name, "name").trim(),
       }),
-      (input, signal) => runDirectMutation(store, "duplicate_pattern", input, signal, (project) => {
-        const duplicatePatternId = createId();
-        const pattern = project.patterns.find(({ id }) => id === input.patternId);
-        const duplicateEventIds = pattern?.events.map(() => createId()) ?? [];
-        return [{
-          type: "pattern.duplicate", patternId: input.patternId, duplicatePatternId,
-          duplicateName: input.name ?? `${pattern?.name.slice(0, 35) ?? "Pattern"} copy`, duplicateEventIds,
-        }];
-      }, (result) => ({ pattern_id: result.changes.created.patternIds[0] })),
+      (input, signal) => runDirectMutation(store, "duplicate_pattern", input, signal, (project) =>
+        translateDirectChange(project, { type: "duplicate_pattern", pattern_id: { id: input.patternId },
+          name: input.name }, createId), (result) => ({ pattern_id: result.changes.created.patternIds[0] })),
       (result) => ({ pattern_id: result.changes.created.patternIds[0] }),
     ),
     defineMutationTool(
@@ -960,13 +1606,9 @@ export function createWebMCPTools(
         ...parsePatternId(input),
         deleteClips: input.delete_clips === undefined ? false : expectBoolean(input.delete_clips, "delete_clips"),
       }),
-      (input, signal) => runDirectMutation(store, "delete_pattern", input, signal, (project) => {
-        const clipIds = project.arrangement.filter(({ patternId }) => patternId === input.patternId).map(({ id }) => id);
-        if (!input.deleteClips && clipIds.length > 0) {
-          toolError("DEPENDENCIES_EXIST", "delete_clips", `Dependent clip IDs: ${clipIds.join(", ")}.`);
-        }
-        return [{ type: "pattern.delete", patternId: input.patternId }];
-      }),
+      (input, signal) => runDirectMutation(store, "delete_pattern", input, signal, (project) =>
+        translateDirectChange(project, { type: "delete_pattern", pattern_id: { id: input.patternId },
+          delete_clips: input.deleteClips }, createId)),
     ),
     defineMutationTool(
       contract("place_pattern"),
@@ -977,11 +1619,11 @@ export function createWebMCPTools(
         startBar: expectInteger(input.start_bar, "start_bar", 1) - 1,
         repeatCount: input.repeat_count === undefined ? 1 : expectInteger(input.repeat_count, "repeat_count", 1, 64),
       }),
-      (input, signal) => runDirectMutation(store, "place_pattern", input, signal,
-        () => [{ type: "arrangement.place", clip: {
-          id: createId(), patternId: input.patternId, trackId: input.trackId,
-          startBar: input.startBar, repeatCount: input.repeatCount,
-        } }], (result) => ({ clip_id: result.changes.created.arrangementClipIds[0] })),
+      (input, signal) => runDirectMutation(store, "place_pattern", input, signal, (project) =>
+        translateDirectChange(project, { type: "place_pattern", pattern_id: { id: input.patternId },
+          track_id: { id: input.trackId }, start_bar: input.startBar + 1,
+          repeat_count: input.repeatCount }, createId),
+      (result) => ({ clip_id: result.changes.created.arrangementClipIds[0] })),
       (result) => ({ clip_id: result.changes.created.arrangementClipIds[0] }),
     ),
     defineMutationTool(
@@ -998,39 +1640,34 @@ export function createWebMCPTools(
         }
         return parsed;
       },
-      (input, signal) => runDirectMutation(store, "move_clip", input, signal,
-        () => [{ type: "arrangement.update", clipId: input.clipId, changes: {
-          ...(input.trackId === undefined ? {} : { trackId: input.trackId }),
-          ...(input.startBar === undefined ? {} : { startBar: input.startBar }),
-        } }]),
+      (input, signal) => runDirectMutation(store, "move_clip", input, signal, (project) =>
+        translateDirectChange(project, { type: "move_clip", clip_id: { id: input.clipId },
+          track_id: input.trackId === undefined ? undefined : { id: input.trackId },
+          start_bar: input.startBar === undefined ? undefined : input.startBar + 1 }, createId)),
     ),
     defineMutationTool(
       contract("change_clip_pattern"),
       store,
       (input) => ({ ...parseClipId(input), patternId: expectString(input.pattern_id, "pattern_id") }),
-      (input, signal) => runDirectMutation(store, "change_clip_pattern", input, signal,
-        () => [{ type: "arrangement.update", clipId: input.clipId, changes: { patternId: input.patternId } }]),
+      (input, signal) => runDirectMutation(store, "change_clip_pattern", input, signal, (project) =>
+        translateDirectChange(project, { type: "change_clip_pattern", clip_id: { id: input.clipId },
+          pattern_id: { id: input.patternId } }, createId)),
     ),
     defineMutationTool(
       contract("set_clip_repeats"),
       store,
       (input) => ({ ...parseClipId(input), repeatCount: expectInteger(input.repeat_count, "repeat_count", 1, 64) }),
-      (input, signal) => runDirectMutation(store, "set_clip_repeats", input, signal,
-        () => [{ type: "arrangement.update", clipId: input.clipId, changes: { repeatCount: input.repeatCount } }]),
+      (input, signal) => runDirectMutation(store, "set_clip_repeats", input, signal, (project) =>
+        translateDirectChange(project, { type: "set_clip_repeats", clip_id: { id: input.clipId },
+          repeat_count: input.repeatCount }, createId)),
     ),
     defineMutationTool(
       contract("duplicate_clip"),
       store,
       parseClipId,
-      (input, signal) => runDirectMutation(store, "duplicate_clip", input, signal, (project) => {
-        const id = createId();
-        const clip = project.arrangement.find((candidate) => candidate.id === input.clipId);
-        if (clip === undefined) toolError("CLIP_NOT_FOUND", "clip_id", `Clip ${input.clipId} was not found.`);
-        const pattern = project.patterns.find((candidate) => candidate.id === clip.patternId)!;
-        return [{ type: "arrangement.place", clip: {
-          ...clip, id, startBar: clip.startBar + pattern.lengthBars * clip.repeatCount,
-        } }];
-      }, (result) => ({ clip_id: result.changes.created.arrangementClipIds[0] })),
+      (input, signal) => runDirectMutation(store, "duplicate_clip", input, signal, (project) =>
+        translateDirectChange(project, { type: "duplicate_clip", clip_id: { id: input.clipId } }, createId),
+      (result) => ({ clip_id: result.changes.created.arrangementClipIds[0] })),
       (result) => ({ clip_id: result.changes.created.arrangementClipIds[0] }),
     ),
     defineMutationTool(
@@ -1040,26 +1677,18 @@ export function createWebMCPTools(
         ...parseClipId(input),
         name: input.pattern_name === undefined ? undefined : expectString(input.pattern_name, "pattern_name").trim(),
       }),
-      (input, signal) => runDirectMutation(store, "make_clip_unique", input, signal, (project) => {
-        const duplicatePatternId = createId();
-        const clip = project.arrangement.find((candidate) => candidate.id === input.clipId);
-        if (clip === undefined) toolError("CLIP_NOT_FOUND", "clip_id", `Clip ${input.clipId} was not found.`);
-        const pattern = project.patterns.find((candidate) => candidate.id === clip.patternId)!;
-        const duplicateEventIds = pattern.events.map(() => createId());
-        return [
-          { type: "pattern.duplicate", patternId: pattern.id, duplicatePatternId,
-            duplicateName: input.name ?? `${pattern.name.slice(0, 35)} copy`, duplicateEventIds },
-          { type: "arrangement.update", clipId: clip.id, changes: { patternId: duplicatePatternId } },
-        ];
-      }, (result) => ({ pattern_id: result.changes.created.patternIds[0] })),
+      (input, signal) => runDirectMutation(store, "make_clip_unique", input, signal, (project) =>
+        translateDirectChange(project, { type: "make_clip_unique", clip_id: { id: input.clipId },
+          pattern_name: input.name }, createId),
+      (result) => ({ pattern_id: result.changes.created.patternIds[0] })),
       (result) => ({ pattern_id: result.changes.created.patternIds[0] }),
     ),
     defineMutationTool(
       contract("delete_clip"),
       store,
       parseClipId,
-      (input, signal) => runDirectMutation(store, "delete_clip", input, signal,
-        () => [{ type: "arrangement.delete", clipId: input.clipId }]),
+      (input, signal) => runDirectMutation(store, "delete_clip", input, signal, (project) =>
+        translateDirectChange(project, { type: "delete_clip", clip_id: { id: input.clipId } }, createId)),
     ),
     defineMutationTool(
       contract("add_drum_hits"),
@@ -1075,28 +1704,19 @@ export function createWebMCPTools(
           };
         }),
       }),
-      (input, signal) => runDirectMutation(store, "add_drum_hits", input, signal, (project) => {
-        const pattern = project.patterns.find(({ id }) => id === input.patternId);
-        const occupied = new Set(pattern?.kind === "drum"
-          ? pattern.events.map(({ soundId, startStep }) => `${soundId}:${startStep}`)
-          : []);
-        const hits: DrumHit[] = [];
-        for (const hit of input.hits) {
-          const cell = `${hit.soundId}:${hit.startStep}`;
-          if (occupied.has(cell)) continue;
-          occupied.add(cell);
-          hits.push({ id: createId(), ...hit });
-        }
-        return hits.length === 0 ? [] : [{ type: "drum-hits.add", patternId: input.patternId, hits }];
-      }, (result) => ({ hit_ids: [...result.changes.created.drumHitIds] })),
+      (input, signal) => runDirectMutation(store, "add_drum_hits", input, signal, (project) =>
+        translateDirectChange(project, { type: "add_drum_hits", pattern_id: { id: input.patternId },
+          hits: input.hits.map(({ soundId, startStep }) => ({ sound_id: soundId, step: startStep + 1 })) }, createId),
+      (result) => ({ hit_ids: [...result.changes.created.drumHitIds] })),
       (result) => ({ hit_ids: [...result.changes.created.drumHitIds] }),
     ),
     defineMutationTool(
       contract("delete_drum_hits"),
       store,
       (input) => ({ ...parsePatternId(input), hitIds: expectUniqueIds(input.hit_ids, "hit_ids") }),
-      (input, signal) => runDirectMutation(store, "delete_drum_hits", input, signal,
-        () => [{ type: "drum-hits.delete", patternId: input.patternId, hitIds: input.hitIds }]),
+      (input, signal) => runDirectMutation(store, "delete_drum_hits", input, signal, (project) =>
+        translateDirectChange(project, { type: "delete_drum_hits", pattern_id: { id: input.patternId },
+          hit_ids: input.hitIds.map((id) => ({ id })) }, createId)),
     ),
     defineMutationTool(
       contract("add_notes"),
@@ -1113,10 +1733,11 @@ export function createWebMCPTools(
           };
         }),
       }),
-      (input, signal) => runDirectMutation(store, "add_notes", input, signal,
-        () => [{ type: "synth-notes.add", patternId: input.patternId,
-          notes: input.notes.map((note) => ({ id: createId(), ...note })) }],
-        (result) => ({ note_ids: [...result.changes.created.synthNoteIds] })),
+      (input, signal) => runDirectMutation(store, "add_notes", input, signal, (project) =>
+        translateDirectChange(project, { type: "add_notes", pattern_id: { id: input.patternId },
+          notes: input.notes.map(({ midiNote, startStep, lengthSteps }) => ({
+            midi_note: midiNote, start_step: startStep + 1, length_steps: lengthSteps,
+          })) }, createId), (result) => ({ note_ids: [...result.changes.created.synthNoteIds] })),
       (result) => ({ note_ids: [...result.changes.created.synthNoteIds] }),
     ),
     defineMutationTool(
@@ -1148,11 +1769,14 @@ export function createWebMCPTools(
         }
         return { ...parsePatternId(input), notes };
       },
-      (input, signal) => runDirectMutation(store, "edit_notes", input, signal,
-        () => [{ type: "synth-notes.update", patternId: input.patternId,
-          updates: input.notes.map(({ noteId, midiNote, startStep, lengthSteps }) => ({
-            noteId, changes: { midiNote, startStep, lengthSteps },
-          })) }]),
+      (input, signal) => runDirectMutation(store, "edit_notes", input, signal, (project) =>
+        translateDirectChange(project, { type: "edit_notes", pattern_id: { id: input.patternId },
+          notes: input.notes.map(({ noteId, midiNote, startStep, lengthSteps }) => ({
+            note_id: { id: noteId },
+            midi_note: midiNote,
+            start_step: startStep === undefined ? undefined : startStep + 1,
+            length_steps: lengthSteps,
+          })) }, createId)),
     ),
     defineMutationTool(
       contract("duplicate_notes"),
@@ -1163,34 +1787,55 @@ export function createWebMCPTools(
         stepOffset: expectInteger(input.step_offset, "step_offset"),
         pitchOffset: expectInteger(input.pitch_offset, "pitch_offset"),
       }),
-      (input, signal) => runDirectMutation(store, "duplicate_notes", input, signal, (project) => {
-        const pattern = project.patterns.find(({ id }) => id === input.patternId);
-        if (pattern === undefined) {
-          toolError("PATTERN_NOT_FOUND", "pattern_id", `Pattern ${input.patternId} was not found.`);
-        }
-        if (pattern.kind !== "synth") {
-          toolError("KIND_MISMATCH", "pattern_id", `Pattern ${input.patternId} is not a synth pattern.`);
-        }
-        const sources = input.noteIds.map((noteId, index) => {
-          const note = pattern.events.find(({ id }) => id === noteId);
-          if (note === undefined) toolError("NOTE_NOT_FOUND", `note_ids.${index}`, `Note ${noteId} was not found.`);
-          return note;
-        });
-        const notes = sources.map((note) => ({
-          ...note, id: createId(),
-          midiNote: note.midiNote + input.pitchOffset,
-          startStep: note.startStep + input.stepOffset,
-        }));
-        return [{ type: "synth-notes.add", patternId: input.patternId, notes }];
-      }, (result) => ({ note_ids: [...result.changes.created.synthNoteIds] })),
+      (input, signal) => runDirectMutation(store, "duplicate_notes", input, signal, (project) =>
+        translateDirectChange(project, { type: "duplicate_notes", pattern_id: { id: input.patternId },
+          note_ids: input.noteIds.map((id) => ({ id })), step_offset: input.stepOffset,
+          pitch_offset: input.pitchOffset }, createId),
+      (result) => ({ note_ids: [...result.changes.created.synthNoteIds] })),
       (result) => ({ note_ids: [...result.changes.created.synthNoteIds] }),
     ),
     defineMutationTool(
       contract("delete_notes"),
       store,
       (input) => ({ ...parsePatternId(input), noteIds: expectUniqueIds(input.note_ids, "note_ids") }),
-      (input, signal) => runDirectMutation(store, "delete_notes", input, signal,
-        () => [{ type: "synth-notes.delete", patternId: input.patternId, noteIds: input.noteIds }]),
+      (input, signal) => runDirectMutation(store, "delete_notes", input, signal, (project) =>
+        translateDirectChange(project, { type: "delete_notes", pattern_id: { id: input.patternId },
+          note_ids: input.noteIds.map((id) => ({ id })) }, createId)),
+    ),
+    defineMutationTool(
+      contract("apply_project_changes"),
+      store,
+      (input) => {
+        const changes = expectArray(input.changes, "changes");
+        if (changes.length < 2) toolError("BATCH_TOO_SMALL", "changes", "A batch requires at least 2 changes.");
+        if (changes.length > 100) toolError("BATCH_TOO_LARGE", "changes", "A batch supports at most 100 changes.");
+        return {
+          requestId: expectString(input.request_id, "request_id", 1, 128),
+          baseRevision: expectInteger(input.base_revision, "base_revision", 0),
+          label: expectString(input.label, "label", 1, 80).trim(),
+          changes,
+        };
+      },
+      (input, signal) => {
+        signal.throwIfAborted();
+        let state = store.getState();
+        if (input.baseRevision !== state.revision) {
+          toolError("REVISION_CONFLICT", "base_revision", "The project has changed; inspect it and retry.", state.revision);
+        }
+        const resolved = resolveBatch(state.project, input.changes, createId);
+        const result = state.dispatch({
+          id: `webmcp:apply_project_changes:${input.requestId}`,
+          source: "agent",
+          toolName: "apply_project_changes",
+          label: input.label,
+          kind: "batch",
+          operations: resolved.operations,
+        });
+        retainBatchResult(result, { appliedChanges: input.changes.length, references: resolved.references });
+        state = store.getState();
+        return mutationResult(state, result, batchResultExtras(result));
+      },
+      batchResultExtras,
     ),
   ];
 }

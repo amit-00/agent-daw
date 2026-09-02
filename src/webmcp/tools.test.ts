@@ -584,7 +584,7 @@ const executeMutation = async (
   return tool.execute(input, { signal: new AbortController().signal }) as Promise<{
     success: boolean;
     result?: Record<string, unknown>;
-    error?: { code: string; field?: string; message?: string; current_revision?: number };
+    error?: { code: string; field?: string; message?: string; change_index?: number; current_revision?: number };
   }>;
 };
 
@@ -1512,5 +1512,374 @@ describe("event mutations", () => {
     } });
     expect(createId).toHaveBeenCalledTimes(generated);
     expect(store.getState().history).toHaveLength(1);
+  });
+});
+
+describe("apply_project_changes", () => {
+  const noOp = { type: "set_track_solo", track_id: { id: "pad" }, soloed: false } as const;
+
+  const apply = (
+    store: ReturnType<typeof createStudioStore>,
+    changes: readonly Record<string, unknown>[],
+    createId: () => string = () => "batch-id",
+    overrides: Record<string, unknown> = {},
+  ) => executeMutation(store, "apply_project_changes", {
+    request_id: "batch-request",
+    base_revision: 0,
+    label: "Batch edit",
+    changes,
+    ...overrides,
+  }, createId);
+
+  const snapshot = (store: ReturnType<typeof createStudioStore>) => {
+    const state = store.getState();
+    return {
+      project: state.project,
+      revision: state.revision,
+      history: state.history,
+      historyCursor: state.historyCursor,
+      selectedClipId: state.selectedClipId,
+      selectedPatternId: state.selectedPatternId,
+      selectedTrackId: state.selectedTrackId,
+    };
+  };
+
+  test("rejects batches outside the 2 to 100 change boundary", async () => {
+    await expect(apply(createStudioStore(DEMO_PROJECT), [noOp])).resolves.toMatchObject({
+      success: false, error: { code: "BATCH_TOO_SMALL", field: "changes" },
+    });
+    await expect(apply(createStudioStore(DEMO_PROJECT), Array.from({ length: 101 }, () => noOp)))
+      .resolves.toMatchObject({
+        success: false, error: { code: "BATCH_TOO_LARGE", field: "changes" },
+      });
+  });
+
+  test("requires a current base revision", async () => {
+    const missing = await executeMutation(createStudioStore(DEMO_PROJECT), "apply_project_changes", {
+      request_id: "missing-revision", label: "Missing revision", changes: [noOp, noOp],
+    });
+    expect(missing).toMatchObject({ success: false, error: { code: "INVALID_INPUT", field: "base_revision" } });
+
+    const store = createStudioStore(DEMO_PROJECT);
+    store.getState().dispatch({
+      id: "manual", source: "manual", label: "Manual edit", kind: "operation",
+      operation: { type: "project.update", changes: { bpm: 119 } },
+    });
+    const stale = await apply(store, [noOp, noOp]);
+    expect(stale).toMatchObject({ success: false, error: {
+      code: "REVISION_CONFLICT", field: "base_revision", current_revision: 1,
+    } });
+  });
+
+  test("resolves a create track, pattern, notes, and placement chain in order", async () => {
+    const store = createStudioStore(DEMO_PROJECT);
+    const ids = ["batch-track", "batch-pattern", "batch-note", "batch-clip"];
+
+    const response = await apply(store, [
+      { type: "create_track", ref: "track", kind: "synth", instrument_id: "synth.lead", name: " Lead " },
+      { type: "create_pattern", ref: "pattern", kind: "synth", length_bars: 1, name: " Phrase " },
+      { type: "add_notes", pattern_id: { ref: "pattern" }, notes: [
+        { ref: "note", midi_note: 72, start_step: 1, length_steps: 4 },
+      ] },
+      { type: "place_pattern", ref: "clip", pattern_id: { ref: "pattern" },
+        track_id: { ref: "track" }, start_bar: 9 },
+    ], () => ids.shift()!);
+
+    expect(response).toMatchObject({ success: true, result: {
+      applied_changes: 4,
+      references: { track: "batch-track", pattern: "batch-pattern", note: "batch-note", clip: "batch-clip" },
+    } });
+    expect(store.getState().project).toMatchObject({
+      tracks: expect.arrayContaining([expect.objectContaining({ id: "batch-track", name: "Lead" })]),
+      patterns: expect.arrayContaining([expect.objectContaining({ id: "batch-pattern", name: "Phrase", events: [
+        { id: "batch-note", midiNote: 72, startStep: 0, lengthSteps: 4 },
+      ] })]),
+      arrangement: expect.arrayContaining([expect.objectContaining({
+        id: "batch-clip", patternId: "batch-pattern", trackId: "batch-track", startBar: 8, repeatCount: 1,
+      })]),
+    });
+  });
+
+  test.each([
+    ["duplicate declaration", [
+      { type: "create_track", ref: "same", kind: "synth", instrument_id: "synth.pad" },
+      { type: "create_pattern", ref: "same", kind: "synth", length_bars: 1 },
+    ], "DUPLICATE_REFERENCE", "ref", 1],
+    ["duplicate declaration after an omitted hit", [
+      { type: "add_drum_hits", pattern_id: { id: "neon" }, hits: [
+        { ref: "same", sound_id: "kick", step: 1 },
+      ] },
+      { type: "create_track", ref: "same", kind: "synth", instrument_id: "synth.pad" },
+    ], "DUPLICATE_REFERENCE", "ref", 1],
+    ["invalid syntax", [
+      { type: "create_track", ref: "1-invalid", kind: "synth", instrument_id: "synth.pad" }, noOp,
+    ], "INVALID_REFERENCE", "ref", 0],
+    ["both id and ref", [
+      { type: "rename_track", track_id: { id: "bass", ref: "track" }, name: "Bass" }, noOp,
+    ], "INVALID_REFERENCE", "track_id", 0],
+    ["neither id nor ref", [
+      { type: "rename_track", track_id: {}, name: "Bass" }, noOp,
+    ], "INVALID_REFERENCE", "track_id", 0],
+    ["missing reference", [
+      { type: "rename_track", track_id: { ref: "missing" }, name: "Bass" }, noOp,
+    ], "INVALID_REFERENCE", "track_id.ref", 0],
+    ["forward reference", [
+      { type: "rename_track", track_id: { ref: "later" }, name: "Bass" },
+      { type: "create_track", ref: "later", kind: "synth", instrument_id: "synth.pad" },
+    ], "FORWARD_REFERENCE", "track_id.ref", 0],
+  ] as const)("returns an indexed error for %s", async (_name, changes, code, field, changeIndex) => {
+    const response = await apply(createStudioStore(DEMO_PROJECT), changes);
+
+    expect(response).toMatchObject({ success: false, error: {
+      code, field, change_index: changeIndex,
+    } });
+  });
+
+  test("maps nested event refs and duplicate note refs to generated IDs", async () => {
+    const ids = ["hit-created", "note-created", "copy-created"];
+    const response = await apply(createStudioStore(DEMO_PROJECT), [
+      { type: "add_drum_hits", pattern_id: { id: "neon" }, hits: [
+        { ref: "hit", sound_id: "snare", step: 1 },
+      ] },
+      { type: "add_notes", pattern_id: { id: "afterglow" }, notes: [
+        { ref: "note", midi_note: 60, start_step: 30, length_steps: 2 },
+      ] },
+      { type: "duplicate_notes", pattern_id: { id: "afterglow" }, note_ids: [{ id: "lead-1" }],
+        step_offset: 1, pitch_offset: 0, note_refs: ["copy"] },
+    ], () => ids.shift()!);
+
+    expect(response).toMatchObject({ success: true, result: { references: {
+      hit: "hit-created", note: "note-created", copy: "copy-created",
+    } } });
+  });
+
+  test("maps create-pattern clip refs and make-unique pattern refs", async () => {
+    const ids = ["pattern-created", "clip-created", "pattern-unique"];
+    const response = await apply(createStudioStore(DEMO_PROJECT), [
+      { type: "create_pattern", ref: "pattern", kind: "synth", length_bars: 1, placement: {
+        clip_ref: "clip", track_id: { id: "bass" }, start_bar: 9,
+      } },
+      { type: "make_clip_unique", clip_id: { ref: "clip" }, pattern_ref: "unique" },
+      { type: "rename_pattern", pattern_id: { ref: "unique" }, name: "Unique phrase" },
+    ], () => ids.shift()!);
+
+    expect(response).toMatchObject({ success: true, result: { references: {
+      pattern: "pattern-created", clip: "clip-created", unique: "pattern-unique",
+    } } });
+  });
+
+  test("validates each change against the preceding temporary project", async () => {
+    const ids = ["new-pattern", "new-note"];
+    const response = await apply(createStudioStore(DEMO_PROJECT), [
+      { type: "create_pattern", ref: "pattern", kind: "synth", length_bars: 1 },
+      { type: "add_notes", pattern_id: { ref: "pattern" }, notes: [
+        { ref: "note", midi_note: 60, start_step: 1, length_steps: 1 },
+      ] },
+    ], () => ids.shift()!);
+
+    expect(response).toMatchObject({ success: true, result: {
+      references: { pattern: "new-pattern", note: "new-note" },
+    } });
+  });
+
+  test("leaves all store state unchanged when a middle change fails", async () => {
+    const store = createStudioStore(DEMO_PROJECT);
+    store.getState().selectClip("bass-a");
+    const before = snapshot(store);
+    const response = await apply(store, [
+      { type: "create_track", ref: "created", kind: "synth", instrument_id: "synth.pad" },
+      { type: "rename_pattern", pattern_id: { id: "missing" }, name: "Missing" },
+      noOp,
+    ], () => "unused-created-id");
+
+    expect(response).toMatchObject({ success: false, error: {
+      code: "PATTERN_NOT_FOUND", field: "pattern_id", change_index: 1,
+    } });
+    expect(response).not.toHaveProperty("result.references");
+    expect(store.getState()).toMatchObject(before);
+    expect(store.getState().project).toBe(before.project);
+    expect(store.getState().history).toBe(before.history);
+  });
+
+  test("dispatches one attributed batch and returns its full result", async () => {
+    const store = createStudioStore(DEMO_PROJECT);
+    const response = await apply(store, [
+      { type: "create_track", ref: "track", kind: "synth", instrument_id: "synth.pad" },
+      { type: "rename_project", name: "Batch named" },
+    ], () => "created-track", { label: "  Coordinated edit  " });
+
+    expect(response).toMatchObject({ success: true, result: {
+      changed: true, deduplicated: false, project_revision: 1, history_cursor: 0,
+      applied_changes: 2, references: { track: "created-track" },
+    } });
+    expect(store.getState().history).toHaveLength(1);
+    expect(store.getState().history[0]).toMatchObject({
+      commandId: "webmcp:apply_project_changes:batch-request", source: "agent",
+      toolName: "apply_project_changes", label: "Coordinated edit",
+      action: { kind: "batch", operations: [
+        { type: "track.create", track: { id: "created-track" } },
+        { type: "project.update", changes: { name: "Batch named" } },
+      ] },
+    });
+  });
+
+  test("replays the retained result before validation, revision checks, or ID generation", async () => {
+    const store = createStudioStore(DEMO_PROJECT);
+    const createId = vi.fn(() => "retained-track");
+    const first = await apply(store, [
+      { type: "create_track", ref: "track", kind: "synth", instrument_id: "synth.pad" }, noOp,
+    ], createId, { request_id: "retained" });
+    store.getState().dispatch({
+      id: "manual", source: "manual", label: "Manual edit", kind: "operation",
+      operation: { type: "project.update", changes: { bpm: 119 } },
+    });
+
+    const replayed = await executeMutation(store, "apply_project_changes", {
+      request_id: "retained", unexpected: "ignored",
+    }, createId);
+
+    expect(first).toMatchObject({ success: true, result: {
+      references: { track: "retained-track" }, applied_changes: 2, deduplicated: false,
+    } });
+    expect(replayed).toMatchObject({ success: true, result: {
+      references: { track: "retained-track" }, applied_changes: 2,
+      deduplicated: true, project_revision: 2,
+    } });
+    expect(createId).toHaveBeenCalledOnce();
+    expect(store.getState().project.tracks.filter(({ id }) => id === "retained-track")).toHaveLength(1);
+    expect(store.getState().history).toHaveLength(2);
+  });
+
+  test("allows non-cascading deletes only after all dependencies are removed or reassigned", async () => {
+    const trackStore = createStudioStore(DEMO_PROJECT);
+    await expect(apply(trackStore, [
+      { type: "delete_clip", clip_id: { id: "drums-a" } },
+      { type: "delete_clip", clip_id: { id: "drums-b" } },
+      { type: "delete_track", track_id: { id: "drums" }, delete_clips: false },
+    ])).resolves.toMatchObject({ success: true });
+
+    const patternStore = createStudioStore(DEMO_PROJECT);
+    await expect(apply(patternStore, [
+      { type: "change_clip_pattern", clip_id: { id: "bass-a" }, pattern_id: { id: "afterglow" } },
+      { type: "change_clip_pattern", clip_id: { id: "bass-b" }, pattern_id: { id: "afterglow" } },
+      { type: "delete_pattern", pattern_id: { id: "orbit" }, delete_clips: false },
+    ])).resolves.toMatchObject({ success: true });
+
+    for (const [change, field] of [
+      [{ type: "delete_track", track_id: { id: "drums" }, delete_clips: false }, "delete_clips"],
+      [{ type: "delete_pattern", pattern_id: { id: "orbit" }, delete_clips: false }, "delete_clips"],
+    ] as const) {
+      await expect(apply(createStudioStore(DEMO_PROJECT), [change, noOp])).resolves.toMatchObject({
+        success: false, error: { code: "DEPENDENCIES_EXIST", field, change_index: 0 },
+      });
+    }
+  });
+
+  test.each([
+    ["rename_project", { name: "Renamed" }, { type: "rename_project", name: "Renamed" }],
+    ["set_tempo", { bpm: 126 }, { type: "set_tempo", bpm: 126 }],
+    ["set_master_volume", { volume_db: -6 }, { type: "set_master_volume", volume_db: -6 }],
+    ["create_track", { kind: "synth", instrument_id: "synth.pad", name: "New" },
+      { type: "create_track", kind: "synth", instrument_id: "synth.pad", name: "New" }],
+    ["rename_track", { track_id: "bass", name: "Renamed" },
+      { type: "rename_track", track_id: { id: "bass" }, name: "Renamed" }],
+    ["set_track_instrument", { track_id: "bass", instrument_id: "synth.pad" },
+      { type: "set_track_instrument", track_id: { id: "bass" }, instrument_id: "synth.pad" }],
+    ["reorder_track", { track_id: "bass", position: 1 },
+      { type: "reorder_track", track_id: { id: "bass" }, position: 1 }],
+    ["set_track_mix", { track_id: "bass", volume_db: -4, pan: 0.25 },
+      { type: "set_track_mix", track_id: { id: "bass" }, volume_db: -4, pan: 0.25 }],
+    ["set_track_mute", { track_id: "bass", muted: true },
+      { type: "set_track_mute", track_id: { id: "bass" }, muted: true }],
+    ["set_track_solo", { track_id: "bass", soloed: true },
+      { type: "set_track_solo", track_id: { id: "bass" }, soloed: true }],
+    ["delete_track", { track_id: "drums", delete_clips: true },
+      { type: "delete_track", track_id: { id: "drums" }, delete_clips: true }],
+    ["create_pattern", { kind: "synth", name: "New", length_bars: 1 },
+      { type: "create_pattern", kind: "synth", name: "New", length_bars: 1 }],
+    ["rename_pattern", { pattern_id: "orbit", name: "Renamed" },
+      { type: "rename_pattern", pattern_id: { id: "orbit" }, name: "Renamed" }],
+    ["resize_pattern", { pattern_id: "unused-idea", length_bars: 2 },
+      { type: "resize_pattern", pattern_id: { id: "unused-idea" }, length_bars: 2 }],
+    ["duplicate_pattern", { pattern_id: "orbit", name: "Copy" },
+      { type: "duplicate_pattern", pattern_id: { id: "orbit" }, name: "Copy" }],
+    ["delete_pattern", { pattern_id: "unused-idea", delete_clips: false },
+      { type: "delete_pattern", pattern_id: { id: "unused-idea" }, delete_clips: false }],
+    ["place_pattern", { pattern_id: "unused-idea", track_id: "bass", start_bar: 9 },
+      { type: "place_pattern", pattern_id: { id: "unused-idea" }, track_id: { id: "bass" }, start_bar: 9 }],
+    ["move_clip", { clip_id: "bass-b", start_bar: 9 },
+      { type: "move_clip", clip_id: { id: "bass-b" }, start_bar: 9 }],
+    ["change_clip_pattern", { clip_id: "bass-a", pattern_id: "afterglow" },
+      { type: "change_clip_pattern", clip_id: { id: "bass-a" }, pattern_id: { id: "afterglow" } }],
+    ["set_clip_repeats", { clip_id: "bass-a", repeat_count: 1 },
+      { type: "set_clip_repeats", clip_id: { id: "bass-a" }, repeat_count: 1 }],
+    ["duplicate_clip", { clip_id: "bass-b" }, { type: "duplicate_clip", clip_id: { id: "bass-b" } }],
+    ["make_clip_unique", { clip_id: "bass-a", pattern_name: "Unique" },
+      { type: "make_clip_unique", clip_id: { id: "bass-a" }, pattern_name: "Unique" }],
+    ["delete_clip", { clip_id: "bass-a" }, { type: "delete_clip", clip_id: { id: "bass-a" } }],
+    ["add_drum_hits", { pattern_id: "neon", hits: [{ sound_id: "snare", step: 1 }] },
+      { type: "add_drum_hits", pattern_id: { id: "neon" }, hits: [{ sound_id: "snare", step: 1 }] }],
+    ["delete_drum_hits", { pattern_id: "neon", hit_ids: ["kick-0"] },
+      { type: "delete_drum_hits", pattern_id: { id: "neon" }, hit_ids: [{ id: "kick-0" }] }],
+    ["add_notes", { pattern_id: "afterglow", notes: [{ midi_note: 60, start_step: 30, length_steps: 2 }] },
+      { type: "add_notes", pattern_id: { id: "afterglow" }, notes: [{ midi_note: 60, start_step: 30, length_steps: 2 }] }],
+    ["edit_notes", { pattern_id: "afterglow", notes: [{ note_id: "lead-1", midi_note: 73 }] },
+      { type: "edit_notes", pattern_id: { id: "afterglow" }, notes: [{ note_id: { id: "lead-1" }, midi_note: 73 }] }],
+    ["duplicate_notes", { pattern_id: "afterglow", note_ids: ["lead-1"], step_offset: 1, pitch_offset: 0 },
+      { type: "duplicate_notes", pattern_id: { id: "afterglow" }, note_ids: [{ id: "lead-1" }], step_offset: 1, pitch_offset: 0 }],
+    ["delete_notes", { pattern_id: "afterglow", note_ids: ["lead-1"] },
+      { type: "delete_notes", pattern_id: { id: "afterglow" }, note_ids: [{ id: "lead-1" }] }],
+  ] as const)("%s matches its direct mutation result", async (name, directInput, batchChange) => {
+    const directStore = createStudioStore(DEMO_PROJECT);
+    const batchStore = createStudioStore(DEMO_PROJECT);
+    const generatedIds = ["generated-1", "generated-2", "generated-3", "generated-4", "generated-5"];
+    const directIds = [...generatedIds];
+    const batchIds = [...generatedIds];
+
+    const direct = await executeMutation(directStore, name, {
+      request_id: `direct-${name}`, ...directInput,
+    }, () => directIds.shift()!);
+    const batched = await apply(batchStore, [batchChange, noOp], () => batchIds.shift()!, {
+      request_id: `batch-${name}`,
+    });
+
+    expect(direct, name).toMatchObject({ success: true });
+    expect(batched, name).toMatchObject({ success: true });
+    expect(batchStore.getState().project, name).toEqual(directStore.getState().project);
+
+    const directAction = directStore.getState().history[0]!.action;
+    const batchAction = batchStore.getState().history[0]!.action;
+    if (directAction.kind === "restore" || batchAction.kind !== "batch") {
+      throw new Error(`Unexpected history action for ${name}.`);
+    }
+    const directOperations = directAction.kind === "operation"
+      ? [directAction.operation]
+      : directAction.operations;
+    expect(batchAction.operations.slice(0, directOperations.length), name).toEqual(directOperations);
+  });
+
+  test.each([
+    ["set_tempo", { bpm: 300 }, { type: "set_tempo", bpm: 300 }],
+    ["rename_track", { track_id: "missing", name: "Missing" },
+      { type: "rename_track", track_id: { id: "missing" }, name: "Missing" }],
+    ["rename_pattern", { pattern_id: "missing", name: "Missing" },
+      { type: "rename_pattern", pattern_id: { id: "missing" }, name: "Missing" }],
+    ["move_clip", { clip_id: "missing", start_bar: 1 },
+      { type: "move_clip", clip_id: { id: "missing" }, start_bar: 1 }],
+    ["delete_drum_hits", { pattern_id: "neon", hit_ids: ["missing"] },
+      { type: "delete_drum_hits", pattern_id: { id: "neon" }, hit_ids: [{ id: "missing" }] }],
+    ["delete_notes", { pattern_id: "afterglow", note_ids: ["missing"] },
+      { type: "delete_notes", pattern_id: { id: "afterglow" }, note_ids: [{ id: "missing" }] }],
+  ] as const)("%s preserves direct validation code and field", async (name, directInput, batchChange) => {
+    const direct = await executeMutation(createStudioStore(DEMO_PROJECT), name, {
+      request_id: `invalid-direct-${name}`, ...directInput,
+    });
+    const batched = await apply(createStudioStore(DEMO_PROJECT), [batchChange, noOp], () => "unused", {
+      request_id: `invalid-batch-${name}`,
+    });
+
+    expect(direct).toMatchObject({ success: false });
+    expect(batched).toMatchObject({ success: false, error: { change_index: 0 } });
+    expect(batched.error).toMatchObject({ code: direct.error!.code, field: direct.error!.field });
   });
 });

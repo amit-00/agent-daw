@@ -134,6 +134,8 @@ export type ToolResult<T> =
 
 type Schema = Readonly<Record<string, unknown>>;
 
+export const LOCAL_REFERENCE_PATTERN = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
+
 const string = (minimum = 1, maximum?: number): Schema => ({
   type: "string",
   minLength: minimum,
@@ -165,7 +167,7 @@ const LOCAL_REF: Schema = {
   type: "string",
   minLength: 1,
   maxLength: 64,
-  pattern: "^[A-Za-z][A-Za-z0-9_-]{0,63}$",
+  pattern: LOCAL_REFERENCE_PATTERN.source,
 };
 const NAME_40 = string(1, 40);
 const NAME_80 = string(1, 80);
