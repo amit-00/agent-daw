@@ -1313,6 +1313,38 @@ test("project revision changes once for changed dispatches and not for no-op ret
   assert.equal(service.getState().revision, 2);
 });
 
+test("a net-zero batch does not create history or change revision", () => {
+  const service = createTestService(blankProject());
+  const result = service.dispatch({
+    id: id(703), source: "manual", label: "Rename and restore", kind: "batch",
+    operations: [
+      { type: "project.update", changes: { name: "Temporary" } },
+      { type: "project.update", changes: { name: "Untitled" } },
+    ],
+  });
+  const undone = service.undo();
+  const redone = service.redo();
+
+  assert.equal(result.changed, false);
+  assert.deepEqual(result.changes, {
+    created: {
+      projectIds: [], trackIds: [], patternIds: [], drumHitIds: [], synthNoteIds: [], arrangementClipIds: [],
+    },
+    updated: {
+      projectIds: [], trackIds: [], patternIds: [], drumHitIds: [], synthNoteIds: [], arrangementClipIds: [],
+    },
+    deleted: {
+      projectIds: [], trackIds: [], patternIds: [], drumHitIds: [], synthNoteIds: [], arrangementClipIds: [],
+    },
+  });
+  assert.equal(service.getState().history.length, 0);
+  assert.equal(service.getState().historyCursor, -1);
+  assert.equal(service.getState().revision, 0);
+  assert.equal(undone.ok, false);
+  assert.equal(redone.ok, false);
+  assert.deepEqual(service.getState().project, blankProject());
+});
+
 test("history controls and changed restores each increment revision once", () => {
   const service = createTestService(blankProject());
   const created = service.dispatch(createBassTrackCommand(id(710)));

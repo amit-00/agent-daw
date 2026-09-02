@@ -92,8 +92,8 @@ export class ProjectService {
       historyOperations.push(historyOperation);
     }
 
-    const changes = mergeChangeSummaries(changeSummaries);
-    const changed = nextProject !== this.project;
+    const changed = JSON.stringify(nextProject) !== JSON.stringify(this.project);
+    const changes = changed ? mergeChangeSummaries(changeSummaries) : emptyChangeSummary();
     const historyEntry = changed
       ? this.commit(
         command.id,
