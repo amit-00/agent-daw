@@ -1,11 +1,17 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { useEffect } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import type { StoreApi } from "zustand/vanilla";
 
 import { Arrangement } from "@/components/arrangement/Arrangement";
 import { DEMO_PROJECT } from "@/data/studio-data";
-import { StudioProvider, useStudioStore } from "@/stores/studio-provider";
+import { StudioProvider, useStudioStore, useStudioStoreApi, type StudioPersistenceSession } from "@/stores/studio-provider";
 import type { StudioState } from "@/stores/studio-store";
+
+const TEST_PERSISTENCE_SESSION: StudioPersistenceSession = {
+  service: null,
+  baseline: { status: "unsaved", updatedAt: null, errorMessage: null },
+};
 
 class TestPointerEvent extends MouseEvent {
   readonly pointerId: number;
@@ -16,15 +22,17 @@ class TestPointerEvent extends MouseEvent {
 }
 
 let state: StudioState;
+let store: StoreApi<StudioState>;
 function Probe(): null {
   const snapshot = useStudioStore((value) => value);
-  useEffect(() => { state = snapshot; }, [snapshot]);
+  const storeApi = useStudioStoreApi();
+  useEffect(() => { state = snapshot; store = storeApi; }, [snapshot, storeApi]);
   return null;
 }
 
 beforeEach(() => {
   vi.stubGlobal("PointerEvent", TestPointerEvent);
-  render(<StudioProvider initialProject={DEMO_PROJECT}><Arrangement /><Probe /></StudioProvider>);
+  render(<StudioProvider initialProject={DEMO_PROJECT} persistenceSession={TEST_PERSISTENCE_SESSION}><Arrangement /><Probe /></StudioProvider>);
 });
 afterEach(() => vi.unstubAllGlobals());
 
@@ -55,6 +63,94 @@ it("renders a draggable playhead in timeline content coordinates", () => {
   expect(playhead).toHaveStyle({ left: "154px" });
 });
 
+it("renders the engine position and clamps seeking to arrangement content", () => {
+  const playhead = screen.getByRole("slider", { name: "Playhead" });
+  const arrangement = screen.getByRole("region", { name: "Song arrangement" });
+  vi.spyOn(arrangement, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 1_754, 650));
+  Object.defineProperties(playhead, {
+    setPointerCapture: { value: vi.fn(), configurable: true },
+    hasPointerCapture: { value: () => true, configurable: true },
+    releasePointerCapture: { value: vi.fn(), configurable: true },
+  });
+
+  act(() => store.getState().seekPlayback(32));
+  expect(playhead).toHaveAttribute("aria-valuenow", "32");
+
+  fireEvent.pointerDown(playhead, { pointerId: 2, button: 0, clientX: 354 });
+  fireEvent.pointerMove(playhead, { pointerId: 2, clientX: 5_000 });
+  fireEvent.pointerUp(playhead, { pointerId: 2, clientX: 5_000 });
+  expect(playhead).toHaveAttribute(
+    "aria-valuenow",
+    String(store.getState().audio.snapshot.arrangementEndStep),
+  );
+  expect(playhead).toHaveAttribute(
+    "aria-valuemax",
+    String(store.getState().audio.snapshot.arrangementEndStep),
+  );
+});
+
+it("previews pointer movement but seeks the engine once on release", () => {
+  const playhead = screen.getByRole("slider", { name: "Playhead" });
+  const arrangement = screen.getByRole("region", { name: "Song arrangement" });
+  vi.spyOn(arrangement, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 1_754, 650));
+  Object.defineProperties(playhead, {
+    setPointerCapture: { value: vi.fn(), configurable: true },
+    hasPointerCapture: { value: () => true, configurable: true },
+    releasePointerCapture: { value: vi.fn(), configurable: true },
+  });
+  const committedBeforeDrag = store.getState().audio.snapshot.positionStep;
+
+  fireEvent.pointerDown(playhead, { pointerId: 3, button: 0, clientX: 154 });
+  fireEvent.pointerMove(playhead, { pointerId: 3, clientX: 254 });
+  fireEvent.pointerMove(playhead, { pointerId: 3, clientX: 354 });
+  const previewStep = Number(playhead.getAttribute("aria-valuenow"));
+  expect(previewStep).not.toBe(committedBeforeDrag);
+  expect(store.getState().audio.snapshot.positionStep).toBe(committedBeforeDrag);
+
+  fireEvent.pointerUp(playhead, { pointerId: 3, clientX: 354 });
+  expect(store.getState().audio.snapshot.positionStep).toBe(previewStep);
+});
+
+it("holds the integer pointer-down preview while the engine advances", () => {
+  const playhead = screen.getByRole("slider", { name: "Playhead" });
+  const arrangement = screen.getByRole("region", { name: "Song arrangement" });
+  vi.spyOn(arrangement, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 1_754, 650));
+  Object.defineProperties(playhead, {
+    setPointerCapture: { value: vi.fn(), configurable: true },
+    hasPointerCapture: { value: () => true, configurable: true },
+    releasePointerCapture: { value: vi.fn(), configurable: true },
+  });
+  act(() => store.getState().seekPlayback(7.8));
+  const pointerDownX = 154 + 7.8 / 16 * 100;
+
+  fireEvent.pointerDown(playhead, { pointerId: 5, button: 0, clientX: pointerDownX });
+  act(() => store.getState().seekPlayback(20));
+
+  expect(playhead).toHaveAttribute("aria-valuenow", "8");
+  fireEvent.pointerUp(playhead, { pointerId: 5, clientX: pointerDownX });
+  expect(store.getState().audio.snapshot.positionStep).toBe(8);
+});
+
+it.each(["pointercancel", "lostcapture"])("discards a playhead preview on %s without seeking", (cancel) => {
+  const playhead = screen.getByRole("slider", { name: "Playhead" });
+  const arrangement = screen.getByRole("region", { name: "Song arrangement" });
+  vi.spyOn(arrangement, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 1_754, 650));
+  Object.defineProperties(playhead, {
+    setPointerCapture: { value: vi.fn(), configurable: true },
+    hasPointerCapture: { value: () => true, configurable: true },
+    releasePointerCapture: { value: vi.fn(), configurable: true },
+  });
+  const committedStep = store.getState().audio.snapshot.positionStep;
+
+  fireEvent.pointerDown(playhead, { pointerId: 4, button: 0, clientX: 154 });
+  fireEvent.pointerMove(playhead, { pointerId: 4, clientX: 354 });
+  if (cancel === "pointercancel") fireEvent.pointerCancel(playhead, { pointerId: 4 });
+  if (cancel === "lostcapture") fireEvent.lostPointerCapture(playhead, { pointerId: 4 });
+
+  expect(playhead).toHaveAttribute("aria-valuenow", String(committedStep));
+  expect(store.getState().audio.snapshot.positionStep).toBe(committedStep);
+});
+
 it("snaps a dragged playhead without moving it when the arrangement scrolls", () => {
   const arrangement = screen.getByRole("region", { name: "Song arrangement" });
   const scroller = arrangement.parentElement!;
@@ -71,12 +167,14 @@ it("snaps a dragged playhead without moving it when the arrangement scrolls", ()
   fireEvent.pointerUp(playhead, { pointerId: 2, clientX: 407 });
   expect(playhead).toHaveAttribute("aria-valuenow", "40");
   expect(playhead).toHaveStyle({ left: "404px" });
+  expect(store.getState().audio.snapshot.positionStep).toBe(40);
   expect(state.history).toHaveLength(0);
 
   scroller.scrollLeft = 300;
   fireEvent.scroll(scroller);
   expect(playhead).toHaveAttribute("aria-valuenow", "40");
   expect(playhead).toHaveStyle({ left: "404px" });
+  expect(store.getState().audio.snapshot.positionStep).toBe(40);
 });
 
 it("moves the playhead one step with the arrow keys", () => {
@@ -84,9 +182,11 @@ it("moves the playhead one step with the arrow keys", () => {
   fireEvent.keyDown(playhead, { key: "ArrowRight" });
   expect(playhead).toHaveAttribute("aria-valuenow", "1");
   expect(playhead).toHaveStyle({ left: "160.25px" });
+  expect(store.getState().audio.snapshot.positionStep).toBe(1);
   fireEvent.keyDown(playhead, { key: "ArrowLeft" });
   fireEvent.keyDown(playhead, { key: "ArrowLeft" });
   expect(playhead).toHaveAttribute("aria-valuenow", "0");
+  expect(store.getState().audio.snapshot.positionStep).toBe(0);
 });
 
 it("previews track order but commits only once on release, with undo", () => {

@@ -1,9 +1,15 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
-import { Studio } from "@/components/Studio";
+import { StudioSession } from "@/components/Studio";
+import { StudioProvider, type StudioPersistenceSession } from "@/stores/studio-provider";
 import { DEMO_PROJECT } from "@/data/studio-data";
 import type { Project } from "@/project";
+
+const TEST_PERSISTENCE_SESSION: StudioPersistenceSession = {
+  service: null,
+  baseline: { status: "unsaved", updatedAt: null, errorMessage: null },
+};
 
 class TestPointerEvent extends MouseEvent {
   readonly pointerId: number;
@@ -29,7 +35,7 @@ beforeEach(() => {
   vi.stubGlobal("cancelAnimationFrame", vi.fn());
   HTMLDialogElement.prototype.showModal = function (): void { this.setAttribute("open", ""); };
   HTMLDialogElement.prototype.close = function (): void { this.removeAttribute("open"); };
-  render(<Studio initialProject={project} />);
+  render(<StudioProvider initialProject={project} persistenceSession={TEST_PERSISTENCE_SESSION}><StudioSession /></StudioProvider>);
   fireEvent.click(screen.getByRole("button", { name: "Show activity" }));
   scroller = screen.getByRole("region", { name: "Song arrangement" }).parentElement!;
   surface = scroller.parentElement!;
