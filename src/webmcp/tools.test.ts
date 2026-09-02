@@ -1653,6 +1653,23 @@ describe("apply_project_changes", () => {
     } } });
   });
 
+  test("binds omitted and duplicate drum-hit refs for later changes", async () => {
+    const createId = vi.fn(() => "created-hit");
+    const response = await apply(createStudioStore(DEMO_PROJECT), [
+      { type: "add_drum_hits", pattern_id: { id: "neon" }, hits: [
+        { ref: "existing", sound_id: "kick", step: 1 },
+        { ref: "created", sound_id: "snare", step: 1 },
+        { ref: "duplicate", sound_id: "snare", step: 1 },
+      ] },
+      { type: "delete_drum_hits", pattern_id: { id: "neon" }, hit_ids: [{ ref: "duplicate" }] },
+    ], createId);
+
+    expect(response).toMatchObject({ success: true, result: { references: {
+      existing: "kick-0", created: "created-hit", duplicate: "created-hit",
+    } } });
+    expect(createId).toHaveBeenCalledOnce();
+  });
+
   test("maps create-pattern clip refs and make-unique pattern refs", async () => {
     const ids = ["pattern-created", "clip-created", "pattern-unique"];
     const response = await apply(createStudioStore(DEMO_PROJECT), [
@@ -1729,6 +1746,7 @@ describe("apply_project_changes", () => {
     const first = await apply(store, [
       { type: "create_track", ref: "track", kind: "synth", instrument_id: "synth.pad" }, noOp,
     ], createId, { request_id: "retained" });
+    expect(Reflect.ownKeys(store.getState().history[0]!.changes)).toEqual(["created", "updated", "deleted"]);
     store.getState().dispatch({
       id: "manual", source: "manual", label: "Manual edit", kind: "operation",
       operation: { type: "project.update", changes: { bpm: 119 } },

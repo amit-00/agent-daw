@@ -1194,17 +1194,22 @@ const translateChange = (
     case "add_drum_hits": {
       const patternId = resolveReference(change.pattern_id, "pattern_id", context);
       const pattern = project.patterns.find(({ id }) => id === patternId);
-      const occupied = new Set(pattern?.kind === "drum"
-        ? pattern.events.map(({ soundId, startStep }) => `${soundId}:${startStep}`)
+      const hitIdsByCell = new Map(pattern?.kind === "drum"
+        ? pattern.events.map(({ id, soundId, startStep }) => [`${soundId}:${startStep}`, id])
         : []);
       const hits: DrumHit[] = [];
       for (const [index, hit] of change.hits.entries()) {
         const startStep = hit.step - 1;
         const cell = `${hit.sound_id}:${startStep}`;
-        if (occupied.has(cell)) continue;
-        occupied.add(cell);
-        hits.push({ id: createEntityId(declaration(hit.ref, `hits.${index}.ref`), context),
-          soundId: hit.sound_id, startStep });
+        const existingId = hitIdsByCell.get(cell);
+        if (existingId !== undefined) {
+          if (hit.ref !== undefined) context.references.set(hit.ref, existingId);
+          continue;
+        }
+        const created = { id: createEntityId(declaration(hit.ref, `hits.${index}.ref`), context),
+          soundId: hit.sound_id, startStep };
+        hitIdsByCell.set(cell, created.id);
+        hits.push(created);
       }
       return hits.length === 0 ? [] : [{ type: "drum-hits.add", patternId, hits }];
     }
@@ -1294,18 +1299,17 @@ interface BatchResultMetadata {
   readonly references: Readonly<Record<string, string>>;
 }
 
-const BATCH_RESULT = Symbol("webmcp.batch-result");
-type RetainedBatchChanges = ChangeSummary & { readonly [BATCH_RESULT]?: BatchResultMetadata };
+const batchResults = new WeakMap<ChangeSummary, BatchResultMetadata>();
 
 const batchResultExtras = (result: DispatchResult): Readonly<Record<string, unknown>> => {
-  const metadata = (result.changes as RetainedBatchChanges)[BATCH_RESULT];
+  const metadata = batchResults.get(result.changes);
   return metadata === undefined
     ? {}
     : { applied_changes: metadata.appliedChanges, references: metadata.references };
 };
 
 const retainBatchResult = (result: DispatchResult, metadata: BatchResultMetadata): void => {
-  Object.defineProperty(result.changes, BATCH_RESULT, { value: metadata });
+  batchResults.set(result.changes, metadata);
 };
 
 const mutationResult = (
