@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StoreApi } from "zustand/vanilla";
 
-import { Studio } from "@/components/Studio";
+import { StudioSession } from "@/components/Studio";
 import { Transport } from "@/components/Transport";
 import { ActivityPanel } from "@/components/ActivityPanel";
 import { DEMO_PROJECT, EMPTY_PROJECT } from "@/data/studio-data";
@@ -20,6 +20,12 @@ function StoreApiProbe({ onStore }: Readonly<{
   return null;
 }
 
+let sessionStore: StoreApi<StudioState> | undefined;
+
+function renderSession(project: typeof DEMO_PROJECT): void {
+  render(<StudioProvider initialProject={project}><StudioSession /><StoreApiProbe onStore={(value) => { sessionStore = value; }} /></StudioProvider>);
+}
+
 beforeEach(() => {
   HTMLDivElement.prototype.setPointerCapture = vi.fn();
   HTMLDivElement.prototype.hasPointerCapture = () => false;
@@ -30,6 +36,144 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe("Studio", () => {
+  it("plays, pauses, and stops from the transport", async () => {
+    const user = userEvent.setup();
+    const contexts: FakeAudioContext[] = [];
+    vi.stubGlobal("AudioContext", class extends FakeAudioContext {
+      constructor() {
+        super();
+        contexts.push(this);
+      }
+    });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(new ArrayBuffer(8))));
+    renderSession(DEMO_PROJECT);
+
+    await user.click(screen.getByRole("button", { name: "Play" }));
+    expect(contexts).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Pause" })).toBeEnabled();
+
+    await user.click(screen.getByRole("button", { name: "Pause" }));
+    expect(screen.getByRole("button", { name: "Play" })).toBeEnabled();
+
+    await user.click(screen.getByRole("button", { name: "Stop" }));
+    expect(screen.getByLabelText("Playback position")).toHaveTextContent("0:00.0");
+  });
+
+  it("restarts playback from zero at the arrangement end", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal("AudioContext", FakeAudioContext);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(new ArrayBuffer(8))));
+    renderSession(DEMO_PROJECT);
+    act(() => sessionStore!.getState().seekPlayback(sessionStore!.getState().audio.snapshot.arrangementEndStep));
+
+    await user.click(screen.getByRole("button", { name: "Play" }));
+
+    expect(sessionStore!.getState().audio.snapshot).toMatchObject({ status: "playing", positionStep: 0 });
+    expect(screen.getByLabelText("Playback position")).toHaveTextContent("0:00.0");
+  });
+
+  it("keeps audio and persistence failures separate from edit errors", async () => {
+    renderSession(DEMO_PROJECT);
+    await act(async () => {
+      const token = sessionStore!.getState().beginPersistenceSave();
+      sessionStore!.getState().failPersistenceSave(token, "Browser storage is unavailable");
+      sessionStore!.getState().selectTrack("missing");
+    });
+
+    expect(sessionStore!.getState().persistence.errorMessage).toBe("Browser storage is unavailable");
+    expect(screen.getAllByRole("alert").map((alert) => alert.textContent)).toEqual([
+      "That track no longer exists. Select another track.",
+      "Storage: Browser storage is unavailable",
+    ]);
+  });
+
+  it("reports an empty arrangement without disabling editing", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal("AudioContext", FakeAudioContext);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(new ArrayBuffer(8))));
+    renderSession({ ...DEMO_PROJECT, arrangement: [] });
+
+    await user.click(screen.getByRole("button", { name: "Play" }));
+
+    expect(screen.getByRole("button", { name: "Play" })).toBeEnabled();
+    expect(screen.getByRole("alert")).toHaveTextContent("Project arrangement is empty");
+    expect(screen.getByRole("button", { name: "Add pattern" })).toBeEnabled();
+  });
+
+  it("shows blocked audio retry guidance while editing remains enabled", async () => {
+    const user = userEvent.setup();
+    class SuspendedAudioContext extends FakeAudioContext {
+      async resume(): Promise<void> {}
+    }
+    vi.stubGlobal("AudioContext", SuspendedAudioContext);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(new ArrayBuffer(8))));
+    renderSession(DEMO_PROJECT);
+
+    await user.click(screen.getByRole("button", { name: "Play" }));
+
+    expect(screen.getByRole("alert")).toHaveTextContent("Audio context is suspended; retry from a user gesture");
+    expect(screen.getByRole("button", { name: "Add pattern" })).toBeEnabled();
+  });
+
+  it("reports degraded samples while playing available sounds", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal("AudioContext", FakeAudioContext);
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => url.endsWith("hat.wav")
+      ? new Response(null, { status: 404 })
+      : new Response(new ArrayBuffer(8))));
+    renderSession(DEMO_PROJECT);
+
+    await user.click(screen.getByRole("button", { name: "Play" }));
+
+    expect(screen.getByRole("button", { name: "Pause" })).toBeEnabled();
+    expect(screen.getByRole("alert")).toHaveTextContent(/hat.*unavailable/i);
+  });
+
+  it("disables transport after the audio context closes", async () => {
+    const user = userEvent.setup();
+    const contexts: FakeAudioContext[] = [];
+    class ClosingAudioContext extends FakeAudioContext {
+      constructor() {
+        super();
+        contexts.push(this);
+      }
+
+      async resume(): Promise<void> {
+        if (this.state === "closed") {
+          throw new DOMException("The audio context is closed", "InvalidStateError");
+        }
+        await super.resume();
+      }
+    }
+    vi.stubGlobal("AudioContext", ClosingAudioContext);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(new ArrayBuffer(8))));
+    renderSession(DEMO_PROJECT);
+    await user.click(screen.getByRole("button", { name: "Play" }));
+    await screen.findByRole("button", { name: "Pause" });
+    await user.click(screen.getByRole("button", { name: "Pause" }));
+    await screen.findByRole("button", { name: "Play" });
+    await contexts[0]!.close();
+
+    await user.click(screen.getByRole("button", { name: "Play" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Audio engine is closed; create a new engine");
+    expect(screen.getByRole("button", { name: "Play" })).toBeDisabled();
+  });
+
+  it("clears pending playback after an unexpected resume failure", async () => {
+    const user = userEvent.setup();
+    class RejectingAudioContext extends FakeAudioContext {
+      async resume(): Promise<void> { throw new TypeError("invalid audio context"); }
+    }
+    vi.stubGlobal("AudioContext", RejectingAudioContext);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(new ArrayBuffer(8))));
+    renderSession(DEMO_PROJECT);
+
+    await user.click(screen.getByRole("button", { name: "Play" }));
+
+    expect(screen.getByRole("button", { name: "Play" })).toBeEnabled();
+    expect(screen.getByRole("alert")).toHaveTextContent("Audio playback failed. Try again or reload.");
+  });
   it("forwards each changed project identity to the mounted audio engine", () => {
     let store: StoreApi<StudioState> | undefined;
     const project = { ...DEMO_PROJECT, arrangement: [{ ...DEMO_PROJECT.arrangement[0]!, id: "only" }] };
@@ -127,9 +271,9 @@ describe("Studio", () => {
 
   it("uses a track's assigned color for its clips and pattern notes", async () => {
     const user = userEvent.setup();
-    render(<Studio initialProject={{ ...DEMO_PROJECT,
+    renderSession({ ...DEMO_PROJECT,
       tracks: DEMO_PROJECT.tracks.map((track) => track.id === "bass" ? { ...track, color: "#70bd72" } : track),
-    }} />);
+    });
     const clip = within(screen.getByRole("region", { name: "Low Orbit lane" })).getAllByRole("button", { name: "Select Low Orbit phrase" })[0]!;
     expect(clip).toHaveStyle({ background: "color-mix(in srgb, color-mix(in srgb, #70bd72 88%, white) 80%, transparent)" });
     await user.click(clip);
@@ -140,7 +284,7 @@ describe("Studio", () => {
 
   it("creates an unplaced pattern, renames it, and places it using one-based bars", async () => {
     const user = userEvent.setup();
-    render(<Studio initialProject={DEMO_PROJECT} />);
+    renderSession(DEMO_PROJECT);
     await user.click(screen.getByRole("button", { name: "Add pattern" }));
     await user.selectOptions(screen.getByLabelText("Pattern editor"), "synth");
     await user.click(screen.getByRole("button", { name: "Create pattern" }));
@@ -164,7 +308,7 @@ describe("Studio", () => {
 
   it("creates and places from an empty lane in one edit and offers numeric creation", async () => {
     const user = userEvent.setup();
-    render(<Studio initialProject={{ ...DEMO_PROJECT, arrangement: [] }} />);
+    renderSession({ ...DEMO_PROJECT, arrangement: [] });
     const lane = screen.getByRole("region", { name: "Low Orbit lane" });
     vi.spyOn(lane, "getBoundingClientRect").mockReturnValue(new DOMRect(100, 0, 1_120, 112));
     fireEvent.doubleClick(lane, { clientX: 240 });
@@ -181,7 +325,7 @@ describe("Studio", () => {
 
   it("edits clip routing and repeats, duplicates sharing, and makes only one clip unique", async () => {
     const user = userEvent.setup();
-    render(<Studio initialProject={{ ...DEMO_PROJECT, arrangement: [DEMO_PROJECT.arrangement[2]!] }} />);
+    renderSession({ ...DEMO_PROJECT, arrangement: [DEMO_PROJECT.arrangement[2]!] });
     await user.click(screen.getByRole("button", { name: "Edit clip Low Orbit phrase at bar 1" }));
     await user.selectOptions(screen.getByLabelText("Destination track"), "chords");
     await user.clear(screen.getByLabelText("Starting bar"));
@@ -202,7 +346,7 @@ describe("Studio", () => {
 
   it("confirms all pattern placements before deletion and can cancel or undo", async () => {
     const user = userEvent.setup();
-    render(<Studio initialProject={DEMO_PROJECT} />);
+    renderSession(DEMO_PROJECT);
     await user.click(screen.getByRole("button", { name: "Edit pattern Neon beat" }));
     await user.click(screen.getByRole("button", { name: "Delete pattern" }));
     expect(screen.getByRole("dialog")).toHaveTextContent("2 placements");
@@ -218,7 +362,7 @@ describe("Studio", () => {
 
   it("keeps rejected clip edits unchanged and discards unapplied fields on Escape", async () => {
     const user = userEvent.setup();
-    render(<Studio initialProject={DEMO_PROJECT} />);
+    renderSession(DEMO_PROJECT);
     await user.click(screen.getByRole("button", { name: "Edit clip Low Orbit phrase at bar 1" }));
     await user.clear(screen.getByLabelText("Starting bar"));
     await user.type(screen.getByLabelText("Starting bar"), "2");
@@ -235,7 +379,7 @@ describe("Studio", () => {
 
   it("opens track movement controls with the keyboard and cancels without history", async () => {
     const user = userEvent.setup();
-    render(<Studio initialProject={DEMO_PROJECT} />);
+    renderSession(DEMO_PROJECT);
     screen.getByRole("button", { name: "Reorder Neon Kit" }).focus();
     await user.keyboard("{Enter}");
     expect(screen.getByRole("button", { name: "Move down" })).toBeVisible();
@@ -249,7 +393,7 @@ describe("Studio", () => {
     { instrumentId: "synth.bass", name: "Bass", incompatibleInstrument: "Basic drums" },
   ])("creates $name from one instrument selector and undoes it", async ({ instrumentId, name, incompatibleInstrument }) => {
     const user = userEvent.setup();
-    render(<Studio initialProject={EMPTY_PROJECT} />);
+    renderSession(EMPTY_PROJECT);
     await user.click(screen.getByRole("button", { name: "Add track" }));
     const selector = screen.getByRole("combobox", { name: "Instrument" });
     await user.selectOptions(selector, "synth.pad");
@@ -269,7 +413,7 @@ describe("Studio", () => {
 
   it("renames, changes preset, and reorders a track in arrangement and mixer", async () => {
     const user = userEvent.setup();
-    render(<Studio initialProject={DEMO_PROJECT} />);
+    renderSession(DEMO_PROJECT);
     await user.click(screen.getByRole("button", { name: "Edit Low Orbit" }));
     await user.clear(screen.getByLabelText("Track name"));
     await user.type(screen.getByLabelText("Track name"), "Sub bass");
@@ -289,7 +433,7 @@ describe("Studio", () => {
 
   it("confirms affected clips before deleting a track and keeps reusable patterns", async () => {
     const user = userEvent.setup();
-    render(<Studio initialProject={DEMO_PROJECT} />);
+    renderSession(DEMO_PROJECT);
     await user.click(screen.getByRole("button", { name: "Edit Neon Kit" }));
     await user.click(screen.getByRole("button", { name: "Delete track" }));
     expect(screen.getByRole("dialog")).toHaveTextContent("2 clips");
@@ -307,7 +451,7 @@ describe("Studio", () => {
 
   it("selects shared clips and unplaced patterns using project content", async () => {
     const user = userEvent.setup();
-    render(<Studio initialProject={DEMO_PROJECT} />);
+    renderSession(DEMO_PROJECT);
     await user.click(within(screen.getByRole("region", { name: "Glasshouse lane" })).getAllByRole("button", { name: "Select Glasshouse" })[1]!);
     expect(screen.getByRole("region", { name: "Pattern editor for Glasshouse" })).toHaveTextContent("2 placements");
     expect(within(screen.getByRole("region", { name: "Pattern editor for Glasshouse" })).getByText("C4")).toBeVisible();
@@ -317,15 +461,15 @@ describe("Studio", () => {
   });
 
   it("renders empty sessions without assuming a track or pattern", () => {
-    render(<Studio initialProject={EMPTY_PROJECT} />);
+    renderSession(EMPTY_PROJECT);
     expect(screen.getByText("Add a track to start arranging.")).toBeVisible();
     expect(screen.getByText("Select a pattern to view its notes or hits.")).toBeVisible();
   });
 
   it("renders exact project mixer values in project track order without simulated meters", async () => {
     const user = userEvent.setup();
-    render(<Studio initialProject={{ ...DEMO_PROJECT, name: "Test song", bpm: 96,
-      tracks: [...DEMO_PROJECT.tracks].reverse() }} />);
+    renderSession({ ...DEMO_PROJECT, name: "Test song", bpm: 96,
+      tracks: [...DEMO_PROJECT.tracks].reverse() });
     expect(screen.getByText("Test song")).toBeVisible();
     expect(screen.getByLabelText("Project tempo")).toHaveTextContent("96");
     await user.click(screen.getByRole("button", { name: "Mixer" }));
@@ -340,7 +484,7 @@ describe("Studio", () => {
 
   it("synchronizes track mute controls and commits a slider gesture once", async () => {
     const user = userEvent.setup();
-    render(<Studio initialProject={DEMO_PROJECT} />);
+    renderSession(DEMO_PROJECT);
     const trackHeader = screen.getByRole("group", { name: "Low Orbit track" });
     await user.click(within(trackHeader).getByRole("button", { name: "Mute Low Orbit" }));
     expect(within(trackHeader).getByRole("button", { name: "Unmute Low Orbit" })).toHaveAttribute("aria-pressed", "true");
@@ -368,7 +512,7 @@ describe("Studio", () => {
 
   it("commits numeric mixer entry once and cancels an unfinished value", async () => {
     const user = userEvent.setup();
-    render(<Studio initialProject={DEMO_PROJECT} />);
+    renderSession(DEMO_PROJECT);
     await user.click(screen.getByRole("button", { name: "Mixer" }));
     const channel = screen.getByRole("group", { name: "Low Orbit channel" });
     const value = within(channel).getByRole("spinbutton", { name: "Low Orbit volume value" });
@@ -394,7 +538,7 @@ describe("Studio", () => {
     vi.stubGlobal("AudioContext", context);
     vi.stubGlobal("fetch", fetch);
     const user = userEvent.setup();
-    render(<Studio initialProject={DEMO_PROJECT} />);
+    renderSession(DEMO_PROJECT);
     expect(screen.queryByRole("complementary", { name: "Activity" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Show activity" }));
     expect(screen.getByRole("complementary", { name: "Activity" })).toBeVisible();
@@ -406,7 +550,7 @@ describe("Studio", () => {
 
   it("resizes, closes, and restores the track editor", async () => {
     const user = userEvent.setup();
-    render(<Studio initialProject={DEMO_PROJECT} />);
+    renderSession(DEMO_PROJECT);
     const editor = screen.getByRole("complementary", { name: "Track editor" });
     const separator = screen.getByRole("separator", { name: "Resize track editor" });
     vi.spyOn(editor.parentElement!, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 1_200, 800));
@@ -427,7 +571,7 @@ describe("Studio", () => {
   });
 
   it("resizes the track editor from the keyboard", () => {
-    render(<Studio initialProject={DEMO_PROJECT} />);
+    renderSession(DEMO_PROJECT);
     const editor = screen.getByRole("complementary", { name: "Track editor" });
     vi.spyOn(editor.parentElement!, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 1_200, 800));
     const separator = screen.getByRole("separator", { name: "Resize track editor" });
@@ -493,7 +637,7 @@ describe("Studio", () => {
 
   it("handles undo and redo shortcuts outside editable fields and dialogs", async () => {
     const user = userEvent.setup();
-    render(<Studio initialProject={DEMO_PROJECT} />);
+    renderSession(DEMO_PROJECT);
     const track = screen.getByRole("group", { name: "Low Orbit track" });
     await user.click(within(track).getByRole("button", { name: "Mute Low Orbit" }));
     await user.click(screen.getByRole("button", { name: "Edit Low Orbit" }));
@@ -513,7 +657,7 @@ describe("Studio", () => {
 
   it("deletes only the focused arrangement clip", async () => {
     const user = userEvent.setup();
-    render(<Studio initialProject={DEMO_PROJECT} />);
+    renderSession(DEMO_PROJECT);
     const lane = screen.getByRole("region", { name: "Low Orbit lane" });
     const clips = within(lane).getAllByRole("button", { name: "Select Low Orbit phrase" });
     clips[0]!.focus();

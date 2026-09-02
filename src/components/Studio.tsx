@@ -10,9 +10,17 @@ import { TrackEditor } from "@/components/editor/TrackEditor";
 import type { Project } from "@/project";
 import { StudioProvider, useStudioStore } from "@/stores/studio-provider";
 
-function StudioSession(): ReactElement {
-  const { errorMessage, history, historyCursor, undo, redo } = useStudioStore((state) => state);
+export function StudioSession(): ReactElement {
+  const errorMessage = useStudioStore((state) => state.errorMessage);
+  const audio = useStudioStore((state) => state.audio);
+  const persistence = useStudioStore((state) => state.persistence);
+  const history = useStudioStore((state) => state.history);
+  const historyCursor = useStudioStore((state) => state.historyCursor);
+  const undo = useStudioStore((state) => state.undo);
+  const redo = useStudioStore((state) => state.redo);
   const [previewEndBar, setPreviewEndBar] = useState<number | null>(null);
+  const audioMessage = audio.errorMessage ?? (audio.snapshot.unavailableSoundIds.length > 0
+    ? `Playback is degraded: ${audio.snapshot.unavailableSoundIds.join(", ")} unavailable.` : null);
 
   function handleKeyboard(event: KeyboardEvent<HTMLElement>): void {
     const target = event.target;
@@ -35,6 +43,8 @@ function StudioSession(): ReactElement {
       <section className="flex h-dvh min-w-0 flex-col overflow-hidden" id="studio">
         <Transport />
         {errorMessage && <p role="alert" className="border-b border-rose-400/20 bg-rose-950/60 px-4 py-2 text-xs text-rose-200">{errorMessage}</p>}
+        {audioMessage && <p role="alert" className="border-b border-amber-400/20 bg-amber-950/60 px-4 py-2 text-xs text-amber-100">Audio: {audioMessage}</p>}
+        {persistence.errorMessage && <p role="alert" className="border-b border-rose-400/20 bg-rose-950/60 px-4 py-2 text-xs text-rose-200">Storage: {persistence.errorMessage}</p>}
         <ArrangementGestures onPreviewEndBar={setPreviewEndBar}>
           <Arrangement previewEndBar={previewEndBar} />
           <TrackEditor />

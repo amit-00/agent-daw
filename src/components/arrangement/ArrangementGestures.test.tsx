@@ -1,7 +1,8 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
-import { Studio } from "@/components/Studio";
+import { StudioSession } from "@/components/Studio";
+import { StudioProvider } from "@/stores/studio-provider";
 import { DEMO_PROJECT } from "@/data/studio-data";
 import type { Project } from "@/project";
 
@@ -29,7 +30,7 @@ beforeEach(() => {
   vi.stubGlobal("cancelAnimationFrame", vi.fn());
   HTMLDialogElement.prototype.showModal = function (): void { this.setAttribute("open", ""); };
   HTMLDialogElement.prototype.close = function (): void { this.removeAttribute("open"); };
-  render(<Studio initialProject={project} />);
+  render(<StudioProvider initialProject={project}><StudioSession /></StudioProvider>);
   fireEvent.click(screen.getByRole("button", { name: "Show activity" }));
   scroller = screen.getByRole("region", { name: "Song arrangement" }).parentElement!;
   surface = scroller.parentElement!;
