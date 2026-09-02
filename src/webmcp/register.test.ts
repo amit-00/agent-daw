@@ -142,6 +142,22 @@ describe("WebMCP browser registration", () => {
     });
   });
 
+  it("supplies the registration signal when the browser invokes a tool without a call signal", async () => {
+    const { context, tools } = recordingContext();
+    const registration = registerWebMCPTools(
+      context,
+      createWebMCPTools(createStudioStore(DEMO_PROJECT), () => "unused"),
+    );
+    await registration.ready;
+    const executeFromBrowser = tools.get("get_project")!.execute as (
+      input: Readonly<Record<string, unknown>>,
+      options?: Readonly<Record<string, unknown>>,
+    ) => Promise<unknown>;
+
+    await expect(executeFromBrowser({ view: "overview" }, {}))
+      .resolves.toMatchObject({ success: true });
+  });
+
   it("returns EXECUTION_CANCELLED before an aborted mutation changes state", async () => {
     const store = createStudioStore(DEMO_PROJECT);
     const { context, tools } = recordingContext();

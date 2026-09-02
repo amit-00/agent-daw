@@ -20,7 +20,11 @@ export function registerWebMCPTools(
   unregister(): void;
 } {
   const controller = new AbortController();
-  const ready = Promise.all(tools.map(async (tool) => context.registerTool(tool, { signal: controller.signal })))
+  const ready = Promise.all(tools.map(async (tool) => context.registerTool({
+    ...tool,
+    execute: (input, options?: { readonly signal?: AbortSignal }) =>
+      tool.execute(input, { signal: options?.signal ?? controller.signal }),
+  }, { signal: controller.signal })))
     .then(() => undefined)
     .catch((error: unknown) => {
       controller.abort();
