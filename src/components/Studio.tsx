@@ -111,33 +111,35 @@ export function StudioSession(): ReactElement {
 }
 
 export function Studio({ initialProject }: Readonly<{ initialProject: Project }>): ReactElement {
-  const [service] = useState<ProjectPersistenceService | null>(() =>
-    typeof globalThis.indexedDB === "undefined"
-      ? null
-      : new ProjectPersistenceService({ indexedDB: globalThis.indexedDB, debounceMs: 500 }));
-  const [startup, setStartup] = useState<StartupState>(() => service === null
-    ? {
-        kind: "ready",
-        project: initialProject,
-        persistenceSession: {
-          service: null,
-          baseline: {
-            status: "memory-only",
-            updatedAt: null,
-            errorMessage: "Browser storage is unavailable. Changes remain in memory until this page closes.",
-          },
-        },
-      }
-    : { kind: "loading" });
+  const [startup, setStartup] = useState<StartupState>({ kind: "loading" });
 
   useEffect(() => {
-    if (service === null) return;
     let active = true;
+    if (typeof globalThis.indexedDB === "undefined") {
+      queueMicrotask(() => {
+        if (active) {
+          setStartup({
+            kind: "ready",
+            project: initialProject,
+            persistenceSession: {
+              service: null,
+              baseline: {
+                status: "memory-only",
+                updatedAt: null,
+                errorMessage: "Browser storage is unavailable. Changes remain in memory until this page closes.",
+              },
+            },
+          });
+        }
+      });
+      return () => { active = false; };
+    }
+    const service = new ProjectPersistenceService({ indexedDB: globalThis.indexedDB, debounceMs: 500 });
     void service.load().then((result) => {
       if (active) setStartup(startupFor(result, initialProject, service));
     });
     return () => { active = false; };
-  }, [initialProject, service]);
+  }, [initialProject]);
 
   if (startup.kind === "loading") {
     return <p role="status" aria-label="Loading project">Loading project…</p>;

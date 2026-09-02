@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { renderToString } from "react-dom/server";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { IDBFactory } from "fake-indexeddb";
@@ -109,6 +110,19 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe("Studio persistence bootstrap", () => {
+  it("keeps server and browser initial renders loading until bootstrap resolves", async () => {
+    vi.stubGlobal("indexedDB", undefined);
+    const serverMarkup = renderToString(<Studio initialProject={DEMO_PROJECT} />);
+    expect(serverMarkup).toContain('aria-label="Loading project"');
+    expect(serverMarkup).not.toContain('id="studio"');
+
+    vi.stubGlobal("indexedDB", new IDBFactory());
+    render(<Studio initialProject={DEMO_PROJECT} />);
+    expect(screen.getByRole("status", { name: "Loading project" })).toBeVisible();
+    expect(screen.queryByRole("region", { name: "Song arrangement" })).not.toBeInTheDocument();
+    expect(await screen.findByRole("region", { name: "Song arrangement" })).toBeVisible();
+  });
+
   it("shows loading before mounting a loaded project", async () => {
     const savedProject = { ...DEMO_PROJECT, name: "Persisted Session" };
     vi.stubGlobal("indexedDB", await indexedDBWithProject(savedProject));
