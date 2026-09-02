@@ -137,6 +137,32 @@ afterEach(() => {
 });
 
 describe("Studio persistence bootstrap", () => {
+  it("registers WebMCP only after persistence bootstrap completes", async () => {
+    let finishLoad!: (result: Awaited<ReturnType<ProjectPersistenceService["load"]>>) => void;
+    const pendingLoad = new Promise<Awaited<ReturnType<ProjectPersistenceService["load"]>>>((resolve) => {
+      finishLoad = resolve;
+    });
+    vi.spyOn(ProjectPersistenceService.prototype, "load").mockReturnValue(pendingLoad);
+    const registration = installModelContext();
+
+    render(<Studio initialProject={DEMO_PROJECT} />);
+    expect(screen.getByRole("status", { name: "Loading project" })).toBeVisible();
+    expect(registration.tools).toHaveLength(0);
+
+    await act(async () => finishLoad({ status: "empty" }));
+    await waitFor(() => expect(registration.tools).toHaveLength(36));
+  });
+
+  it("does not register WebMCP while corrupt storage requires recovery", async () => {
+    vi.stubGlobal("indexedDB", await indexedDBWithRawRecord({ project: { broken: true }, updatedAt: 1 }));
+    const registration = installModelContext();
+
+    render(<Studio initialProject={DEMO_PROJECT} />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/cannot be loaded/i);
+    expect(registration.tools).toHaveLength(0);
+  });
+
   it("keeps server and browser initial renders loading until bootstrap resolves", async () => {
     vi.stubGlobal("indexedDB", undefined);
     const serverMarkup = renderToString(<Studio initialProject={DEMO_PROJECT} />);
@@ -240,6 +266,45 @@ describe("Studio persistence bootstrap", () => {
 });
 
 describe("Studio persistence autosave", () => {
+  it("routes changed WebMCP projects through audio replacement and autosave once", async () => {
+    const service = new ProjectPersistenceService({ indexedDB: new IDBFactory(), debounceMs: 0 });
+    const scheduleSave = vi.spyOn(service, "scheduleSave").mockResolvedValue({ status: "saved", updatedAt: 1 });
+    const registration = installModelContext();
+    const project = { ...DEMO_PROJECT, arrangement: [DEMO_PROJECT.arrangement[0]!] };
+    let store: StoreApi<StudioState> | undefined;
+    render(
+      <StudioProvider initialProject={project} persistenceSession={{ ...TEST_PERSISTENCE_SESSION, service }}>
+        <StudioSession />
+        <StoreApiProbe onStore={(value) => { store = value; }} />
+      </StudioProvider>,
+    );
+    await waitFor(() => expect(webMCPStatus("Ready")).toBeVisible());
+    expect(store!.getState().audio.snapshot.arrangementEndStep).toBeGreaterThan(0);
+
+    const deleteClip = registration.tools.get("delete_clip")!;
+    await act(async () => {
+      await deleteClip.execute(
+        { request_id: "delete-only-clip", clip_id: "drums-a" },
+        { signal: new AbortController().signal },
+      );
+    });
+
+    expect(store!.getState().audio.snapshot.arrangementEndStep).toBe(0);
+    expect(scheduleSave).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await deleteClip.execute(
+        { request_id: "delete-only-clip", clip_id: "missing" },
+        { signal: new AbortController().signal },
+      );
+      await deleteClip.execute(
+        { request_id: "missing-clip", clip_id: "missing" },
+        { signal: new AbortController().signal },
+      );
+    });
+    expect(scheduleSave).toHaveBeenCalledTimes(1);
+  });
+
   it("autosaves every changed project identity and ignores no-op publication", async () => {
     const indexedDB = new IDBFactory();
     vi.stubGlobal("indexedDB", indexedDB);

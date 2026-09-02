@@ -293,7 +293,7 @@ describe("studio session", () => {
     });
     store.getState().setDrumCells("neon", [{ soundId: "kick", startStep: 1, active: true }]);
     expect(store.getState().history).toHaveLength(0);
-    expect(store.getState().errorMessage).toBe("Drum kit missing-kit is not in the catalog.");
+    expect(store.getState().errorMessage).toBe("The drum kit on Neon Kit is unavailable. Choose an available kit.");
     expect(DEMO_PROJECT.patterns[0]?.events).toHaveLength(10);
   });
 
@@ -497,7 +497,7 @@ describe("studio session", () => {
       arrangement: [...DEMO_PROJECT.arrangement, { id: "other-clip", trackId: "drums", patternId: "other-beat", startBar: 8, repeatCount: 1 }],
     });
     store.getState().setTrackPreset("drums", "kit.basic");
-    expect(store.getState().errorMessage).toBe("Drum kit kit.basic does not support every placed sound.");
+    expect(store.getState().errorMessage).toBe("Neon Kit's kit lacks clap. Choose a compatible kit or remove that sound.");
     expect(store.getState().history).toHaveLength(0);
     store.getState().dispatch({ id: "remove-clip", label: "Remove clip", source: "manual", kind: "operation",
       operation: { type: "arrangement.delete", clipId: "other-clip" } });
@@ -693,6 +693,35 @@ describe("studio session", () => {
     expect(store.getState().project.masterVolumeDb).toBe(-6);
   });
 
+  it("does not stop playback when history controls or restores are replayed", async () => {
+    const harness = createAudioHarness();
+    harness.engine.replaceProject(DEMO_PROJECT);
+    const store = createStudioStore(DEMO_PROJECT, () => harness.engine, {
+      status: "unsaved", updatedAt: null, errorMessage: null,
+    });
+    store.getState().setMasterVolume(-6);
+    const restoreEntryId = store.getState().history.at(-1)!.id;
+    store.getState().setMasterVolume(-3);
+
+    store.getState().executeHistoryControl({ id: "agent-undo", kind: "undo" });
+    await store.getState().playPause();
+    expect(store.getState().executeHistoryControl({ id: "agent-undo", kind: "undo" }))
+      .toMatchObject({ ok: true, deduplicated: true });
+    expect(harness.engine.getSnapshot().status).toBe("playing");
+
+    store.getState().stopPlayback();
+    store.getState().executeRestore({
+      id: "agent-restore", source: "agent", label: "Restore project",
+      toolName: "restore_history", targetEntryId: restoreEntryId,
+    });
+    await store.getState().playPause();
+    expect(store.getState().executeRestore({
+      id: "agent-restore", source: "agent", label: "Restore project",
+      toolName: "restore_history", targetEntryId: restoreEntryId,
+    }).deduplicated).toBe(true);
+    expect(harness.engine.getSnapshot().status).toBe("playing");
+  });
+
   it("lets only the latest save token publish durability", () => {
     const store = createTestStore();
     const earlier = store.getState().beginPersistenceSave();
@@ -727,23 +756,23 @@ describe("studio session", () => {
     });
   });
 
-  it("rejects invalid manual edits through shared validation without changing selection", () => {
+  it("preserves friendly manual preflight errors before shared validation", () => {
     const store = createTestStore(DEMO_PROJECT);
     store.getState().selectClip("bass-a");
     const before = store.getState();
 
     store.getState().setTrackVolume("bass", 7);
-    expect(store.getState().errorMessage).toBe("volume_db must be a finite number from -60 to 6.");
+    expect(store.getState().errorMessage).toBe("Choose a track volume from -60 to 6 dB.");
     store.getState().setPatternLength("glasshouse", 1);
-    expect(store.getState().errorMessage).toBe("A shorter pattern cannot truncate events.");
+    expect(store.getState().errorMessage).toBe("Shorten or remove events beyond step 16 before reducing this pattern's length.");
     store.getState().updateClip("bass-a", { startBar: 1 });
-    expect(store.getState().errorMessage).toBe("Clips on the same track cannot overlap.");
+    expect(store.getState().errorMessage).toBe("This would overlap Low Orbit phrase on Low Orbit. Choose a free bar.");
     store.getState().setDrumCells("neon", [{ soundId: "clap", startStep: 0, active: true }]);
-    expect(store.getState().errorMessage).toBe("Sound clap is not in the catalog.");
+    expect(store.getState().errorMessage).toBe("clap is unavailable. Choose a sound from the drum catalog.");
     expect(store.getState().addSynthNote("glasshouse", 97, 0, 1)).toBeNull();
-    expect(store.getState().errorMessage).toBe("notes[0].midi_note must be an integer from 24 to 96.");
+    expect(store.getState().errorMessage).toBe("Choose a whole MIDI pitch from 24 to 96.");
     expect(store.getState().createTrack("drum", "synth.bass")).toBeNull();
-    expect(store.getState().errorMessage).toBe("Drum kit synth.bass is not in the catalog.");
+    expect(store.getState().errorMessage).toBe("Choose an available drum instrument.");
 
     expect(store.getState()).toMatchObject({
       project: before.project,
