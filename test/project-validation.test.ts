@@ -208,6 +208,24 @@ for (const invalid of remainingMatrixCases) {
   test(invalid.name, () => expectError(invalid.operation, invalid.code, invalid.field, invalid.input));
 }
 
+const unsupportedChangeCases: readonly {
+  readonly name: string;
+  readonly input?: Project;
+  readonly operation: Operation;
+  readonly field: string;
+}[] = [
+  { name: "project.update rejects unsupported-only changes", operation: { type: "project.update", changes: { unsupported: true } as never }, field: "changes" },
+  { name: "track.update rejects unsupported-only changes", input: project({ tracks: [drumTrack()] }), operation: { type: "track.update", trackId: "drums", changes: { unsupported: true } as never }, field: "changes" },
+  { name: "pattern.update rejects unsupported-only changes", input: project({ patterns: [drumPattern()] }), operation: { type: "pattern.update", patternId: "beat", changes: { unsupported: true } as never }, field: "changes" },
+  { name: "arrangement.update rejects unsupported-only changes", input: project({ tracks: [drumTrack()], patterns: [drumPattern()], arrangement: [{ id: "clip", patternId: "beat", trackId: "drums", startBar: 0, repeatCount: 1 }] }), operation: { type: "arrangement.update", clipId: "clip", changes: { unsupported: true } as never }, field: "changes" },
+  { name: "drum-hits.update rejects unsupported-only changes", input: project({ patterns: [drumPattern()] }), operation: { type: "drum-hits.update", patternId: "beat", updates: [{ hitId: "kick", changes: { unsupported: true } as never }] }, field: "updates[0].changes" },
+  { name: "synth-notes.update rejects unsupported-only changes", input: project({ patterns: [synthPattern()] }), operation: { type: "synth-notes.update", patternId: "line", updates: [{ noteId: "note", changes: { unsupported: true } as never }] }, field: "updates[0].changes" },
+];
+
+for (const invalid of unsupportedChangeCases) {
+  test(invalid.name, () => expectError(invalid.operation, "OUT_OF_RANGE", invalid.field, invalid.input));
+}
+
 test("validateOperation is pure after success and failure", () => {
   const input = project({ tracks: [drumTrack()] });
   const successful: Operation = { type: "track.update", trackId: "drums", changes: { name: "Kit" } };
