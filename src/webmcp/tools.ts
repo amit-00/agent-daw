@@ -157,18 +157,58 @@ const failure = (
   },
 });
 
+const publicValidationField = (toolName: WebMCPToolName, field: string): string | undefined => {
+  switch (toolName) {
+    case "reorder_track":
+      return field === "to_index" ? "position" : field;
+    case "set_master_volume":
+      return field === "master_volume_db" ? "volume_db" : field;
+    case "create_pattern":
+      if (field === "track_id" || field === "start_bar" || field === "repeat_count") return `placement.${field}`;
+      return ["kind", "name", "length_bars"].includes(field) ? field : undefined;
+    case "rename_pattern":
+      return ["pattern_id", "name"].includes(field) ? field : undefined;
+    case "resize_pattern":
+      if (field === "pattern_id") return field;
+      return ["length_bars", "start_bar", "repeat_count"].includes(field) ? "length_bars" : undefined;
+    case "duplicate_pattern":
+      if (field === "duplicate_name") return "name";
+      return field === "pattern_id" ? field : undefined;
+    case "delete_pattern":
+      return field === "pattern_id" ? field : undefined;
+    case "place_pattern":
+      return ["pattern_id", "track_id", "start_bar", "repeat_count"].includes(field) ? field : undefined;
+    case "move_clip":
+      if (field === "repeat_count") return "start_bar";
+      return ["clip_id", "track_id", "start_bar"].includes(field) ? field : undefined;
+    case "change_clip_pattern":
+      if (["pattern_id", "track_id", "start_bar", "repeat_count"].includes(field)) return "pattern_id";
+      return field === "clip_id" ? field : undefined;
+    case "set_clip_repeats":
+      if (field === "start_bar") return "repeat_count";
+      return ["clip_id", "repeat_count"].includes(field) ? field : undefined;
+    case "duplicate_clip":
+      return undefined;
+    case "make_clip_unique":
+      if (field === "duplicate_name") return "pattern_name";
+      return field === "clip_id" ? field : undefined;
+    case "delete_clip":
+      return field === "clip_id" ? field : undefined;
+    default:
+      return field;
+  }
+};
+
 const mapKnownError = (toolName: WebMCPToolName, error: unknown): ToolFailure => {
   if (error instanceof InputError) return failure("INVALID_INPUT", error.message, false, error.field);
   if (error instanceof ToolExecutionError) {
     return failure(error.code, error.message, false, error.field, error.currentRevision);
   }
   if (error instanceof ProjectValidationError) {
-    const field = toolName === "reorder_track" && error.field === "to_index"
-      ? "position"
-      : toolName === "set_master_volume" && error.field === "master_volume_db"
-        ? "volume_db"
-        : error.field;
-    const message = field === error.field ? error.message : error.message.replace(error.field, field);
+    const field = publicValidationField(toolName, error.field);
+    const message = field === undefined || field === error.field
+      ? error.message
+      : error.message.replace(error.field, field);
     return failure(error.code, message, false, field);
   }
   if (error instanceof DOMException && error.name === "AbortError") {

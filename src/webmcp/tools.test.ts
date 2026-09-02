@@ -1000,11 +1000,11 @@ describe("pattern and arrangement mutations", () => {
     });
 
     const occupiedStore = createStudioStore(DEMO_PROJECT);
-    await expect(executeMutation(occupiedStore, "duplicate_clip", {
+    const occupied = await executeMutation(occupiedStore, "duplicate_clip", {
       request_id: "occupied", clip_id: "bass-a",
-    }, () => "unused-clip")).resolves.toMatchObject({ success: false, error: {
-      code: "CLIP_OVERLAP", field: "start_bar",
-    } });
+    }, () => "unused-clip");
+    expect(occupied).toMatchObject({ success: false, error: { code: "CLIP_OVERLAP" } });
+    expect(occupied.error).not.toHaveProperty("field");
     expect(occupiedStore.getState()).toMatchObject({ revision: 0, history: [] });
   });
 
@@ -1067,6 +1067,117 @@ describe("pattern and arrangement mutations", () => {
   });
 
   test.each([
+    { name: "create_pattern nested track", tool: "create_pattern", input: {
+      kind: "synth", length_bars: 1, placement: { track_id: "missing", start_bar: 9 },
+    }, code: "TRACK_NOT_FOUND", field: "placement.track_id" },
+    { name: "create_pattern nested start", tool: "create_pattern", input: {
+      kind: "synth", length_bars: 1, placement: { track_id: "bass", start_bar: 1 },
+    }, code: "CLIP_OVERLAP", field: "placement.start_bar" },
+    { name: "create_pattern nested repeats", tool: "create_pattern", input: {
+      kind: "synth", length_bars: 2, placement: { track_id: "bass", start_bar: 255, repeat_count: 2 },
+    }, code: "OUT_OF_RANGE", field: "placement.repeat_count" },
+    { name: "duplicate_pattern name", tool: "duplicate_pattern", input: {
+      pattern_id: "orbit", name: "x".repeat(41),
+    }, code: "OUT_OF_RANGE", field: "name" },
+    { name: "resize_pattern derived overlap", tool: "resize_pattern", input: {
+      pattern_id: "neon", length_bars: 2,
+    }, code: "CLIP_OVERLAP", field: "length_bars" },
+    { name: "move_clip derived end", tool: "move_clip", input: {
+      clip_id: "bass-b", start_bar: 254,
+    }, code: "OUT_OF_RANGE", field: "start_bar" },
+    { name: "change_clip_pattern compatibility", tool: "change_clip_pattern", input: {
+      clip_id: "bass-a", pattern_id: "neon",
+    }, code: "KIND_MISMATCH", field: "pattern_id" },
+    { name: "change_clip_pattern derived overlap", tool: "change_clip_pattern", input: {
+      clip_id: "bass-a", pattern_id: "night-air",
+    }, code: "CLIP_OVERLAP", field: "pattern_id" },
+    { name: "set_clip_repeats derived overlap", tool: "set_clip_repeats", input: {
+      clip_id: "bass-a", repeat_count: 3,
+    }, code: "CLIP_OVERLAP", field: "repeat_count" },
+    { name: "make_clip_unique name", tool: "make_clip_unique", input: {
+      clip_id: "bass-a", pattern_name: "x".repeat(41),
+    }, code: "OUT_OF_RANGE", field: "pattern_name" },
+  ] as const)("maps $name failures to caller-visible fields", async ({ tool, input, code, field }) => {
+    const store = createStudioStore(DEMO_PROJECT);
+    let id = 0;
+
+    const response = await executeMutation(store, tool, { request_id: `field-${tool}-${field}`, ...input },
+      () => `field-id-${++id}`);
+
+    expect(response).toMatchObject({ success: false, error: { code, field } });
+    expect(store.getState()).toMatchObject({ revision: 0, history: [] });
+  });
+
+  test.each([
+    { name: "create_pattern generated pattern ID", tool: "create_pattern",
+      input: { kind: "drum", length_bars: 1 }, ids: ["neon"] },
+    { name: "create_pattern generated clip ID", tool: "create_pattern",
+      input: { kind: "synth", length_bars: 1,
+        placement: { track_id: "bass", start_bar: 9 } }, ids: ["new-pattern", "bass-a"] },
+    { name: "duplicate_pattern generated pattern ID", tool: "duplicate_pattern",
+      input: { pattern_id: "orbit" }, ids: ["neon", "event-1", "event-2", "event-3", "event-4"] },
+    { name: "duplicate_pattern generated event IDs", tool: "duplicate_pattern",
+      input: { pattern_id: "orbit" }, ids: ["new-pattern", "same", "same", "same", "same"] },
+    { name: "place_pattern generated clip ID", tool: "place_pattern",
+      input: { pattern_id: "orbit", track_id: "bass", start_bar: 9 }, ids: ["bass-a"] },
+    { name: "duplicate_clip generated clip ID", tool: "duplicate_clip",
+      input: { clip_id: "bass-b" }, ids: ["bass-a"] },
+    { name: "make_clip_unique generated pattern ID", tool: "make_clip_unique",
+      input: { clip_id: "bass-a" }, ids: ["neon", "event-1", "event-2", "event-3", "event-4"] },
+    { name: "make_clip_unique generated event IDs", tool: "make_clip_unique",
+      input: { clip_id: "bass-a" }, ids: ["new-pattern", "same", "same", "same", "same"] },
+  ] as const)("omits canonical fields for $name failures", async ({ tool, input, ids: generatedIds }) => {
+    const store = createStudioStore(DEMO_PROJECT);
+    const ids = [...generatedIds];
+
+    const response = await executeMutation(store, tool, { request_id: `generated-${tool}`, ...input },
+      () => ids.shift()!);
+
+    expect(response).toMatchObject({ success: false });
+    expect(response.error).not.toHaveProperty("field");
+    expect(store.getState()).toMatchObject({ revision: 0, history: [] });
+  });
+
+  test.each([
+    ["create_pattern", { kind: "drum", length_bars: 1 }],
+    ["duplicate_pattern", { pattern_id: "orbit" }],
+    ["make_clip_unique", { clip_id: "bass-a" }],
+  ] as const)("%s omits the internal patterns capacity field", async (tool, input) => {
+    const patterns = [...DEMO_PROJECT.patterns, ...Array.from({
+      length: PROJECT_CAPS.maxPatterns - DEMO_PROJECT.patterns.length,
+    }, (_, index) => ({
+      id: `capacity-pattern-${index}`, name: `Pattern ${index}`, kind: "synth" as const,
+      lengthBars: 1 as const, events: [],
+    }))];
+    const store = createStudioStore({ ...DEMO_PROJECT, patterns });
+
+    const response = await executeMutation(store, tool, { request_id: `capacity-${tool}`, ...input },
+      () => "new-id");
+
+    expect(response).toMatchObject({ success: false, error: { code: "CAPACITY_EXCEEDED" } });
+    expect(response.error).not.toHaveProperty("field");
+  });
+
+  test.each([
+    ["place_pattern", { pattern_id: "unused-idea", track_id: "bass", start_bar: 1 }],
+    ["duplicate_clip", { clip_id: "capacity-clip-0" }],
+  ] as const)("%s omits the internal arrangement capacity field", async (tool, input) => {
+    const trackIds = ["bass", "chords"];
+    const arrangement = Array.from({ length: PROJECT_CAPS.maxArrangementClips }, (_, index) => ({
+      id: `capacity-clip-${index}`, patternId: "unused-idea",
+      trackId: trackIds[Math.floor(index / PROJECT_CAPS.maxArrangementBars)]!,
+      startBar: index % PROJECT_CAPS.maxArrangementBars, repeatCount: 1,
+    }));
+    const store = createStudioStore({ ...DEMO_PROJECT, arrangement });
+
+    const response = await executeMutation(store, tool, { request_id: `capacity-${tool}`, ...input },
+      () => "new-id");
+
+    expect(response).toMatchObject({ success: false, error: { code: "CAPACITY_EXCEEDED" } });
+    expect(response.error).not.toHaveProperty("field");
+  });
+
+  test.each([
     ["create_pattern", { kind: "drum", length_bars: 3 }, "INVALID_INPUT", "length_bars"],
     ["rename_pattern", { pattern_id: "missing", name: "Missing" }, "PATTERN_NOT_FOUND", "pattern_id"],
     ["resize_pattern", { pattern_id: "orbit", length_bars: 1 }, "OUT_OF_RANGE", "length_bars"],
@@ -1074,7 +1185,7 @@ describe("pattern and arrangement mutations", () => {
     ["delete_pattern", { pattern_id: "missing" }, "PATTERN_NOT_FOUND", "pattern_id"],
     ["place_pattern", { pattern_id: "neon", track_id: "bass", start_bar: 9 }, "KIND_MISMATCH", "track_id"],
     ["move_clip", { clip_id: "missing", start_bar: 9 }, "CLIP_NOT_FOUND", "clip_id"],
-    ["change_clip_pattern", { clip_id: "bass-a", pattern_id: "neon" }, "KIND_MISMATCH", "track_id"],
+    ["change_clip_pattern", { clip_id: "bass-a", pattern_id: "neon" }, "KIND_MISMATCH", "pattern_id"],
     ["set_clip_repeats", { clip_id: "bass-a", repeat_count: 65 }, "INVALID_INPUT", "repeat_count"],
     ["duplicate_clip", { clip_id: "missing" }, "CLIP_NOT_FOUND", "clip_id"],
     ["make_clip_unique", { clip_id: "missing" }, "CLIP_NOT_FOUND", "clip_id"],
