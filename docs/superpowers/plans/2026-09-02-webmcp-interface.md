@@ -216,8 +216,9 @@ export interface ProjectServiceState {
   readonly revision: number;
 }
 
-ProjectService.wasSuccessful(commandId: string): boolean;
 ProjectService.controlHistory(command: HistoryControlCommand): HistoryControlResult;
+ProjectService.replayDispatch(commandId: string): DispatchResult | null;
+ProjectService.replayHistoryControl(commandId: string): HistoryControlResult | null;
 ~~~
 
 - Add optional toolName to Command metadata, RestoreCommand, and HistoryEntry. Only agent WebMCP commands set it.
@@ -235,7 +236,7 @@ Add tests proving:
 6. retrying the same successful HistoryControlCommand returns deduplicated true and does not move the cursor twice;
 7. a failed history-control ID remains usable after history becomes available;
 8. toolName is copied into history and survives JSON serialization;
-9. wasSuccessful recognizes dispatch, history-control, and restore IDs;
+9. replayDispatch returns a retained dispatch/restore result with deduplicated true and the current project, while replayHistoryControl does the same for an applied undo/redo;
 10. both successful-outcome caches remain bounded at PROJECT_CAPS.maxSuccessfulCommands.
 
 - [ ] **Step 2: Run the focused tests and verify failure**
@@ -246,7 +247,7 @@ Run:
 pnpm exec node --disable-warning=ExperimentalWarning --test test/project.test.ts
 ~~~
 
-Expected: FAIL because revision, toolName, wasSuccessful, and controlHistory are absent.
+Expected: FAIL because revision, toolName, replay methods, and controlHistory are absent.
 
 - [ ] **Step 3: Implement revision and idempotent controls**
 
@@ -287,6 +288,7 @@ git commit -m "feat: add revisioned history controls"
 **Files:**
 - Modify: src/stores/studio-store.ts
 - Modify: src/stores/studio-store.test.ts
+- Modify: test/project-validation.test.ts
 - Delete: src/stores/studio-edits.ts
 - Delete: src/stores/studio-edits.test.ts
 
@@ -297,7 +299,8 @@ git commit -m "feat: add revisioned history controls"
 ~~~ts
 readonly webMCPStatus: "unsupported" | "registering" | "ready" | "failed";
 dispatch(command: Command): DispatchResult;
-wasSuccessful(commandId: string): boolean;
+replayDispatch(commandId: string): DispatchResult | null;
+replayHistoryControl(commandId: string): HistoryControlResult | null;
 executeHistoryControl(command: HistoryControlCommand): HistoryControlResult;
 executeRestore(command: RestoreCommand): DispatchResult;
 undo(): void;
@@ -437,10 +440,13 @@ export type ToolResult<T> =
   | { readonly success: true; readonly result: T }
   | { readonly success: false; readonly error: ToolError };
 
-export function createWebMCPTools(
-  store: Pick<StoreApi<StudioState>, "getState">,
-  createId: () => string,
-): readonly WebMCPTool[];
+export const TOOL_CONTRACTS: readonly ToolContract[];
+
+export function defineWebMCPTool<T>(
+  contract: ToolContract,
+  parse: (input: Readonly<Record<string, unknown>>) => T,
+  run: (input: T, signal: AbortSignal) => unknown | Promise<unknown>,
+): WebMCPTool;
 ~~~
 
 - Define ToolError with the approved codes, message, retryable, and optional field, change_index, current_revision.
@@ -458,7 +464,8 @@ Assert:
 5. base_revision is optional on direct mutations and required on apply_project_changes;
 6. read annotations are true/true for get_project and get_history, true/false for get_sound_catalog, and false for both flags on mutations;
 7. future and deferred names are absent;
-8. malformed root input, unknown keys, wrong types, non-finite numbers, oversized strings, and an already-aborted signal return INVALID_INPUT or EXECUTION_CANCELLED without throwing.
+8. a synthetic tool bound with defineWebMCPTool maps malformed root input and an already-aborted signal to INVALID_INPUT or EXECUTION_CANCELLED without throwing;
+9. an unexpected executor exception returns INTERNAL_ERROR and never exposes its message.
 
 - [ ] **Step 2: Run the focused test and verify failure**
 
@@ -480,7 +487,7 @@ Titles use short user-facing verbs, for example Rename project, Create track, Pl
 
 In tools.ts, add reusable guards for object, allowed keys, string, boolean, finite number, integer, array, enum, and EntityReference. Guards throw one private InputError containing a public field path. Do not cast unvalidated unknown values into public input types.
 
-Wrap every execute callback with one safe executor:
+Have defineWebMCPTool wrap every execute callback with one safe executor:
 
 ~~~ts
 async function executeSafely<T>(
@@ -540,7 +547,14 @@ git commit -m "feat: define WebMCP tool contracts"
 
 **Interfaces:**
 - Consumes: fresh StudioState from store.getState, SOUND_CATALOG, ToolResult.
-- Produces handlers for get_project, get_sound_catalog, and get_history.
+- Produces handlers for get_project, get_sound_catalog, and get_history, plus the registry factory that later tasks extend:
+
+~~~ts
+export function createWebMCPTools(
+  store: Pick<StoreApi<StudioState>, "getState">,
+  createId: () => string,
+): readonly WebMCPTool[];
+~~~
 
 - [ ] **Step 1: Write failing inspection tests**
 
@@ -613,7 +627,7 @@ git commit -m "feat: add WebMCP inspection tools"
 - Modify: src/webmcp/tools.test.ts
 
 **Interfaces:**
-- Consumes: StudioState.wasSuccessful, StudioState.dispatch, validateOperations, ProjectValidationError.
+- Consumes: StudioState.replayDispatch, StudioState.dispatch, validateOperations, ProjectValidationError.
 - Produces handlers for rename_project, set_tempo, set_master_volume, create_track, rename_track, set_track_instrument, reorder_track, set_track_mix, set_track_mute, set_track_solo, and delete_track.
 
 - [ ] **Step 1: Write failing project and track tests**
@@ -645,7 +659,7 @@ Use namespaced IDs in the exact form webmcp:<tool_name>:<request_id>. The runner
 
 1. parse request_id and optional base_revision;
 2. check signal;
-3. if store.getState().wasSuccessful(commandId), dispatch the same canonical command to retrieve the retained result;
+3. if store.getState().replayDispatch(commandId) returns a result, serialize it immediately without checking revision, generating IDs, or dispatching;
 4. otherwise compare supplied base_revision to current revision;
 5. construct operations and validate them against the fresh project;
 6. dispatch once;
@@ -908,7 +922,7 @@ Expected: FAIL because the history handlers are not bound.
 
 - [ ] **Step 3: Implement history handlers**
 
-Use webmcp:undo:<request_id>, webmcp:redo:<request_id>, and webmcp:restore_history:<request_id>. Check wasSuccessful before revision. Map unavailable service results to the two public errors. Restore through the explicit low-level store restore command with source agent, toolName restore_history, and label Restore history.
+Use webmcp:undo:<request_id>, webmcp:redo:<request_id>, and webmcp:restore_history:<request_id>. Check replayHistoryControl or replayDispatch before revision. Map unavailable service results to the two public errors. Restore through the explicit low-level store restore command with source agent, toolName restore_history, and label Restore history.
 
 - [ ] **Step 4: Run history and full tool tests**
 
