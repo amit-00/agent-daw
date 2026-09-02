@@ -165,6 +165,35 @@ export class FakeAudioContext {
   }
 }
 
+export class FakeOfflineAudioContext extends FakeAudioContext {
+  readonly numberOfChannels: number;
+  readonly length: number;
+  readonly sampleRate: number;
+  renderFailure: Error | undefined;
+
+  constructor(numberOfChannels: number, length: number, sampleRate: number) {
+    super();
+    this.numberOfChannels = numberOfChannels;
+    this.length = length;
+    this.sampleRate = sampleRate;
+  }
+
+  async startRendering(): Promise<AudioBuffer> {
+    if (this.renderFailure !== undefined) throw this.renderFailure;
+    return {
+      duration: this.length / this.sampleRate,
+      length: this.length,
+      numberOfChannels: this.numberOfChannels,
+      sampleRate: this.sampleRate,
+      getChannelData: (): Float32Array => new Float32Array(this.length),
+    } as unknown as AudioBuffer;
+  }
+
+  asOfflineAudioContext(): OfflineAudioContext {
+    return this as unknown as OfflineAudioContext;
+  }
+}
+
 export class FakeTimers {
   nextId = 1;
   readonly callbacks = new Map<number, () => void>();

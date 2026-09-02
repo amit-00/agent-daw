@@ -1,3 +1,14 @@
+import type { Project, Track } from "../project/index.ts";
+import {
+  BASIC_DRUM_KIT,
+  SYNTH_PRESETS,
+  findSynthPreset,
+} from "./catalog.ts";
+import type { LoadArrayBuffer } from "./sampler.ts";
+import { Sampler } from "./sampler.ts";
+import { Synth } from "./synth.ts";
+import { arrangementEndStep, expandTimeline, secondsPerStep } from "./timeline.ts";
+
 const CHANNELS = 2;
 const SAMPLE_RATE = 44_100;
 const BYTES_PER_SAMPLE = 2;
@@ -13,6 +24,15 @@ const pcm16 = (sample: number): number => {
   const clamped = Math.max(-1, Math.min(1, sample));
   return Math.round(clamped * (clamped < 0 ? 32_768 : 32_767));
 };
+
+export interface WavExportPlatform {
+  readonly createContext: (
+    channels: number,
+    length: number,
+    sampleRate: number,
+  ) => OfflineAudioContext;
+  readonly loadArrayBuffer: LoadArrayBuffer;
+}
 
 export function encodeWav(buffer: AudioBuffer): Blob {
   if (buffer.numberOfChannels !== CHANNELS || buffer.sampleRate !== SAMPLE_RATE) {
@@ -53,4 +73,71 @@ export function wavFileName(projectName: string): string {
     .replace(/[. ]+$/g, "")
     .replace(/^[-. ]+$/g, "");
   return `${safeName || "agentdaw"}.wav`;
+}
+
+const dbToGain = (decibels: number): number => 10 ** (decibels / 20);
+const trackGain = (track: Track, hasSolo: boolean): number =>
+  track.muted || (hasSolo && !track.soloed) ? 0 : dbToGain(track.volumeDb);
+
+export async function renderProjectToWav(
+  project: Project,
+  platform: WavExportPlatform,
+): Promise<Blob> {
+  const endStep = arrangementEndStep(project);
+  const expansion = expandTimeline(project, 0, endStep);
+  const releaseSeconds = expansion.events.reduce((longest, event) =>
+    event.kind === "synth"
+      ? Math.max(longest, findSynthPreset(event.instrumentId)?.releaseSeconds ?? 0)
+      : longest, 0);
+  const durationSeconds = endStep * secondsPerStep(project.bpm) + releaseSeconds;
+  const context = platform.createContext(
+    CHANNELS,
+    Math.ceil(durationSeconds * SAMPLE_RATE),
+    SAMPLE_RATE,
+  );
+  const master = context.createGain();
+  master.gain.setValueAtTime(dbToGain(project.masterVolumeDb), 0);
+  master.connect(context.destination);
+  const hasSolo = project.tracks.some(({ soloed }) => soloed);
+  const buses = new Map(project.tracks.map((track) => {
+    const gain = context.createGain();
+    const panner = context.createStereoPanner();
+    gain.gain.setValueAtTime(trackGain(track, hasSolo), 0);
+    panner.pan.setValueAtTime(track.pan, 0);
+    gain.connect(panner);
+    panner.connect(master);
+    return [track.id, gain] as const;
+  }));
+  const usedSoundIds = new Set(expansion.events
+    .filter((event) => event.kind === "drum")
+    .map(({ soundId }) => soundId));
+  const sampler = new Sampler({
+    context,
+    kit: {
+      ...BASIC_DRUM_KIT,
+      sounds: BASIC_DRUM_KIT.sounds.filter(({ id }) => usedSoundIds.has(id)),
+    },
+    loadArrayBuffer: platform.loadArrayBuffer,
+  });
+  await sampler.prepare();
+  const synthEvents = expansion.events.filter((event) => event.kind === "synth");
+  const synth = new Synth({
+    context,
+    presets: SYNTH_PRESETS,
+    voiceCap: Math.max(1, synthEvents.length),
+    stopRampSeconds: 0.005,
+  });
+  for (const event of expansion.events) {
+    const destination = buses.get(event.trackId);
+    if (destination === undefined) continue;
+    const start = event.startStep * secondsPerStep(project.bpm);
+    if (event.kind === "drum") sampler.schedule(event, start, destination);
+    else synth.schedule(
+      event,
+      start,
+      event.durationSteps * secondsPerStep(project.bpm),
+      destination,
+    );
+  }
+  return encodeWav(await context.startRendering());
 }

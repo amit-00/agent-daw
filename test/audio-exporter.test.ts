@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { encodeWav, wavFileName } from "../src/audio/index.ts";
+import { encodeWav, renderProjectToWav, wavFileName } from "../src/audio/index.ts";
+import { audioProject } from "./audio-fixtures.ts";
+import { FakeOfflineAudioContext } from "./audio-fakes.ts";
 
 const audioBuffer = (
   left: readonly number[],
@@ -36,4 +38,30 @@ test("encodeWav writes a stereo 16-bit RIFF file with clamped samples", async ()
 test("wavFileName keeps a readable safe name and has a fallback", () => {
   assert.equal(wavFileName("  Demo: Beat/One.  "), "Demo- Beat-One.wav");
   assert.equal(wavFileName(' \\ / : * ? " < > | . '), "agentdaw.wav");
+});
+
+test("renderProjectToWav schedules the full shared mixer graph with a release tail", async () => {
+  let context: FakeOfflineAudioContext | undefined;
+  const blob = await renderProjectToWav(audioProject(), {
+    createContext: (channels, length, sampleRate) => {
+      context = new FakeOfflineAudioContext(channels, length, sampleRate);
+      return context.asOfflineAudioContext();
+    },
+    loadArrayBuffer: async () => new ArrayBuffer(8),
+  });
+
+  assert.equal(blob.type, "audio/wav");
+  assert.equal(context?.length, 269_892);
+  assert.deepEqual(context?.bufferSources.map(({ startTimes }) => startTimes), [
+    [0], [0.5], [2], [2.5],
+  ]);
+  assert.deepEqual(context?.oscillators.map(({ startTimes }) => startTimes), [[4.5]]);
+  assert.deepEqual(
+    context?.gains.slice(0, 3).map(({ gain }) => gain.events[0]),
+    [
+      { method: "set", value: 1, time: 0 },
+      { method: "set", value: 1, time: 0 },
+      { method: "set", value: 10 ** (-6 / 20), time: 0 },
+    ],
+  );
 });
