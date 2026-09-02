@@ -5,6 +5,7 @@ import { DEMO_PROJECT } from "@/data/studio-data";
 import { createStudioStore } from "@/stores/studio-store";
 
 import { TOOL_CONTRACTS } from "./contracts.ts";
+import type { WebMCPToolName } from "./contracts.ts";
 import { createWebMCPTools, defineWebMCPTool, expectString } from "./tools.ts";
 
 const readNames = ["get_project", "get_sound_catalog", "get_history"];
@@ -570,5 +571,206 @@ describe("inspection tools", () => {
     expect(store.getState()).toMatchObject(snapshot);
     expect(store.getState().project).toBe(snapshot.project);
     expect(store.getState().history).toBe(snapshot.history);
+  });
+});
+
+const executeMutation = async (
+  store: ReturnType<typeof createStudioStore>,
+  name: WebMCPToolName,
+  input: Record<string, unknown>,
+  createId: () => string = () => "generated-id",
+) => {
+  const tool = createWebMCPTools(store, createId).find((candidate) => candidate.name === name)!;
+  return tool.execute(input, { signal: new AbortController().signal }) as Promise<{
+    success: boolean;
+    result?: Record<string, unknown>;
+    error?: { code: string; field?: string; message?: string; current_revision?: number };
+  }>;
+};
+
+describe("project and track mutations", () => {
+  test.each([
+    ["rename_project", { name: "  New project  " },
+      { type: "project.update", changes: { name: "New project" } }, "Rename project"],
+    ["set_tempo", { bpm: 126 },
+      { type: "project.update", changes: { bpm: 126 } }, "Set tempo"],
+    ["set_master_volume", { volume_db: -8 },
+      { type: "project.update", changes: { masterVolumeDb: -8 } }, "Set master volume"],
+    ["rename_track", { track_id: "bass", name: "  Sub bass  " },
+      { type: "track.update", trackId: "bass", changes: { name: "Sub bass" } }, "Rename track"],
+    ["set_track_instrument", { track_id: "bass", instrument_id: "synth.pad" },
+      { type: "track.update", trackId: "bass", changes: { instrumentId: "synth.pad" } }, "Set track instrument"],
+    ["reorder_track", { track_id: "bass", position: 1 },
+      { type: "track.reorder", trackId: "bass", toIndex: 0 }, "Reorder track"],
+    ["set_track_mix", { track_id: "bass", volume_db: -4, pan: 0.5 },
+      { type: "track.update", trackId: "bass", changes: { volumeDb: -4, pan: 0.5 } }, "Set track mix"],
+    ["set_track_mute", { track_id: "bass", muted: true },
+      { type: "track.update", trackId: "bass", changes: { muted: true } }, "Set track mute"],
+    ["set_track_solo", { track_id: "bass", soloed: true },
+      { type: "track.update", trackId: "bass", changes: { soloed: true } }, "Set track solo"],
+  ] as const)("%s translates to one attributed canonical operation", async (name, input, operation, label) => {
+    const store = createStudioStore(DEMO_PROJECT);
+
+    const response = await executeMutation(store, name, { request_id: "request", base_revision: 0, ...input });
+
+    expect(response).toMatchObject({ success: true, result: {
+      changed: true, deduplicated: false, project_revision: 1, history_cursor: 0,
+    } });
+    expect(response.result).toHaveProperty("history_entry_id");
+    expect(store.getState().history[0]).toMatchObject({
+      commandId: `webmcp:${name}:request`, source: "agent", toolName: name, label,
+      action: { kind: "operation", operation },
+    });
+  });
+
+  test("create_track appends one initialized track with a generated ID, trimmed/default name, and next color", async () => {
+    const store = createStudioStore(DEMO_PROJECT);
+    const ids = ["track-custom", "track-default"];
+    const createId = vi.fn(() => ids.shift()!);
+
+    const first = await executeMutation(store, "create_track", {
+      request_id: "custom", kind: "synth", instrument_id: "synth.pad", name: "  Atmosphere  ",
+    }, createId);
+    const second = await executeMutation(store, "create_track", {
+      request_id: "default", kind: "drum", instrument_id: "kit.basic",
+    }, createId);
+
+    expect(first).toMatchObject({ success: true, result: {
+      track_id: "track-custom", changes: { created: { track_ids: ["track-custom"] }, updated: {}, deleted: {} },
+    } });
+    expect(second).toMatchObject({ success: true, result: { track_id: "track-default" } });
+    expect(store.getState().project.tracks.slice(-2)).toEqual([
+      { id: "track-custom", name: "Atmosphere", kind: "synth", instrumentId: "synth.pad",
+        volumeDb: 0, pan: 0, muted: false, soloed: false, color: "#70bd72" },
+      { id: "track-default", name: "Basic drums", kind: "drum", instrumentId: "kit.basic",
+        volumeDb: 0, pan: 0, muted: false, soloed: false, color: "#50b8b1" },
+    ]);
+    expect(store.getState().history.map(({ label, source, toolName }) => ({ label, source, toolName }))).toEqual([
+      { label: "Create track", source: "agent", toolName: "create_track" },
+      { label: "Create track", source: "agent", toolName: "create_track" },
+    ]);
+  });
+
+  test("delete_track reports dependent clip IDs unless cascading is explicitly authorized", async () => {
+    const blockedStore = createStudioStore(DEMO_PROJECT);
+
+    const blocked = await executeMutation(blockedStore, "delete_track", {
+      request_id: "blocked", track_id: "drums",
+    });
+
+    expect(blocked).toMatchObject({ success: false, error: {
+      code: "DEPENDENCIES_EXIST", field: "delete_clips",
+    } });
+    expect(blocked.error!.message).toContain("drums-a");
+    expect(blocked.error!.message).toContain("drums-b");
+    expect(blockedStore.getState()).toMatchObject({ revision: 0, history: [] });
+
+    const deleted = await executeMutation(blockedStore, "delete_track", {
+      request_id: "cascade", base_revision: 0, track_id: "drums", delete_clips: true,
+    });
+
+    expect(deleted).toMatchObject({ success: true, result: {
+      changed: true, project_revision: 1,
+      changes: { created: {}, updated: {}, deleted: {
+        track_ids: ["drums"], arrangement_clip_ids: ["drums-a", "drums-b"],
+      } },
+    } });
+    expect(blockedStore.getState().history[0]).toMatchObject({
+      commandId: "webmcp:delete_track:cascade", source: "agent", toolName: "delete_track",
+      label: "Delete track", action: { kind: "operation",
+        operation: { type: "track.delete", trackId: "drums" } },
+    });
+  });
+
+  test("explicit mute and solo setters are no-ops when already equal", async () => {
+    const store = createStudioStore(DEMO_PROJECT);
+
+    for (const [name, input] of [
+      ["set_track_mute", { track_id: "bass", muted: false }],
+      ["set_track_solo", { track_id: "bass", soloed: false }],
+    ] as const) {
+      await expect(executeMutation(store, name, { request_id: name, ...input })).resolves.toEqual({
+        success: true,
+        result: {
+          changed: false, deduplicated: false, project_revision: 0, history_cursor: -1,
+          changes: { created: {}, updated: {}, deleted: {} },
+        },
+      });
+    }
+    expect(store.getState()).toMatchObject({ revision: 0, history: [] });
+  });
+
+  test("replays a successful creation before stale revision checks or ID generation", async () => {
+    const store = createStudioStore(DEMO_PROJECT);
+    const createId = vi.fn(() => "created-once");
+    const input = { request_id: "retry", base_revision: 0, kind: "synth", instrument_id: "synth.pad" };
+    const first = await executeMutation(store, "create_track", input, createId);
+    store.getState().dispatch({
+      id: "manual", source: "manual", label: "Manual edit", kind: "operation",
+      operation: { type: "project.update", changes: { bpm: 130 } },
+    });
+
+    const retried = await executeMutation(store, "create_track", input, createId);
+
+    expect(first).toMatchObject({ success: true, result: { track_id: "created-once", deduplicated: false } });
+    expect(retried).toMatchObject({ success: true, result: {
+      track_id: "created-once", changed: true, deduplicated: true, project_revision: 2,
+    } });
+    expect(createId).toHaveBeenCalledOnce();
+    expect(store.getState().project.tracks.filter(({ id }) => id === "created-once")).toHaveLength(1);
+  });
+
+  test("rejects stale revisions before mutation construction for every project and track tool", async () => {
+    const cases = [
+      ["rename_project", { name: "New" }], ["set_tempo", { bpm: 126 }],
+      ["set_master_volume", { volume_db: -4 }],
+      ["create_track", { kind: "synth", instrument_id: "synth.pad" }],
+      ["rename_track", { track_id: "bass", name: "New" }],
+      ["set_track_instrument", { track_id: "bass", instrument_id: "synth.pad" }],
+      ["reorder_track", { track_id: "bass", position: 1 }],
+      ["set_track_mix", { track_id: "bass", pan: 0.5 }],
+      ["set_track_mute", { track_id: "bass", muted: true }],
+      ["set_track_solo", { track_id: "bass", soloed: true }],
+      ["delete_track", { track_id: "unused" }],
+    ] as const;
+    const createId = vi.fn(() => "must-not-generate");
+
+    for (const [name, input] of cases) {
+      const store = createStudioStore({ ...DEMO_PROJECT, tracks: [...DEMO_PROJECT.tracks, {
+        id: "unused", name: "Unused", kind: "synth", instrumentId: "synth.pad",
+        volumeDb: 0, pan: 0, muted: false, soloed: false,
+      }] });
+      store.getState().dispatch({ id: "revise", source: "manual", label: "Revise", kind: "operation",
+        operation: { type: "project.update", changes: { bpm: 119 } } });
+      await expect(executeMutation(store, name, {
+        request_id: `stale-${name}`, base_revision: 0, ...input,
+      }, createId)).resolves.toMatchObject({ success: false, error: {
+        code: "REVISION_CONFLICT", field: "base_revision", current_revision: 1,
+      } });
+      expect(store.getState()).toMatchObject({ revision: 1 });
+    }
+    expect(createId).not.toHaveBeenCalled();
+  });
+
+  test("maps canonical domain errors and rejects an empty track mix", async () => {
+    const store = createStudioStore(DEMO_PROJECT);
+
+    await expect(executeMutation(store, "set_track_instrument", {
+      request_id: "bad-kit", track_id: "drums", instrument_id: "synth.pad",
+    })).resolves.toMatchObject({ success: false, error: {
+      code: "INCOMPATIBLE_INSTRUMENT", field: "instrument_id", retryable: false,
+    } });
+    await expect(executeMutation(store, "rename_track", {
+      request_id: "missing", track_id: "missing", name: "Do not echo this name",
+    })).resolves.toMatchObject({ success: false, error: { code: "TRACK_NOT_FOUND", field: "track_id" } });
+    const reorder = await executeMutation(store, "reorder_track", {
+      request_id: "bad-position", track_id: "bass", position: 99,
+    });
+    expect(reorder).toMatchObject({ success: false, error: { code: "OUT_OF_RANGE", field: "position" } });
+    expect(JSON.stringify(reorder)).not.toContain("to_index");
+    const mix = await executeMutation(store, "set_track_mix", { request_id: "empty", track_id: "bass" });
+    expect(mix).toMatchObject({ success: false, error: { code: "INVALID_INPUT", field: "$" } });
+    expect(JSON.stringify(mix)).not.toContain("Low Orbit");
+    expect(store.getState()).toMatchObject({ revision: 0, history: [] });
   });
 });
