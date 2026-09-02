@@ -8,6 +8,7 @@ import {
   type ChangeSummary,
   type DispatchResult,
   type HistoryAction,
+  type HistoryControlResult,
   type HistoryEntry,
   type DrumHit,
   type Operation,
@@ -41,9 +42,10 @@ class InputError extends Error {
 class ToolExecutionError extends Error {
   constructor(
     readonly code: ToolErrorCode,
-    readonly field: string,
+    readonly field: string | undefined,
     message: string,
     readonly currentRevision?: number,
+    readonly retryable = false,
   ) {
     super(message);
     this.name = "ToolExecutionError";
@@ -271,7 +273,7 @@ const mapKnownError = (toolName: WebMCPToolName, error: unknown): ToolFailure =>
   }
   if (error instanceof InputError) return failure("INVALID_INPUT", error.message, false, error.field);
   if (error instanceof ToolExecutionError) {
-    return failure(error.code, error.message, false, error.field, error.currentRevision);
+    return failure(error.code, error.message, error.retryable, error.field, error.currentRevision);
   }
   if (error instanceof ProjectValidationError) {
     const field = publicValidationField(toolName, error.field);
@@ -1326,6 +1328,54 @@ const mutationResult = (
   ...extra,
 });
 
+const historyControlResult = (
+  state: StudioState,
+  result: Extract<HistoryControlResult, { readonly ok: true }>,
+) => ({
+  changed: result.changed,
+  deduplicated: result.deduplicated,
+  project_revision: state.revision,
+  history_cursor: state.historyCursor,
+  changes: publicChanges(result.changes),
+});
+
+const defineHistoryControlTool = (
+  name: "undo" | "redo",
+  store: Pick<StoreApi<StudioState>, "getState">,
+): WebMCPTool => {
+  const toolContract = contract(name);
+  const allowedKeys = Object.keys(expectObject(toolContract.inputSchema.properties, "inputSchema.properties"));
+  return {
+    ...toolContract,
+    execute: (input, { signal }) => executeSafely(name, signal, () => {
+      const object = expectObject(input, "$");
+      const requestId = expectString(object.request_id, "request_id", 1, 128);
+      const commandId = `webmcp:${name}:${requestId}`;
+      const replayed = store.getState().replayHistoryControl(commandId);
+      if (replayed !== null && replayed.ok) return historyControlResult(store.getState(), replayed);
+      expectAllowedKeys(object, allowedKeys, "$");
+      const { baseRevision } = parseMutationMetadata(object);
+      signal.throwIfAborted();
+      let state = store.getState();
+      if (baseRevision !== undefined && baseRevision !== state.revision) {
+        toolError("REVISION_CONFLICT", "base_revision", "The project has changed; inspect it and retry.", state.revision);
+      }
+      const result = state.executeHistoryControl({ id: commandId, kind: name });
+      if (!result.ok) {
+        throw new ToolExecutionError(
+          name === "undo" ? "NOTHING_TO_UNDO" : "NOTHING_TO_REDO",
+          undefined,
+          name === "undo" ? "There is nothing to undo." : "There is nothing to redo.",
+          undefined,
+          true,
+        );
+      }
+      state = store.getState();
+      return historyControlResult(state, result);
+    }),
+  };
+};
+
 const defineMutationTool = <T>(
   toolContract: ToolContract,
   store: Pick<StoreApi<StudioState>, "getState">,
@@ -1805,6 +1855,35 @@ export function createWebMCPTools(
       (input, signal) => runDirectMutation(store, "delete_notes", input, signal, (project) =>
         translateDirectChange(project, { type: "delete_notes", pattern_id: { id: input.patternId },
           note_ids: input.noteIds.map((id) => ({ id })) }, createId)),
+    ),
+    defineHistoryControlTool("undo", store),
+    defineHistoryControlTool("redo", store),
+    defineMutationTool(
+      contract("restore_history"),
+      store,
+      (input) => ({
+        ...parseMutationMetadata(input),
+        historyEntryId: expectString(input.history_entry_id, "history_entry_id"),
+      }),
+      (input, signal) => {
+        signal.throwIfAborted();
+        let state = store.getState();
+        if (input.baseRevision !== undefined && input.baseRevision !== state.revision) {
+          toolError("REVISION_CONFLICT", "base_revision", "The project has changed; inspect it and retry.", state.revision);
+        }
+        if (!state.history.some(({ id }) => id === input.historyEntryId)) {
+          toolError("HISTORY_ENTRY_NOT_FOUND", "history_entry_id", "That retained history entry was not found.");
+        }
+        const result = state.executeRestore({
+          id: `webmcp:restore_history:${input.requestId}`,
+          source: "agent",
+          toolName: "restore_history",
+          label: "Restore history",
+          targetEntryId: input.historyEntryId,
+        });
+        state = store.getState();
+        return mutationResult(state, result);
+      },
     ),
     defineMutationTool(
       contract("apply_project_changes"),

@@ -1515,6 +1515,164 @@ describe("event mutations", () => {
   });
 });
 
+describe("history controls", () => {
+  const renameProject = (
+    store: ReturnType<typeof createStudioStore>,
+    id: string,
+    name: string,
+  ) => store.getState().dispatch({
+    id, source: "manual", label: "Rename project", kind: "operation",
+    operation: { type: "project.update", changes: { name } },
+  });
+
+  test("undo and redo require request IDs, accept optional revisions, and move without history entries", async () => {
+    const store = createStudioStore(DEMO_PROJECT);
+    renameProject(store, "rename", "Renamed");
+    const history = store.getState().history;
+
+    await expect(executeMutation(store, "undo", {})).resolves.toMatchObject({
+      success: false, error: { code: "INVALID_INPUT", field: "request_id" },
+    });
+    const undone = await executeMutation(store, "undo", {
+      request_id: "shared-control", base_revision: 1,
+    });
+    expect(undone).toEqual({ success: true, result: {
+      changed: true, deduplicated: false, project_revision: 2, history_cursor: -1,
+      changes: { created: {}, updated: { project_ids: ["demo"] }, deleted: {} },
+    } });
+
+    const redone = await executeMutation(store, "redo", { request_id: "shared-control" });
+    expect(redone).toEqual({ success: true, result: {
+      changed: true, deduplicated: false, project_revision: 3, history_cursor: 0,
+      changes: { created: {}, updated: { project_ids: ["demo"] }, deleted: {} },
+    } });
+    expect(store.getState().history).toBe(history);
+    expect(store.getState().history).toHaveLength(1);
+  });
+
+  test("undo and redo retries replay before stale revision checks", async () => {
+    const store = createStudioStore(DEMO_PROJECT);
+    renameProject(store, "first", "First");
+    renameProject(store, "second", "Second");
+
+    const undo = await executeMutation(store, "undo", {
+      request_id: "retry", base_revision: 2,
+    });
+    const undoRetry = await executeMutation(store, "undo", {
+      request_id: "retry", base_revision: 2,
+    });
+    expect(undo).toMatchObject({ success: true, result: {
+      deduplicated: false, project_revision: 3, history_cursor: 0,
+    } });
+    expect(undoRetry).toMatchObject({ success: true, result: {
+      deduplicated: true, project_revision: 3, history_cursor: 0,
+    } });
+
+    const redo = await executeMutation(store, "redo", {
+      request_id: "retry", base_revision: 3,
+    });
+    const redoRetry = await executeMutation(store, "redo", {
+      request_id: "retry", base_revision: 3,
+    });
+    expect(redo).toMatchObject({ success: true, result: {
+      deduplicated: false, project_revision: 4, history_cursor: 1,
+    } });
+    expect(redoRetry).toMatchObject({ success: true, result: {
+      deduplicated: true, project_revision: 4, history_cursor: 1,
+    } });
+    expect(store.getState().project.name).toBe("Second");
+    expect(store.getState().history).toHaveLength(2);
+  });
+
+  test("unavailable undo and redo return public errors without caching their request IDs", async () => {
+    const undoStore = createStudioStore(DEMO_PROJECT);
+    await expect(executeMutation(undoStore, "undo", { request_id: "becomes-available" }))
+      .resolves.toMatchObject({ success: false, error: { code: "NOTHING_TO_UNDO" } });
+    renameProject(undoStore, "rename", "Renamed");
+    await expect(executeMutation(undoStore, "undo", { request_id: "becomes-available" }))
+      .resolves.toMatchObject({ success: true, result: { deduplicated: false, history_cursor: -1 } });
+
+    const redoStore = createStudioStore(DEMO_PROJECT);
+    renameProject(redoStore, "rename", "Renamed");
+    await expect(executeMutation(redoStore, "redo", { request_id: "becomes-available" }))
+      .resolves.toMatchObject({ success: false, error: { code: "NOTHING_TO_REDO" } });
+    redoStore.getState().executeHistoryControl({ id: "manual-undo", kind: "undo" });
+    await expect(executeMutation(redoStore, "redo", { request_id: "becomes-available" }))
+      .resolves.toMatchObject({ success: true, result: { deduplicated: false, history_cursor: 0 } });
+  });
+
+  test("restore_history rejects an unretained history entry", async () => {
+    const store = createStudioStore(DEMO_PROJECT);
+
+    await expect(executeMutation(store, "restore_history", {
+      request_id: "missing", history_entry_id: "missing",
+    })).resolves.toMatchObject({
+      success: false, error: { code: "HISTORY_ENTRY_NOT_FOUND", field: "history_entry_id" },
+    });
+    expect(store.getState()).toMatchObject({ revision: 0, history: [], historyCursor: -1 });
+  });
+
+  test("changed restore_history creates one attributed entry that can be undone", async () => {
+    const store = createStudioStore(DEMO_PROJECT);
+    renameProject(store, "target", "Target");
+    const targetEntryId = store.getState().history[0]!.id;
+    renameProject(store, "later", "Later");
+
+    const restored = await executeMutation(store, "restore_history", {
+      request_id: "restore", base_revision: 2, history_entry_id: targetEntryId,
+    });
+    expect(restored).toMatchObject({ success: true, result: {
+      changed: true, deduplicated: false, project_revision: 3, history_cursor: 2,
+      changes: { updated: { project_ids: ["demo"] } },
+    } });
+    expect(restored.result).toHaveProperty("history_entry_id");
+    expect(store.getState().history).toHaveLength(3);
+    expect(store.getState().history[2]).toMatchObject({
+      commandId: "webmcp:restore_history:restore", source: "agent",
+      toolName: "restore_history", label: "Restore history",
+      action: { kind: "restore", targetEntryId },
+    });
+    expect(store.getState().project.name).toBe("Target");
+
+    await expect(executeMutation(store, "undo", {
+      request_id: "undo-restore", base_revision: 3,
+    })).resolves.toMatchObject({ success: true, result: { project_revision: 4, history_cursor: 1 } });
+    expect(store.getState().project.name).toBe("Later");
+    expect(store.getState().history).toHaveLength(3);
+  });
+
+  test("no-op restore_history is cached without changing revision or truncating redo history", async () => {
+    const store = createStudioStore(DEMO_PROJECT);
+    renameProject(store, "target", "Target");
+    const targetEntryId = store.getState().history[0]!.id;
+    renameProject(store, "later", "Later");
+    store.getState().executeHistoryControl({ id: "manual-undo", kind: "undo" });
+    const history = store.getState().history;
+
+    const restored = await executeMutation(store, "restore_history", {
+      request_id: "no-op", base_revision: 3, history_entry_id: targetEntryId,
+    });
+    expect(restored).toEqual({ success: true, result: {
+      changed: false, deduplicated: false, project_revision: 3, history_cursor: 0,
+      changes: { created: {}, updated: {}, deleted: {} },
+    } });
+    expect(store.getState().history).toBe(history);
+
+    await expect(executeMutation(store, "redo", {
+      request_id: "redo-after-restore", base_revision: 3,
+    })).resolves.toMatchObject({ success: true, result: { project_revision: 4, history_cursor: 1 } });
+    const replayed = await executeMutation(store, "restore_history", {
+      request_id: "no-op", base_revision: 3, history_entry_id: "ignored-after-replay",
+    });
+    expect(replayed).toEqual({ success: true, result: {
+      changed: false, deduplicated: true, project_revision: 4, history_cursor: 1,
+      changes: { created: {}, updated: {}, deleted: {} },
+    } });
+    expect(store.getState().project.name).toBe("Later");
+    expect(store.getState().history).toBe(history);
+  });
+});
+
 describe("apply_project_changes", () => {
   const noOp = { type: "set_track_solo", track_id: { id: "pad" }, soloed: false } as const;
 
