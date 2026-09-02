@@ -551,6 +551,16 @@ const parseTrackId = (input: Readonly<Record<string, unknown>>) => ({
   trackId: expectString(input.track_id, "track_id"),
 });
 
+const parsePatternId = (input: Readonly<Record<string, unknown>>) => ({
+  ...parseMutationMetadata(input),
+  patternId: expectString(input.pattern_id, "pattern_id"),
+});
+
+const parseClipId = (input: Readonly<Record<string, unknown>>) => ({
+  ...parseMutationMetadata(input),
+  clipId: expectString(input.clip_id, "clip_id"),
+});
+
 const mutationResult = (
   state: StudioState,
   result: DispatchResult,
@@ -777,6 +787,196 @@ export function createWebMCPTools(
         }
         return [{ type: "track.delete", trackId: input.trackId }];
       }),
+    ),
+    defineMutationTool(
+      contract("create_pattern"),
+      store,
+      (input) => {
+        const placement = input.placement === undefined ? undefined : expectObject(input.placement, "placement");
+        if (placement !== undefined) expectAllowedKeys(placement, ["track_id", "start_bar", "repeat_count"], "placement");
+        return {
+          ...parseMutationMetadata(input),
+          kind: expectEnum(input.kind, "kind", ["drum", "synth"] as const),
+          name: input.name === undefined ? undefined : expectString(input.name, "name").trim(),
+          lengthBars: expectEnum(input.length_bars, "length_bars", [1, 2, 4] as const),
+          placement: placement === undefined ? undefined : {
+            trackId: expectString(placement.track_id, "placement.track_id"),
+            startBar: expectInteger(placement.start_bar, "placement.start_bar", 1) - 1,
+            repeatCount: placement.repeat_count === undefined
+              ? 1
+              : expectInteger(placement.repeat_count, "placement.repeat_count", 1, 64),
+          },
+        };
+      },
+      (input, signal) => runDirectMutation(store, "create_pattern", input, signal, () => {
+        const pattern: Pattern = {
+          id: createId(), name: input.name ?? (input.kind === "drum" ? "New beat" : "New melody"),
+          kind: input.kind, lengthBars: input.lengthBars, events: [],
+        };
+        return input.placement === undefined
+          ? [{ type: "pattern.create", pattern }]
+          : [
+              { type: "pattern.create", pattern },
+              { type: "arrangement.place", clip: {
+                id: createId(), patternId: pattern.id, trackId: input.placement.trackId,
+                startBar: input.placement.startBar, repeatCount: input.placement.repeatCount,
+              } },
+            ];
+      }, (result) => ({
+        pattern_id: result.changes.created.patternIds[0],
+        ...(result.changes.created.arrangementClipIds[0] === undefined
+          ? {}
+          : { clip_id: result.changes.created.arrangementClipIds[0] }),
+      })),
+      (result) => ({
+        pattern_id: result.changes.created.patternIds[0],
+        ...(result.changes.created.arrangementClipIds[0] === undefined
+          ? {}
+          : { clip_id: result.changes.created.arrangementClipIds[0] }),
+      }),
+    ),
+    defineMutationTool(
+      contract("rename_pattern"),
+      store,
+      (input) => ({ ...parsePatternId(input), name: expectString(input.name, "name").trim() }),
+      (input, signal) => runDirectMutation(store, "rename_pattern", input, signal,
+        () => [{ type: "pattern.update", patternId: input.patternId, changes: { name: input.name } }]),
+    ),
+    defineMutationTool(
+      contract("resize_pattern"),
+      store,
+      (input) => ({
+        ...parsePatternId(input),
+        lengthBars: expectEnum(input.length_bars, "length_bars", [1, 2, 4] as const),
+      }),
+      (input, signal) => runDirectMutation(store, "resize_pattern", input, signal,
+        () => [{ type: "pattern.update", patternId: input.patternId, changes: { lengthBars: input.lengthBars } }]),
+    ),
+    defineMutationTool(
+      contract("duplicate_pattern"),
+      store,
+      (input) => ({
+        ...parsePatternId(input),
+        name: input.name === undefined ? undefined : expectString(input.name, "name").trim(),
+      }),
+      (input, signal) => runDirectMutation(store, "duplicate_pattern", input, signal, (project) => {
+        const duplicatePatternId = createId();
+        const pattern = project.patterns.find(({ id }) => id === input.patternId);
+        const duplicateEventIds = pattern?.events.map(() => createId()) ?? [];
+        return [{
+          type: "pattern.duplicate", patternId: input.patternId, duplicatePatternId,
+          duplicateName: input.name ?? `${pattern?.name.slice(0, 35) ?? "Pattern"} copy`, duplicateEventIds,
+        }];
+      }, (result) => ({ pattern_id: result.changes.created.patternIds[0] })),
+      (result) => ({ pattern_id: result.changes.created.patternIds[0] }),
+    ),
+    defineMutationTool(
+      contract("delete_pattern"),
+      store,
+      (input) => ({
+        ...parsePatternId(input),
+        deleteClips: input.delete_clips === undefined ? false : expectBoolean(input.delete_clips, "delete_clips"),
+      }),
+      (input, signal) => runDirectMutation(store, "delete_pattern", input, signal, (project) => {
+        const clipIds = project.arrangement.filter(({ patternId }) => patternId === input.patternId).map(({ id }) => id);
+        if (!input.deleteClips && clipIds.length > 0) {
+          toolError("DEPENDENCIES_EXIST", "delete_clips", `Dependent clip IDs: ${clipIds.join(", ")}.`);
+        }
+        return [{ type: "pattern.delete", patternId: input.patternId }];
+      }),
+    ),
+    defineMutationTool(
+      contract("place_pattern"),
+      store,
+      (input) => ({
+        ...parsePatternId(input),
+        trackId: expectString(input.track_id, "track_id"),
+        startBar: expectInteger(input.start_bar, "start_bar", 1) - 1,
+        repeatCount: input.repeat_count === undefined ? 1 : expectInteger(input.repeat_count, "repeat_count", 1, 64),
+      }),
+      (input, signal) => runDirectMutation(store, "place_pattern", input, signal,
+        () => [{ type: "arrangement.place", clip: {
+          id: createId(), patternId: input.patternId, trackId: input.trackId,
+          startBar: input.startBar, repeatCount: input.repeatCount,
+        } }], (result) => ({ clip_id: result.changes.created.arrangementClipIds[0] })),
+      (result) => ({ clip_id: result.changes.created.arrangementClipIds[0] }),
+    ),
+    defineMutationTool(
+      contract("move_clip"),
+      store,
+      (input) => {
+        const parsed = {
+          ...parseClipId(input),
+          trackId: optionalString(input, "track_id"),
+          startBar: input.start_bar === undefined ? undefined : expectInteger(input.start_bar, "start_bar", 1) - 1,
+        };
+        if (parsed.trackId === undefined && parsed.startBar === undefined) {
+          invalid("$", "must contain track_id or start_bar");
+        }
+        return parsed;
+      },
+      (input, signal) => runDirectMutation(store, "move_clip", input, signal,
+        () => [{ type: "arrangement.update", clipId: input.clipId, changes: {
+          ...(input.trackId === undefined ? {} : { trackId: input.trackId }),
+          ...(input.startBar === undefined ? {} : { startBar: input.startBar }),
+        } }]),
+    ),
+    defineMutationTool(
+      contract("change_clip_pattern"),
+      store,
+      (input) => ({ ...parseClipId(input), patternId: expectString(input.pattern_id, "pattern_id") }),
+      (input, signal) => runDirectMutation(store, "change_clip_pattern", input, signal,
+        () => [{ type: "arrangement.update", clipId: input.clipId, changes: { patternId: input.patternId } }]),
+    ),
+    defineMutationTool(
+      contract("set_clip_repeats"),
+      store,
+      (input) => ({ ...parseClipId(input), repeatCount: expectInteger(input.repeat_count, "repeat_count", 1, 64) }),
+      (input, signal) => runDirectMutation(store, "set_clip_repeats", input, signal,
+        () => [{ type: "arrangement.update", clipId: input.clipId, changes: { repeatCount: input.repeatCount } }]),
+    ),
+    defineMutationTool(
+      contract("duplicate_clip"),
+      store,
+      parseClipId,
+      (input, signal) => runDirectMutation(store, "duplicate_clip", input, signal, (project) => {
+        const id = createId();
+        const clip = project.arrangement.find((candidate) => candidate.id === input.clipId);
+        if (clip === undefined) toolError("CLIP_NOT_FOUND", "clip_id", `Clip ${input.clipId} was not found.`);
+        const pattern = project.patterns.find((candidate) => candidate.id === clip.patternId)!;
+        return [{ type: "arrangement.place", clip: {
+          ...clip, id, startBar: clip.startBar + pattern.lengthBars * clip.repeatCount,
+        } }];
+      }, (result) => ({ clip_id: result.changes.created.arrangementClipIds[0] })),
+      (result) => ({ clip_id: result.changes.created.arrangementClipIds[0] }),
+    ),
+    defineMutationTool(
+      contract("make_clip_unique"),
+      store,
+      (input) => ({
+        ...parseClipId(input),
+        name: input.pattern_name === undefined ? undefined : expectString(input.pattern_name, "pattern_name").trim(),
+      }),
+      (input, signal) => runDirectMutation(store, "make_clip_unique", input, signal, (project) => {
+        const duplicatePatternId = createId();
+        const clip = project.arrangement.find((candidate) => candidate.id === input.clipId);
+        if (clip === undefined) toolError("CLIP_NOT_FOUND", "clip_id", `Clip ${input.clipId} was not found.`);
+        const pattern = project.patterns.find((candidate) => candidate.id === clip.patternId)!;
+        const duplicateEventIds = pattern.events.map(() => createId());
+        return [
+          { type: "pattern.duplicate", patternId: pattern.id, duplicatePatternId,
+            duplicateName: input.name ?? `${pattern.name.slice(0, 35)} copy`, duplicateEventIds },
+          { type: "arrangement.update", clipId: clip.id, changes: { patternId: duplicatePatternId } },
+        ];
+      }, (result) => ({ pattern_id: result.changes.created.patternIds[0] })),
+      (result) => ({ pattern_id: result.changes.created.patternIds[0] }),
+    ),
+    defineMutationTool(
+      contract("delete_clip"),
+      store,
+      parseClipId,
+      (input, signal) => runDirectMutation(store, "delete_clip", input, signal,
+        () => [{ type: "arrangement.delete", clipId: input.clipId }]),
     ),
   ];
 }
