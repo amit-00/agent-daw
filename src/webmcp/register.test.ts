@@ -1,10 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
+import type { StoreApi } from "zustand/vanilla";
 
 import { DEMO_PROJECT } from "@/data/studio-data";
-import { createStudioStore } from "@/stores/studio-store";
+import type { Project } from "@/project";
+import { createStudioStore as createStudioStoreBase, type StudioState } from "@/stores/studio-store";
 import type { WebMCPTool } from "@/webmcp/contracts";
 import { getModelContext, registerWebMCPTools, type ModelContext } from "@/webmcp/register";
 import { createWebMCPTools } from "@/webmcp/tools";
+
+const createStudioStore = (project: Project): StoreApi<StudioState> => createStudioStoreBase(
+  project,
+  () => null,
+  { status: "unsaved", updatedAt: null, errorMessage: null },
+);
 
 const deferredTools = [
   "play", "pause", "stop", "seek", "export_wav",

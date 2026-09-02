@@ -1,13 +1,20 @@
 import { describe, expect, test, vi } from "vitest";
+import type { StoreApi } from "zustand/vanilla";
 
 import { PROJECT_CAPS, type Project } from "@/project";
 import { DEMO_PROJECT } from "@/data/studio-data";
-import { createStudioStore } from "@/stores/studio-store";
+import { createStudioStore as createStudioStoreBase, type StudioState } from "@/stores/studio-store";
 
 import { TOOL_CONTRACTS } from "./contracts.ts";
 import type { WebMCPToolName } from "./contracts.ts";
 import toolSelectionCases from "./evals/tool-selection.json";
 import { createWebMCPTools, defineWebMCPTool, expectString } from "./tools.ts";
+
+const createStudioStore = (project: Project): StoreApi<StudioState> => createStudioStoreBase(
+  project,
+  () => null,
+  { status: "unsaved", updatedAt: null, errorMessage: null },
+);
 
 const readNames = ["get_project", "get_sound_catalog", "get_history"];
 const futureAndDeferredNames = [
