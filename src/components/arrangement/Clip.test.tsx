@@ -4,7 +4,12 @@ import { expect, it } from "vitest";
 import { Clip } from "@/components/arrangement/Clip";
 import { EMPTY_PROJECT } from "@/data/studio-data";
 import type { ArrangementClip, Project, SynthPattern } from "@/project";
-import { StudioProvider } from "@/stores/studio-provider";
+import { StudioProvider, type StudioPersistenceSession } from "@/stores/studio-provider";
+
+const TEST_PERSISTENCE_SESSION: StudioPersistenceSession = {
+  service: null,
+  baseline: { status: "unsaved", updatedAt: null, errorMessage: null },
+};
 
 it("renders thin rounded MIDI notes within their occupied octaves", () => {
   const pattern: SynthPattern = { id: "phrase", name: "Phrase", kind: "synth", lengthBars: 1,
@@ -19,7 +24,7 @@ it("renders thin rounded MIDI notes within their occupied octaves", () => {
     patterns: [pattern], arrangement: [clip] };
 
   const { container } = render(
-    <StudioProvider initialProject={project}>
+    <StudioProvider initialProject={project} persistenceSession={TEST_PERSISTENCE_SESSION}>
       <Clip clip={clip} pattern={pattern} bars={16} onEdit={() => undefined} />
     </StudioProvider>,
   );

@@ -1,15 +1,105 @@
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { useEffect } from "react";
+import { renderToString } from "react-dom/server";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { IDBFactory } from "fake-indexeddb";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { StoreApi } from "zustand/vanilla";
 
-import { Studio } from "@/components/Studio";
+import { Studio, StudioSession } from "@/components/Studio";
 import { Transport } from "@/components/Transport";
 import { ActivityPanel } from "@/components/ActivityPanel";
 import { DEMO_PROJECT, EMPTY_PROJECT } from "@/data/studio-data";
-import { StudioProvider, useStudioStore } from "@/stores/studio-provider";
+import { ProjectPersistenceService } from "@/persistence/service";
+import { StudioProvider, useStudioStore, useStudioStoreApi, type StudioPersistenceSession } from "@/stores/studio-provider";
 import type { StudioState } from "@/stores/studio-store";
 import { audioProject } from "../../test/audio-fixtures";
-import { FakeOfflineAudioContext } from "../../test/audio-fakes";
+import { FakeAudioContext, FakeOfflineAudioContext } from "../../test/audio-fakes";
+
+const DATABASE_NAME = "agent-daw";
+const DATABASE_VERSION = 1;
+const STORE_NAME = "current-project";
+const RECORD_KEY = "current";
+const TEST_PERSISTENCE_SESSION: StudioPersistenceSession = {
+  service: null,
+  baseline: { status: "unsaved", updatedAt: null, errorMessage: null },
+};
+
+const indexedDBWithRawRecord = async (value: unknown): Promise<IDBFactory> => {
+  const indexedDB = new IDBFactory();
+  const database = await new Promise<IDBDatabase>((resolve, reject) => {
+    const request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
+    request.onupgradeneeded = () => request.result.createObjectStore(STORE_NAME);
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+  const transaction = database.transaction(STORE_NAME, "readwrite");
+  transaction.objectStore(STORE_NAME).put(value, RECORD_KEY);
+  await new Promise<void>((resolve, reject) => {
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error);
+    transaction.onabort = () => reject(transaction.error);
+  });
+  database.close();
+  return indexedDB;
+};
+
+const indexedDBWithProject = (project: typeof DEMO_PROJECT): Promise<IDBFactory> =>
+  indexedDBWithRawRecord({ project, updatedAt: 1_700_000_000_000 });
+
+const failingReadwriteFactory = (indexedDB: IDBFactory): IDBFactory => new Proxy(indexedDB, {
+  get(target, property, receiver) {
+    if (property !== "open") return Reflect.get(target, property, receiver);
+    return (name: string, version?: number): IDBOpenDBRequest => {
+      const request = version === undefined ? target.open(name) : target.open(name, version);
+      request.addEventListener("success", () => {
+        const database = request.result;
+        const transaction = database.transaction.bind(database);
+        Object.defineProperty(database, "transaction", {
+          configurable: true,
+          value: (storeNames: string | string[], mode: IDBTransactionMode = "readonly",
+            options?: IDBTransactionOptions): IDBTransaction => {
+            if (mode === "readwrite") throw new DOMException("Storage denied", "SecurityError");
+            return options === undefined
+              ? transaction(storeNames, mode)
+              : transaction(storeNames, mode, options);
+          },
+        });
+      }, { once: true });
+      return request;
+    };
+  },
+});
+
+const failingFirstOpenFactory = (indexedDB: IDBFactory): IDBFactory => {
+  let shouldFail = true;
+  return new Proxy(indexedDB, {
+    get(target, property, receiver) {
+      if (property !== "open") return Reflect.get(target, property, receiver);
+      return (name: string, version?: number): IDBOpenDBRequest => {
+        if (shouldFail) {
+          shouldFail = false;
+          throw new DOMException("Storage denied", "SecurityError");
+        }
+        return version === undefined ? target.open(name) : target.open(name, version);
+      };
+    },
+  });
+};
+
+function StoreApiProbe({ onStore }: Readonly<{
+  onStore: (store: StoreApi<StudioState>) => void;
+}>): null {
+  const store = useStudioStoreApi();
+  useEffect(() => { onStore(store); }, [onStore, store]);
+  return null;
+}
+
+let sessionStore: StoreApi<StudioState> | undefined;
+
+function renderSession(project: typeof DEMO_PROJECT): void {
+  render(<StudioProvider initialProject={project} persistenceSession={TEST_PERSISTENCE_SESSION}><StudioSession /><StoreApiProbe onStore={(value) => { sessionStore = value; }} /></StudioProvider>);
+}
 
 beforeEach(() => {
   HTMLDivElement.prototype.setPointerCapture = vi.fn();
@@ -20,12 +110,617 @@ beforeEach(() => {
 });
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
+describe("Studio persistence bootstrap", () => {
+  it("keeps server and browser initial renders loading until bootstrap resolves", async () => {
+    vi.stubGlobal("indexedDB", undefined);
+    const serverMarkup = renderToString(<Studio initialProject={DEMO_PROJECT} />);
+    expect(serverMarkup).toContain('aria-label="Loading project"');
+    expect(serverMarkup).not.toContain('id="studio"');
+
+    vi.stubGlobal("indexedDB", new IDBFactory());
+    render(<Studio initialProject={DEMO_PROJECT} />);
+    expect(screen.getByRole("status", { name: "Loading project" })).toBeVisible();
+    expect(screen.queryByRole("region", { name: "Song arrangement" })).not.toBeInTheDocument();
+    expect(await screen.findByRole("region", { name: "Song arrangement" })).toBeVisible();
+  });
+
+  it("shows loading before mounting a loaded project", async () => {
+    const savedProject = { ...DEMO_PROJECT, name: "Persisted Session" };
+    vi.stubGlobal("indexedDB", await indexedDBWithProject(savedProject));
+
+    render(<Studio initialProject={DEMO_PROJECT} />);
+
+    expect(screen.getByRole("status", { name: "Loading project" })).toBeVisible();
+    expect(await screen.findByText(savedProject.name)).toBeVisible();
+    expect(screen.getByText(/Saved locally/)).toBeVisible();
+  });
+
+  it("opens the unsaved demo when storage is empty", async () => {
+    vi.stubGlobal("indexedDB", new IDBFactory());
+
+    render(<Studio initialProject={DEMO_PROJECT} />);
+
+    expect(await screen.findByText(DEMO_PROJECT.name)).toBeVisible();
+    expect(screen.getByText(/Not saved yet/)).toBeVisible();
+  });
+
+  it("blocks a present undefined record until explicit clear", async () => {
+    vi.stubGlobal("indexedDB", await indexedDBWithRawRecord(undefined));
+
+    render(<Studio initialProject={DEMO_PROJECT} />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/cannot be loaded/i);
+    expect(screen.queryByRole("region", { name: "Song arrangement" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Clear stored project" })).toBeEnabled();
+  });
+
+  it("blocks editing until corrupt storage is explicitly cleared", async () => {
+    vi.stubGlobal("indexedDB", await indexedDBWithRawRecord({ project: { broken: true }, updatedAt: 1 }));
+    const user = userEvent.setup();
+
+    render(<Studio initialProject={DEMO_PROJECT} />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/cannot be loaded/i);
+    expect(screen.queryByRole("region", { name: "Song arrangement" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Clear stored project" }));
+    expect(await screen.findByRole("region", { name: "Song arrangement" })).toBeVisible();
+    expect(screen.getByText(/Not saved yet/)).toBeVisible();
+  });
+
+  it("blocks unsupported schema until it is explicitly cleared", async () => {
+    vi.stubGlobal("indexedDB", await indexedDBWithRawRecord({
+      project: { ...DEMO_PROJECT, schemaVersion: 3 },
+      updatedAt: 1,
+    }));
+
+    render(<Studio initialProject={DEMO_PROJECT} />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/schema 3 is unsupported/i);
+    expect(screen.queryByRole("region", { name: "Song arrangement" })).not.toBeInTheDocument();
+  });
+
+  it("keeps corrupt storage blocked when clear fails", async () => {
+    const indexedDB = await indexedDBWithRawRecord({ project: { broken: true }, updatedAt: 1 });
+    vi.stubGlobal("indexedDB", failingReadwriteFactory(indexedDB));
+    const user = userEvent.setup();
+
+    render(<Studio initialProject={DEMO_PROJECT} />);
+    await user.click(await screen.findByRole("button", { name: "Clear stored project" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/Project clear cannot access IndexedDB/i);
+    expect(screen.queryByRole("region", { name: "Song arrangement" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Clear stored project" })).toBeEnabled();
+  });
+
+  it("opens a memory-only demo after a non-recovery storage failure", async () => {
+    vi.stubGlobal("indexedDB", failingFirstOpenFactory(new IDBFactory()));
+
+    render(<Studio initialProject={DEMO_PROJECT} />);
+
+    expect(await screen.findByRole("region", { name: "Song arrangement" })).toBeVisible();
+    expect(screen.getByRole("alert")).toHaveTextContent(/Project load cannot access IndexedDB/i);
+    expect(screen.getByText(/In memory/)).toBeVisible();
+  });
+
+  it("opens a memory-only demo when IndexedDB is absent", async () => {
+    vi.stubGlobal("indexedDB", undefined);
+
+    render(<Studio initialProject={DEMO_PROJECT} />);
+
+    expect(await screen.findByRole("region", { name: "Song arrangement" })).toBeVisible();
+    expect(screen.getByRole("alert")).toHaveTextContent(/browser storage is unavailable/i);
+    expect(screen.getByText(/In memory/)).toBeVisible();
+  });
+});
+
+describe("Studio persistence autosave", () => {
+  it("autosaves every changed project identity and ignores no-op publication", async () => {
+    const indexedDB = new IDBFactory();
+    vi.stubGlobal("indexedDB", indexedDB);
+    const user = userEvent.setup();
+    render(<Studio initialProject={DEMO_PROJECT} />);
+    await screen.findByRole("region", { name: "Song arrangement" });
+
+    await user.click(screen.getByRole("button", { name: "Mixer" }));
+    const masterVolume = screen.getByRole("spinbutton", { name: "Master volume value" });
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+
+    fireEvent.change(masterVolume, { target: { value: String(DEMO_PROJECT.masterVolumeDb) } });
+    fireEvent.keyDown(masterVolume, { key: "Enter" });
+    act(() => document.dispatchEvent(new Event("visibilitychange")));
+    const afterNoOp = await new ProjectPersistenceService({ indexedDB, debounceMs: 0 }).load();
+    expect(afterNoOp.status).toBe("empty");
+
+    fireEvent.change(masterVolume, { target: { value: "-6" } });
+    fireEvent.keyDown(masterVolume, { key: "Enter" });
+    act(() => document.dispatchEvent(new Event("visibilitychange")));
+
+    expect(await screen.findByText(/Saved locally/)).toBeVisible();
+    const loaded = await new ProjectPersistenceService({ indexedDB, debounceMs: 0 }).load();
+    expect(loaded.status === "loaded" ? loaded.project.masterVolumeDb : null).toBe(-6);
+  });
+
+  it("retries the bootstrap service after a memory-only load failure", async () => {
+    const indexedDB = new IDBFactory();
+    vi.stubGlobal("indexedDB", failingFirstOpenFactory(indexedDB));
+    const user = userEvent.setup();
+    render(<Studio initialProject={DEMO_PROJECT} />);
+    await screen.findByRole("region", { name: "Song arrangement" });
+    expect(screen.getByRole("alert")).toHaveTextContent(/Project load cannot access IndexedDB/i);
+
+    await user.click(screen.getByRole("button", { name: "Mixer" }));
+    const masterVolume = screen.getByRole("spinbutton", { name: "Master volume value" });
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    fireEvent.change(masterVolume, { target: { value: "-7" } });
+    fireEvent.keyDown(masterVolume, { key: "Enter" });
+    act(() => document.dispatchEvent(new Event("visibilitychange")));
+
+    expect(await screen.findByText(/Saved locally/)).toBeVisible();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    const loaded = await new ProjectPersistenceService({ indexedDB, debounceMs: 0 }).load();
+    expect(loaded.status === "loaded" ? loaded.project.masterVolumeDb : null).toBe(-7);
+  });
+
+  it("logs rejected save scheduling and shows only retry guidance", async () => {
+    const service = new ProjectPersistenceService({ indexedDB: new IDBFactory(), debounceMs: 0 });
+    const rejection = new Error("private scheduling detail");
+    vi.spyOn(service, "scheduleSave").mockRejectedValue(rejection);
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    let store: StoreApi<StudioState> | undefined;
+    render(
+      <StudioProvider initialProject={DEMO_PROJECT} persistenceSession={{ ...TEST_PERSISTENCE_SESSION, service }}>
+        <StudioSession />
+        <StoreApiProbe onStore={(value) => { store = value; }} />
+      </StudioProvider>,
+    );
+
+    act(() => store!.getState().setMasterVolume(-6));
+
+    await waitFor(() => expect(store!.getState().persistence.status).toBe("failed"));
+    expect(screen.getByRole("alert")).toHaveTextContent(/Keep this page open and try another edit/);
+    expect(screen.getByRole("alert")).not.toHaveTextContent(rejection.message);
+    expect(log).toHaveBeenCalledWith("Project persistence failed unexpectedly", rejection);
+  });
+
+  it("logs a rejected hidden-document flush and shows only retry guidance", async () => {
+    const service = new ProjectPersistenceService({ indexedDB: new IDBFactory(), debounceMs: 0 });
+    vi.spyOn(service, "scheduleSave").mockResolvedValue({ status: "saved", updatedAt: 1 });
+    const rejection = new Error("private flush detail");
+    vi.spyOn(service, "flush").mockRejectedValue(rejection);
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    let store: StoreApi<StudioState> | undefined;
+    render(
+      <StudioProvider initialProject={DEMO_PROJECT} persistenceSession={{ ...TEST_PERSISTENCE_SESSION, service }}>
+        <StudioSession />
+        <StoreApiProbe onStore={(value) => { store = value; }} />
+      </StudioProvider>,
+    );
+
+    act(() => {
+      store!.getState().setMasterVolume(-6);
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+
+    await waitFor(() => expect(store!.getState().persistence.status).toBe("failed"));
+    expect(screen.getByRole("alert")).toHaveTextContent(/Keep this page open and try another edit/);
+    expect(screen.getByRole("alert")).not.toHaveTextContent(rejection.message);
+    expect(log).toHaveBeenCalledWith("Project persistence failed unexpectedly", rejection);
+  });
+});
+
 describe("Studio", () => {
+  it("plays, pauses, and stops from the transport", async () => {
+    const user = userEvent.setup();
+    const contexts: FakeAudioContext[] = [];
+    vi.stubGlobal("AudioContext", class extends FakeAudioContext {
+      constructor() {
+        super();
+        contexts.push(this);
+      }
+    });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(new ArrayBuffer(8))));
+    renderSession(DEMO_PROJECT);
+
+    await user.click(screen.getByRole("button", { name: "Play" }));
+    expect(contexts).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Pause" })).toBeEnabled();
+
+    await user.click(screen.getByRole("button", { name: "Pause" }));
+    expect(screen.getByRole("button", { name: "Play" })).toBeEnabled();
+
+    await user.click(screen.getByRole("button", { name: "Stop" }));
+    expect(screen.getByLabelText("Playback position")).toHaveTextContent("0:00.0");
+  });
+
+  it("lets Stop cancel playback while audio is still preparing", async () => {
+    const user = userEvent.setup();
+    let finishResume: (() => void) | undefined;
+    class SlowResumeAudioContext extends FakeAudioContext {
+      resume(): Promise<void> {
+        return new Promise((resolve) => {
+          finishResume = () => {
+            this.state = "running";
+            resolve();
+          };
+        });
+      }
+    }
+    vi.stubGlobal("AudioContext", SlowResumeAudioContext);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(new ArrayBuffer(8))));
+    renderSession(DEMO_PROJECT);
+
+    await user.click(screen.getByRole("button", { name: "Play" }));
+    expect(screen.getByText(/Preparing audio/)).toBeVisible();
+    expect(screen.getByRole("button", { name: "Stop" })).toBeEnabled();
+
+    await user.click(screen.getByRole("button", { name: "Stop" }));
+    expect(screen.queryByText(/Preparing audio/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Play" })).toBeEnabled();
+
+    await act(async () => { finishResume!(); });
+    expect(sessionStore!.getState().audio.snapshot).toMatchObject({ status: "stopped", positionStep: 0 });
+  });
+
+  it.each([
+    ["late_scheduler", "Scheduler woke after its look-ahead horizon"],
+    ["source_failed", "Audio source could not be scheduled"],
+  ] as const)("surfaces the %s engine issue accessibly", (code, message) => {
+    renderSession(DEMO_PROJECT);
+
+    act(() => sessionStore!.setState((current) => ({
+      audio: {
+        ...current.audio,
+        snapshot: { ...current.audio.snapshot, lastIssue: { code, message } },
+      },
+    })));
+
+    expect(screen.getByRole("alert")).toHaveTextContent(`Audio: ${message}`);
+    expect(screen.getByLabelText(message)).toBeVisible();
+  });
+
+  it("states that saved project history remains session-only", async () => {
+    vi.stubGlobal("indexedDB", await indexedDBWithProject(DEMO_PROJECT));
+
+    render(<Studio initialProject={EMPTY_PROJECT} />);
+
+    expect(await screen.findByText(/Saved locally; Activity\/history is session-only/)).toBeVisible();
+  });
+
+  it("carries rounded playback seconds into the next minute", () => {
+    renderSession({
+      ...DEMO_PROJECT,
+      bpm: 40,
+      arrangement: [{ ...DEMO_PROJECT.arrangement[0]!, repeatCount: 10 }],
+    });
+
+    act(() => sessionStore!.getState().seekPlayback(159.9));
+
+    expect(screen.getByLabelText("Playback position")).toHaveTextContent("1:00.0");
+  });
+
+  it("restarts playback from zero at the arrangement end", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal("AudioContext", FakeAudioContext);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(new ArrayBuffer(8))));
+    renderSession(DEMO_PROJECT);
+    act(() => sessionStore!.getState().seekPlayback(sessionStore!.getState().audio.snapshot.arrangementEndStep));
+
+    await user.click(screen.getByRole("button", { name: "Play" }));
+
+    expect(sessionStore!.getState().audio.snapshot).toMatchObject({ status: "playing", positionStep: 0 });
+    expect(screen.getByLabelText("Playback position")).toHaveTextContent("0:00.0");
+  });
+
+  it("keeps audio and persistence failures separate from edit errors", async () => {
+    renderSession(DEMO_PROJECT);
+    await act(async () => {
+      const token = sessionStore!.getState().beginPersistenceSave();
+      sessionStore!.getState().failPersistenceSave(token, "Browser storage is unavailable");
+      sessionStore!.getState().selectTrack("missing");
+    });
+
+    expect(sessionStore!.getState().persistence.errorMessage).toBe("Browser storage is unavailable");
+    expect(screen.getAllByRole("alert").map((alert) => alert.textContent)).toEqual([
+      "That track no longer exists. Select another track.",
+      "Storage: Browser storage is unavailable",
+    ]);
+  });
+
+  it("reports an empty arrangement without disabling editing", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal("AudioContext", FakeAudioContext);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(new ArrayBuffer(8))));
+    renderSession({ ...DEMO_PROJECT, arrangement: [] });
+
+    await user.click(screen.getByRole("button", { name: "Play" }));
+
+    expect(screen.getByRole("button", { name: "Play" })).toBeEnabled();
+    expect(screen.getByRole("alert")).toHaveTextContent("Project arrangement is empty");
+    expect(screen.getByRole("button", { name: "Add pattern" })).toBeEnabled();
+  });
+
+  it("shows blocked audio retry guidance while editing remains enabled", async () => {
+    const user = userEvent.setup();
+    class SuspendedAudioContext extends FakeAudioContext {
+      async resume(): Promise<void> {}
+    }
+    vi.stubGlobal("AudioContext", SuspendedAudioContext);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(new ArrayBuffer(8))));
+    renderSession(DEMO_PROJECT);
+
+    await user.click(screen.getByRole("button", { name: "Play" }));
+
+    expect(screen.getByRole("alert")).toHaveTextContent("Audio context is suspended; retry from a user gesture");
+    expect(screen.getByRole("button", { name: "Add pattern" })).toBeEnabled();
+  });
+
+  it("reports degraded samples while playing available sounds", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal("AudioContext", FakeAudioContext);
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => url.endsWith("hat.wav")
+      ? new Response(null, { status: 404 })
+      : new Response(new ArrayBuffer(8))));
+    renderSession(DEMO_PROJECT);
+
+    await user.click(screen.getByRole("button", { name: "Play" }));
+
+    expect(screen.getByRole("button", { name: "Pause" })).toBeEnabled();
+    expect(screen.getByRole("alert")).toHaveTextContent(/hat.*unavailable/i);
+  });
+
+  it("disables transport after the audio context closes", async () => {
+    const user = userEvent.setup();
+    const contexts: FakeAudioContext[] = [];
+    class ClosingAudioContext extends FakeAudioContext {
+      constructor() {
+        super();
+        contexts.push(this);
+      }
+
+      async resume(): Promise<void> {
+        if (this.state === "closed") {
+          throw new DOMException("The audio context is closed", "InvalidStateError");
+        }
+        await super.resume();
+      }
+    }
+    vi.stubGlobal("AudioContext", ClosingAudioContext);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(new ArrayBuffer(8))));
+    renderSession(DEMO_PROJECT);
+    await user.click(screen.getByRole("button", { name: "Play" }));
+    await screen.findByRole("button", { name: "Pause" });
+    await user.click(screen.getByRole("button", { name: "Pause" }));
+    await screen.findByRole("button", { name: "Play" });
+    await contexts[0]!.close();
+
+    await user.click(screen.getByRole("button", { name: "Play" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Audio engine is closed. Reload to restore playback.");
+    expect(screen.getByRole("button", { name: "Play" })).toBeDisabled();
+  });
+
+  it("clears pending playback after an unexpected resume failure", async () => {
+    const user = userEvent.setup();
+    class RejectingAudioContext extends FakeAudioContext {
+      async resume(): Promise<void> { throw new TypeError("invalid audio context"); }
+    }
+    vi.stubGlobal("AudioContext", RejectingAudioContext);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(new ArrayBuffer(8))));
+    renderSession(DEMO_PROJECT);
+
+    await user.click(screen.getByRole("button", { name: "Play" }));
+
+    expect(screen.getByRole("button", { name: "Play" })).toBeEnabled();
+    expect(screen.getByRole("alert")).toHaveTextContent("Audio playback failed. Try again or reload.");
+    expect(screen.getByRole("banner")).toHaveTextContent("Audio unavailable");
+  });
+
+  it("downloads one WAV from a frozen project without creating history", async () => {
+    let store: StoreApi<StudioState> | undefined;
+    let resolveRender: (() => void) | undefined;
+    vi.stubGlobal("AudioContext", FakeAudioContext);
+    vi.stubGlobal("OfflineAudioContext", class extends FakeOfflineAudioContext {
+      constructor(channels: number, length: number, sampleRate: number) {
+        super(channels, length, sampleRate);
+      }
+      override startRendering(): Promise<AudioBuffer> {
+        return new Promise((resolve) => {
+          resolveRender = () => resolve({
+            duration: this.length / this.sampleRate,
+            length: this.length,
+            numberOfChannels: 2,
+            sampleRate: this.sampleRate,
+            getChannelData: () => new Float32Array(this.length),
+          } as unknown as AudioBuffer);
+        });
+      }
+    });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(new ArrayBuffer(8))));
+    const createObjectURL = vi.fn(() => "blob:wav");
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal("URL", { createObjectURL, revokeObjectURL });
+    let downloadedName = "";
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
+      downloadedName = this.download;
+    });
+    const user = userEvent.setup();
+    render(
+      <StudioProvider initialProject={{ ...audioProject(), name: "Demo/Beat" }} persistenceSession={TEST_PERSISTENCE_SESSION}>
+        <Transport />
+        <StoreApiProbe onStore={(value) => { store = value; }} />
+      </StudioProvider>,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Export" }));
+    expect(screen.getByRole("button", { name: "Exporting…" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Exporting…" }));
+    await vi.waitFor(() => expect(resolveRender).toBeTypeOf("function"));
+    act(() => store!.getState().dispatch({
+      id: "rename-during-export",
+      source: "manual",
+      label: "Rename during export",
+      kind: "operation",
+      operation: { type: "project.update", changes: { name: "Changed" } },
+    }));
+    resolveRender?.();
+    await screen.findByRole("button", { name: "Export" });
+
+    expect(click).toHaveBeenCalledOnce();
+    expect(downloadedName).toBe("Demo-Beat.wav");
+    expect(createObjectURL).toHaveBeenCalledOnce();
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:wav");
+    expect(store!.getState().history).toHaveLength(1);
+  });
+
+  it("keeps empty export disabled and reports a rendering failure", async () => {
+    vi.stubGlobal("AudioContext", FakeAudioContext);
+    const user = userEvent.setup();
+    const empty = render(
+      <StudioProvider initialProject={EMPTY_PROJECT} persistenceSession={TEST_PERSISTENCE_SESSION}><Transport /></StudioProvider>,
+    );
+    expect(screen.getByRole("button", { name: "Export" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Export" })).toHaveAttribute(
+      "title",
+      "Add an arrangement clip before exporting WAV",
+    );
+    empty.unmount();
+
+    vi.stubGlobal("OfflineAudioContext", class extends FakeOfflineAudioContext {
+      override startRendering(): Promise<AudioBuffer> {
+        return Promise.reject(new Error("render stopped"));
+      }
+    });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(new ArrayBuffer(8))));
+    render(
+      <StudioProvider initialProject={audioProject()} persistenceSession={TEST_PERSISTENCE_SESSION}><Transport /></StudioProvider>,
+    );
+    await user.click(screen.getByRole("button", { name: "Export" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "WAV rendering failed; retry the export",
+    );
+  });
+
+  it("reports a browser download failure without creating history", async () => {
+    vi.stubGlobal("AudioContext", FakeAudioContext);
+    vi.stubGlobal("OfflineAudioContext", FakeOfflineAudioContext);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(new ArrayBuffer(8))));
+    vi.stubGlobal("URL", {
+      createObjectURL: () => { throw new Error("downloads blocked"); },
+      revokeObjectURL: vi.fn(),
+    });
+    const user = userEvent.setup();
+    render(
+      <StudioProvider initialProject={audioProject()} persistenceSession={TEST_PERSISTENCE_SESSION}><Transport /></StudioProvider>,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Export" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "WAV download failed; retry the export",
+    );
+    expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
+  });
+  it("forwards each changed project identity to the mounted audio engine", () => {
+    let store: StoreApi<StudioState> | undefined;
+    const project = { ...DEMO_PROJECT, arrangement: [{ ...DEMO_PROJECT.arrangement[0]!, id: "only" }] };
+    render(<StudioProvider initialProject={project} persistenceSession={TEST_PERSISTENCE_SESSION}><StoreApiProbe onStore={(value) => { store = value; }} /></StudioProvider>);
+    expect(store!.getState().audio.snapshot.arrangementEndStep).toBeGreaterThan(0);
+
+    act(() => store!.getState().deleteClip("only"));
+
+    expect(store!.getState().audio.snapshot.arrangementEndStep).toBe(0);
+  });
+
+  it("polls one animation frame while playing and cancels it after pause", async () => {
+    let store: StoreApi<StudioState> | undefined;
+    const contexts: FakeAudioContext[] = [];
+    const frames: FrameRequestCallback[] = [];
+    const requestFrame = vi.fn((callback: FrameRequestCallback): number => {
+      frames.push(callback);
+      return frames.length;
+    });
+    const cancelFrame = vi.fn();
+    vi.stubGlobal("AudioContext", class extends FakeAudioContext {
+      constructor() {
+        super();
+        contexts.push(this);
+      }
+    });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(new ArrayBuffer(8))));
+    vi.stubGlobal("requestAnimationFrame", requestFrame);
+    vi.stubGlobal("cancelAnimationFrame", cancelFrame);
+    render(<StudioProvider initialProject={DEMO_PROJECT} persistenceSession={TEST_PERSISTENCE_SESSION}><StoreApiProbe onStore={(value) => { store = value; }} /></StudioProvider>);
+
+    await act(() => store!.getState().playPause());
+    expect(contexts).toHaveLength(1);
+    expect(requestFrame).toHaveBeenCalledTimes(1);
+
+    await act(() => store!.getState().playPause());
+    expect(cancelFrame).toHaveBeenCalledWith(1);
+  });
+
+  it("stops animation frame polling at the arrangement end", async () => {
+    let store: StoreApi<StudioState> | undefined;
+    let scheduler: (() => void) | undefined;
+    const contexts: FakeAudioContext[] = [];
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal("AudioContext", class extends FakeAudioContext {
+      constructor() {
+        super();
+        contexts.push(this);
+      }
+    });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(new ArrayBuffer(8))));
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback): number => {
+      frames.push(callback);
+      return frames.length;
+    });
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    vi.stubGlobal("setInterval", (callback: () => void): number => {
+      scheduler = callback;
+      return 1;
+    });
+    vi.stubGlobal("clearInterval", vi.fn());
+    render(<StudioProvider initialProject={DEMO_PROJECT} persistenceSession={TEST_PERSISTENCE_SESSION}><StoreApiProbe onStore={(value) => { store = value; }} /></StudioProvider>);
+
+    await act(() => store!.getState().playPause());
+    contexts[0]!.currentTime = 60;
+    act(() => scheduler!());
+    act(() => frames[0]!(0));
+
+    expect(store!.getState().audio.snapshot.status).toBe("stopped");
+    expect(frames).toHaveLength(1);
+  });
+
+  it("cancels polling and closes the audio context when the provider unmounts", async () => {
+    let store: StoreApi<StudioState> | undefined;
+    const contexts: FakeAudioContext[] = [];
+    const requestFrame = vi.fn(() => 1);
+    const cancelFrame = vi.fn();
+    vi.stubGlobal("AudioContext", class extends FakeAudioContext {
+      constructor() {
+        super();
+        contexts.push(this);
+      }
+    });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(new ArrayBuffer(8))));
+    vi.stubGlobal("requestAnimationFrame", requestFrame);
+    vi.stubGlobal("cancelAnimationFrame", cancelFrame);
+    const { unmount } = render(<StudioProvider initialProject={DEMO_PROJECT} persistenceSession={TEST_PERSISTENCE_SESSION}><StoreApiProbe onStore={(value) => { store = value; }} /></StudioProvider>);
+
+    await act(() => store!.getState().playPause());
+    await act(async () => { unmount(); });
+
+    expect(cancelFrame).toHaveBeenCalledWith(1);
+    expect(contexts[0]!.state).toBe("closed");
+  });
+
   it("uses a track's assigned color for its clips and pattern notes", async () => {
     const user = userEvent.setup();
-    render(<Studio initialProject={{ ...DEMO_PROJECT,
+    renderSession({ ...DEMO_PROJECT,
       tracks: DEMO_PROJECT.tracks.map((track) => track.id === "bass" ? { ...track, color: "#70bd72" } : track),
-    }} />);
+    });
     const clip = within(screen.getByRole("region", { name: "Low Orbit lane" })).getAllByRole("button", { name: "Select Low Orbit phrase" })[0]!;
     expect(clip).toHaveStyle({ background: "color-mix(in srgb, color-mix(in srgb, #70bd72 88%, white) 80%, transparent)" });
     await user.click(clip);
@@ -36,7 +731,7 @@ describe("Studio", () => {
 
   it("creates an unplaced pattern, renames it, and places it using one-based bars", async () => {
     const user = userEvent.setup();
-    render(<Studio initialProject={DEMO_PROJECT} />);
+    renderSession(DEMO_PROJECT);
     await user.click(screen.getByRole("button", { name: "Add pattern" }));
     await user.selectOptions(screen.getByLabelText("Pattern editor"), "synth");
     await user.click(screen.getByRole("button", { name: "Create pattern" }));
@@ -60,7 +755,7 @@ describe("Studio", () => {
 
   it("creates and places from an empty lane in one edit and offers numeric creation", async () => {
     const user = userEvent.setup();
-    render(<Studio initialProject={{ ...DEMO_PROJECT, arrangement: [] }} />);
+    renderSession({ ...DEMO_PROJECT, arrangement: [] });
     const lane = screen.getByRole("region", { name: "Low Orbit lane" });
     vi.spyOn(lane, "getBoundingClientRect").mockReturnValue(new DOMRect(100, 0, 1_120, 112));
     fireEvent.doubleClick(lane, { clientX: 240 });
@@ -77,7 +772,7 @@ describe("Studio", () => {
 
   it("edits clip routing and repeats, duplicates sharing, and makes only one clip unique", async () => {
     const user = userEvent.setup();
-    render(<Studio initialProject={{ ...DEMO_PROJECT, arrangement: [DEMO_PROJECT.arrangement[2]!] }} />);
+    renderSession({ ...DEMO_PROJECT, arrangement: [DEMO_PROJECT.arrangement[2]!] });
     await user.click(screen.getByRole("button", { name: "Edit clip Low Orbit phrase at bar 1" }));
     await user.selectOptions(screen.getByLabelText("Destination track"), "chords");
     await user.clear(screen.getByLabelText("Starting bar"));
@@ -98,7 +793,7 @@ describe("Studio", () => {
 
   it("confirms all pattern placements before deletion and can cancel or undo", async () => {
     const user = userEvent.setup();
-    render(<Studio initialProject={DEMO_PROJECT} />);
+    renderSession(DEMO_PROJECT);
     await user.click(screen.getByRole("button", { name: "Edit pattern Neon beat" }));
     await user.click(screen.getByRole("button", { name: "Delete pattern" }));
     expect(screen.getByRole("dialog")).toHaveTextContent("2 placements");
@@ -114,7 +809,7 @@ describe("Studio", () => {
 
   it("keeps rejected clip edits unchanged and discards unapplied fields on Escape", async () => {
     const user = userEvent.setup();
-    render(<Studio initialProject={DEMO_PROJECT} />);
+    renderSession(DEMO_PROJECT);
     await user.click(screen.getByRole("button", { name: "Edit clip Low Orbit phrase at bar 1" }));
     await user.clear(screen.getByLabelText("Starting bar"));
     await user.type(screen.getByLabelText("Starting bar"), "2");
@@ -131,7 +826,7 @@ describe("Studio", () => {
 
   it("opens track movement controls with the keyboard and cancels without history", async () => {
     const user = userEvent.setup();
-    render(<Studio initialProject={DEMO_PROJECT} />);
+    renderSession(DEMO_PROJECT);
     screen.getByRole("button", { name: "Reorder Neon Kit" }).focus();
     await user.keyboard("{Enter}");
     expect(screen.getByRole("button", { name: "Move down" })).toBeVisible();
@@ -145,7 +840,7 @@ describe("Studio", () => {
     { instrumentId: "synth.bass", name: "Bass", incompatibleInstrument: "Basic drums" },
   ])("creates $name from one instrument selector and undoes it", async ({ instrumentId, name, incompatibleInstrument }) => {
     const user = userEvent.setup();
-    render(<Studio initialProject={EMPTY_PROJECT} />);
+    renderSession(EMPTY_PROJECT);
     await user.click(screen.getByRole("button", { name: "Add track" }));
     const selector = screen.getByRole("combobox", { name: "Instrument" });
     await user.selectOptions(selector, "synth.pad");
@@ -165,7 +860,7 @@ describe("Studio", () => {
 
   it("renames, changes preset, and reorders a track in arrangement and mixer", async () => {
     const user = userEvent.setup();
-    render(<Studio initialProject={DEMO_PROJECT} />);
+    renderSession(DEMO_PROJECT);
     await user.click(screen.getByRole("button", { name: "Edit Low Orbit" }));
     await user.clear(screen.getByLabelText("Track name"));
     await user.type(screen.getByLabelText("Track name"), "Sub bass");
@@ -185,7 +880,7 @@ describe("Studio", () => {
 
   it("confirms affected clips before deleting a track and keeps reusable patterns", async () => {
     const user = userEvent.setup();
-    render(<Studio initialProject={DEMO_PROJECT} />);
+    renderSession(DEMO_PROJECT);
     await user.click(screen.getByRole("button", { name: "Edit Neon Kit" }));
     await user.click(screen.getByRole("button", { name: "Delete track" }));
     expect(screen.getByRole("dialog")).toHaveTextContent("2 clips");
@@ -203,7 +898,7 @@ describe("Studio", () => {
 
   it("selects shared clips and unplaced patterns using project content", async () => {
     const user = userEvent.setup();
-    render(<Studio initialProject={DEMO_PROJECT} />);
+    renderSession(DEMO_PROJECT);
     await user.click(within(screen.getByRole("region", { name: "Glasshouse lane" })).getAllByRole("button", { name: "Select Glasshouse" })[1]!);
     expect(screen.getByRole("region", { name: "Pattern editor for Glasshouse" })).toHaveTextContent("2 placements");
     expect(within(screen.getByRole("region", { name: "Pattern editor for Glasshouse" })).getByText("C4")).toBeVisible();
@@ -213,15 +908,15 @@ describe("Studio", () => {
   });
 
   it("renders empty sessions without assuming a track or pattern", () => {
-    render(<Studio initialProject={EMPTY_PROJECT} />);
+    renderSession(EMPTY_PROJECT);
     expect(screen.getByText("Add a track to start arranging.")).toBeVisible();
     expect(screen.getByText("Select a pattern to view its notes or hits.")).toBeVisible();
   });
 
   it("renders exact project mixer values in project track order without simulated meters", async () => {
     const user = userEvent.setup();
-    render(<Studio initialProject={{ ...DEMO_PROJECT, name: "Test song", bpm: 96,
-      tracks: [...DEMO_PROJECT.tracks].reverse() }} />);
+    renderSession({ ...DEMO_PROJECT, name: "Test song", bpm: 96,
+      tracks: [...DEMO_PROJECT.tracks].reverse() });
     expect(screen.getByText("Test song")).toBeVisible();
     expect(screen.getByLabelText("Project tempo")).toHaveTextContent("96");
     await user.click(screen.getByRole("button", { name: "Mixer" }));
@@ -236,7 +931,7 @@ describe("Studio", () => {
 
   it("synchronizes track mute controls and commits a slider gesture once", async () => {
     const user = userEvent.setup();
-    render(<Studio initialProject={DEMO_PROJECT} />);
+    renderSession(DEMO_PROJECT);
     const trackHeader = screen.getByRole("group", { name: "Low Orbit track" });
     await user.click(within(trackHeader).getByRole("button", { name: "Mute Low Orbit" }));
     expect(within(trackHeader).getByRole("button", { name: "Unmute Low Orbit" })).toHaveAttribute("aria-pressed", "true");
@@ -264,7 +959,7 @@ describe("Studio", () => {
 
   it("commits numeric mixer entry once and cancels an unfinished value", async () => {
     const user = userEvent.setup();
-    render(<Studio initialProject={DEMO_PROJECT} />);
+    renderSession(DEMO_PROJECT);
     await user.click(screen.getByRole("button", { name: "Mixer" }));
     const channel = screen.getByRole("group", { name: "Low Orbit channel" });
     const value = within(channel).getByRole("spinbutton", { name: "Low Orbit volume value" });
@@ -290,7 +985,7 @@ describe("Studio", () => {
     vi.stubGlobal("AudioContext", context);
     vi.stubGlobal("fetch", fetch);
     const user = userEvent.setup();
-    render(<Studio initialProject={DEMO_PROJECT} />);
+    renderSession(DEMO_PROJECT);
     expect(screen.queryByRole("complementary", { name: "Activity" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Show activity" }));
     expect(screen.getByRole("complementary", { name: "Activity" })).toBeVisible();
@@ -302,7 +997,7 @@ describe("Studio", () => {
 
   it("resizes, closes, and restores the track editor", async () => {
     const user = userEvent.setup();
-    render(<Studio initialProject={DEMO_PROJECT} />);
+    renderSession(DEMO_PROJECT);
     const editor = screen.getByRole("complementary", { name: "Track editor" });
     const separator = screen.getByRole("separator", { name: "Resize track editor" });
     vi.spyOn(editor.parentElement!, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 1_200, 800));
@@ -323,7 +1018,7 @@ describe("Studio", () => {
   });
 
   it("resizes the track editor from the keyboard", () => {
-    render(<Studio initialProject={DEMO_PROJECT} />);
+    renderSession(DEMO_PROJECT);
     const editor = screen.getByRole("complementary", { name: "Track editor" });
     vi.spyOn(editor.parentElement!, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 1_200, 800));
     const separator = screen.getByRole("separator", { name: "Resize track editor" });
@@ -336,11 +1031,12 @@ describe("Studio", () => {
   it("publishes history and undo/redo to the transport", async () => {
     let state: StudioState | undefined;
     function Probe(): null {
-      state = useStudioStore((value) => value);
+      const value = useStudioStore((store) => store);
+      useEffect(() => { state = value; }, [value]);
       return null;
     }
     const user = userEvent.setup();
-    render(<StudioProvider initialProject={EMPTY_PROJECT}><Transport /><ActivityPanel /><Probe /></StudioProvider>);
+    render(<StudioProvider initialProject={EMPTY_PROJECT} persistenceSession={TEST_PERSISTENCE_SESSION}><Transport /><ActivityPanel /><Probe /></StudioProvider>);
     await user.click(screen.getByRole("button", { name: "Show activity" }));
     act(() => state!.dispatch({
       id: "rename", source: "agent", label: "Agent named song", kind: "operation",
@@ -355,121 +1051,15 @@ describe("Studio", () => {
     expect(screen.getByText("Named song")).toBeVisible();
   });
 
-  it("downloads one WAV from a frozen project without creating history", async () => {
-    let state: StudioState | undefined;
-    function Probe(): null {
-      state = useStudioStore((value) => value);
-      return null;
-    }
-    let resolveRender: (() => void) | undefined;
-    vi.stubGlobal("OfflineAudioContext", class extends FakeOfflineAudioContext {
-      constructor(channels: number, length: number, sampleRate: number) {
-        super(channels, length, sampleRate);
-      }
-      override startRendering(): Promise<AudioBuffer> {
-        return new Promise((resolve) => {
-          resolveRender = () => resolve({
-            duration: this.length / this.sampleRate,
-            length: this.length,
-            numberOfChannels: 2,
-            sampleRate: this.sampleRate,
-            getChannelData: () => new Float32Array(this.length),
-          } as unknown as AudioBuffer);
-        });
-      }
-    });
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(new ArrayBuffer(8))));
-    const createObjectURL = vi.fn(() => "blob:wav");
-    const revokeObjectURL = vi.fn();
-    vi.stubGlobal("URL", { createObjectURL, revokeObjectURL });
-    let downloadedName = "";
-    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
-      downloadedName = this.download;
-    });
-    const user = userEvent.setup();
-    render(
-      <StudioProvider initialProject={{ ...audioProject(), name: "Demo/Beat" }}>
-        <Transport />
-        <Probe />
-      </StudioProvider>,
-    );
-
-    await user.click(screen.getByRole("button", { name: "Export" }));
-    expect(screen.getByRole("button", { name: "Exporting…" })).toBeDisabled();
-    await user.click(screen.getByRole("button", { name: "Exporting…" }));
-    await vi.waitFor(() => expect(resolveRender).toBeTypeOf("function"));
-    act(() => state!.dispatch({
-      id: "rename-during-export",
-      source: "manual",
-      label: "Rename during export",
-      kind: "operation",
-      operation: { type: "project.update", changes: { name: "Changed" } },
-    }));
-    resolveRender?.();
-    await screen.findByRole("button", { name: "Export" });
-
-    expect(click).toHaveBeenCalledOnce();
-    expect(downloadedName).toBe("Demo-Beat.wav");
-    expect(createObjectURL).toHaveBeenCalledOnce();
-    expect(revokeObjectURL).toHaveBeenCalledWith("blob:wav");
-    expect(state?.history).toHaveLength(1);
-  });
-
-  it("keeps empty export disabled and reports a rendering failure", async () => {
-    const user = userEvent.setup();
-    const empty = render(
-      <StudioProvider initialProject={EMPTY_PROJECT}><Transport /></StudioProvider>,
-    );
-    expect(screen.getByRole("button", { name: "Export" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Export" })).toHaveAttribute(
-      "title",
-      "Add an arrangement clip before exporting WAV",
-    );
-    empty.unmount();
-
-    vi.stubGlobal("OfflineAudioContext", class extends FakeOfflineAudioContext {
-      override startRendering(): Promise<AudioBuffer> {
-        return Promise.reject(new Error("render stopped"));
-      }
-    });
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(new ArrayBuffer(8))));
-    render(
-      <StudioProvider initialProject={audioProject()}><Transport /></StudioProvider>,
-    );
-    await user.click(screen.getByRole("button", { name: "Export" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "WAV rendering failed; retry the export",
-    );
-  });
-
-  it("reports a browser download failure without creating history", async () => {
-    vi.stubGlobal("OfflineAudioContext", FakeOfflineAudioContext);
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(new ArrayBuffer(8))));
-    vi.stubGlobal("URL", {
-      createObjectURL: () => { throw new Error("downloads blocked"); },
-      revokeObjectURL: vi.fn(),
-    });
-    const user = userEvent.setup();
-    render(
-      <StudioProvider initialProject={audioProject()}><Transport /></StudioProvider>,
-    );
-
-    await user.click(screen.getByRole("button", { name: "Export" }));
-
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "WAV download failed; retry the export",
-    );
-    expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
-  });
-
   it("confirms restore from real attributed history and makes it undoable", async () => {
     let state: StudioState | undefined;
     function Probe(): null {
-      state = useStudioStore((value) => value);
+      const value = useStudioStore((store) => store);
+      useEffect(() => { state = value; }, [value]);
       return null;
     }
     const user = userEvent.setup();
-    render(<StudioProvider initialProject={EMPTY_PROJECT}><Transport /><ActivityPanel /><Probe /></StudioProvider>);
+    render(<StudioProvider initialProject={EMPTY_PROJECT} persistenceSession={TEST_PERSISTENCE_SESSION}><Transport /><ActivityPanel /><Probe /></StudioProvider>);
     await user.click(screen.getByRole("button", { name: "Show activity" }));
     act(() => state!.dispatch({
       id: "rename", source: "agent", label: "Agent named song", kind: "operation",
@@ -494,7 +1084,7 @@ describe("Studio", () => {
 
   it("handles undo and redo shortcuts outside editable fields and dialogs", async () => {
     const user = userEvent.setup();
-    render(<Studio initialProject={DEMO_PROJECT} />);
+    renderSession(DEMO_PROJECT);
     const track = screen.getByRole("group", { name: "Low Orbit track" });
     await user.click(within(track).getByRole("button", { name: "Mute Low Orbit" }));
     await user.click(screen.getByRole("button", { name: "Edit Low Orbit" }));
@@ -514,7 +1104,7 @@ describe("Studio", () => {
 
   it("deletes only the focused arrangement clip", async () => {
     const user = userEvent.setup();
-    render(<Studio initialProject={DEMO_PROJECT} />);
+    renderSession(DEMO_PROJECT);
     const lane = screen.getByRole("region", { name: "Low Orbit lane" });
     const clips = within(lane).getAllByRole("button", { name: "Select Low Orbit phrase" });
     clips[0]!.focus();

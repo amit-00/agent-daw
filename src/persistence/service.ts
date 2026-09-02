@@ -1,4 +1,6 @@
-import { migrateProject, type Project, type ProjectV1 } from "../project/index.ts";
+import { SOUND_CATALOG } from "../audio/catalog.ts";
+import type { Project } from "../project/index.ts";
+import { decodeProject } from "./decode.ts";
 
 const DATABASE_NAME = "agent-daw";
 const DATABASE_VERSION = 1;
@@ -123,8 +125,8 @@ export class ProjectPersistenceService {
   async load(): Promise<LoadResult> {
     this.activeLoads += 1;
     try {
-      const value = await this.readStoredValue();
-      if (value === undefined) return { status: "empty" };
+      const { exists, value } = await this.readStoredValue();
+      if (!exists) return { status: "empty" };
       return this.decodeStoredValue(value);
     } catch (error: unknown) {
       return { status: "failed", error: mapStorageError(error, "Project load") };
@@ -197,32 +199,23 @@ export class ProjectPersistenceService {
       this.enterRecovery();
       return { status: "failed", error: persistenceError("corrupt_record", "Stored project record is malformed") };
     }
-    const project = record.project as Record<string, unknown>;
-    const schemaVersion = project.schemaVersion;
-    if (schemaVersion !== 1 && schemaVersion !== 2) {
-      this.enterRecovery();
-      if (typeof schemaVersion === "number" && Number.isInteger(schemaVersion)) {
-        return { status: "failed", error: persistenceError("unsupported_schema", `Project schema ${schemaVersion} is unsupported`) };
-      }
-      return { status: "failed", error: persistenceError("corrupt_record", "Stored project schema is invalid") };
-    }
     if (!Number.isInteger(record.updatedAt) || (record.updatedAt as number) < 0) {
       this.enterRecovery();
       return { status: "failed", error: persistenceError("corrupt_record", "Stored project update time is invalid") };
     }
-    try {
-      return {
-        status: "loaded",
-        project: migrateProject(project as unknown as ProjectV1 | Project),
-        updatedAt: record.updatedAt as number,
-      };
-    } catch (error: unknown) {
+    const decoded = decodeProject(record.project, SOUND_CATALOG);
+    if (!decoded.ok) {
       this.enterRecovery();
       return {
         status: "failed",
-        error: persistenceError("corrupt_record", "Stored project cannot be migrated", error),
+        error: persistenceError(decoded.code, decoded.message, decoded.cause),
       };
     }
+    return {
+      status: "loaded",
+      project: decoded.project,
+      updatedAt: record.updatedAt as number,
+    };
   }
 
   private async openDatabase(): Promise<IDBDatabase> {
@@ -267,10 +260,15 @@ export class ProjectPersistenceService {
     }
   }
 
-  private async readStoredValue(): Promise<unknown> {
+  private async readStoredValue(): Promise<{ readonly exists: boolean; readonly value: unknown }> {
     const database = await this.openDatabase();
     const transaction = database.transaction(STORE_NAME, "readonly");
-    return requestValue(transaction.objectStore(STORE_NAME).get(RECORD_KEY));
+    const store = transaction.objectStore(STORE_NAME);
+    const [value, key] = await Promise.all([
+      requestValue(store.get(RECORD_KEY)),
+      requestValue(store.getKey(RECORD_KEY)),
+    ]);
+    return { exists: key !== undefined, value };
   }
 
   private resetTimer(): void {

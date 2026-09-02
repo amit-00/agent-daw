@@ -36,6 +36,50 @@ const legacyProject = (): ProjectV1 => ({
   arrangement: [{ id: "clip", patternId: "pattern", startBar: 0, repeatCount: 1 }],
 });
 
+const basicDrumTrack = (): Project["tracks"][number] => ({
+  id: "drums",
+  name: "Drums",
+  kind: "drum",
+  instrumentId: "kit.basic",
+  volumeDb: 0,
+  pan: 0,
+  muted: false,
+  soloed: false,
+});
+
+const projectWithBasicDrums = (): Project => ({
+  ...blankProject(),
+  tracks: [basicDrumTrack()],
+  patterns: [{
+    id: "beat",
+    name: "Beat",
+    kind: "drum",
+    lengthBars: 1,
+    events: [{ id: "kick-hit", soundId: "kick", startStep: 0 }],
+  }],
+  arrangement: [{ id: "beat-clip", patternId: "beat", trackId: "drums", startBar: 0, repeatCount: 1 }],
+});
+
+const incompatibleClipProject = (): Project => ({
+  ...projectWithBasicDrums(),
+  tracks: [{
+    ...basicDrumTrack(),
+    id: "lead",
+    name: "Lead",
+    kind: "synth",
+    instrumentId: "synth.lead",
+  }],
+  arrangement: [{ id: "beat-clip", patternId: "beat", trackId: "lead", startBar: 0, repeatCount: 1 }],
+});
+
+const overlappingClipProject = (): Project => ({
+  ...projectWithBasicDrums(),
+  arrangement: [
+    { id: "first", patternId: "beat", trackId: "drums", startBar: 0, repeatCount: 1 },
+    { id: "second", patternId: "beat", trackId: "drums", startBar: 0, repeatCount: 1 },
+  ],
+});
+
 const openRawDatabase = (indexedDB: IDBFactory): Promise<IDBDatabase> =>
   new Promise((resolve, reject) => {
     const request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
@@ -163,10 +207,167 @@ const createService = (indexedDB: IDBFactory): ProjectPersistenceService =>
     debounceMs: 500,
   });
 
+const invalidProjects: readonly [string, unknown][] = [
+  ["missing tracks", { ...blankProject(), tracks: undefined }],
+  ["empty project ID", { ...blankProject(), id: "" }],
+  ["blank project name", { ...blankProject(), name: " " }],
+  ["overlong project name", { ...blankProject(), name: "x".repeat(41) }],
+  ["invalid BPM", { ...blankProject(), bpm: 241 }],
+  ["non-finite BPM", { ...blankProject(), bpm: Number.NaN }],
+  ["invalid master volume", { ...blankProject(), masterVolumeDb: 1 }],
+  ["too many tracks", { ...blankProject(), tracks: Array.from({ length: 17 }, (_, index) => ({ ...basicDrumTrack(), id: `drums-${index}` })) }],
+  ["too many patterns", { ...blankProject(), patterns: Array.from({ length: 129 }, (_, index) => ({ id: `pattern-${index}`, name: "Beat", kind: "drum", lengthBars: 1, events: [] })) }],
+  ["too many clips", { ...blankProject(), arrangement: Array.from({ length: 513 }, (_, index) => ({ id: `clip-${index}`, patternId: "missing", trackId: "missing", startBar: 0, repeatCount: 1 })) }],
+  ["duplicate track IDs", { ...blankProject(), tracks: [basicDrumTrack(), basicDrumTrack()] }],
+  ["empty track ID", { ...projectWithBasicDrums(), tracks: [{ ...basicDrumTrack(), id: "" }] }],
+  ["invalid track name", { ...projectWithBasicDrums(), tracks: [{ ...basicDrumTrack(), name: "" }] }],
+  ["overlong track name", { ...projectWithBasicDrums(), tracks: [{ ...basicDrumTrack(), name: "x".repeat(41) }] }],
+  ["invalid track kind", { ...projectWithBasicDrums(), tracks: [{ ...basicDrumTrack(), kind: "other" }] }],
+  ["unknown instrument", { ...projectWithBasicDrums(), tracks: [{ ...basicDrumTrack(), instrumentId: "kit.missing" }] }],
+  ["drum track with synth instrument", { ...projectWithBasicDrums(), tracks: [{ ...basicDrumTrack(), instrumentId: "synth.lead" }] }],
+  ["invalid track volume", { ...projectWithBasicDrums(), tracks: [{ ...basicDrumTrack(), volumeDb: 7 }] }],
+  ["invalid track pan", { ...projectWithBasicDrums(), tracks: [{ ...basicDrumTrack(), pan: 1.1 }] }],
+  ["invalid track mute", { ...projectWithBasicDrums(), tracks: [{ ...basicDrumTrack(), muted: "no" }] }],
+  ["invalid track solo", { ...projectWithBasicDrums(), tracks: [{ ...basicDrumTrack(), soloed: "no" }] }],
+  ["invalid track color", { ...projectWithBasicDrums(), tracks: [{ ...basicDrumTrack(), color: 1 }] }],
+  ["duplicate pattern IDs", { ...projectWithBasicDrums(), patterns: [projectWithBasicDrums().patterns[0], projectWithBasicDrums().patterns[0]] }],
+  ["blank pattern name", { ...projectWithBasicDrums(), patterns: [{ ...projectWithBasicDrums().patterns[0]!, name: " " }] }],
+  ["overlong pattern name", { ...projectWithBasicDrums(), patterns: [{ ...projectWithBasicDrums().patterns[0]!, name: "x".repeat(41) }] }],
+  ["invalid pattern length", { ...projectWithBasicDrums(), patterns: [{ ...projectWithBasicDrums().patterns[0]!, lengthBars: 3 }] }],
+  ["too many events", { ...projectWithBasicDrums(), patterns: [{ ...projectWithBasicDrums().patterns[0]!, events: Array.from({ length: 513 }, (_, index) => ({ id: `hit-${index}`, soundId: "kick", startStep: 0 })) }] }],
+  ["duplicate event IDs", { ...projectWithBasicDrums(), patterns: [{ ...projectWithBasicDrums().patterns[0]!, events: [{ id: "hit", soundId: "kick", startStep: 0 }, { id: "hit", soundId: "kick", startStep: 1 }] }] }],
+  ["malformed drum event", { ...projectWithBasicDrums(), patterns: [{ ...projectWithBasicDrums().patterns[0]!, events: [{ id: "hit", midiNote: 60, startStep: 0 }] }] }],
+  ["unknown drum sound", { ...projectWithBasicDrums(), patterns: [{ ...projectWithBasicDrums().patterns[0]!, events: [{ id: "hit", soundId: "clap", startStep: 0 }] }] }],
+  ["out-of-pattern hit", { ...projectWithBasicDrums(), patterns: [{ ...projectWithBasicDrums().patterns[0]!, events: [{ id: "hit", soundId: "kick", startStep: 16 }] }] }],
+  ["invalid synth MIDI note", { ...blankProject(), tracks: [{ ...basicDrumTrack(), id: "lead", kind: "synth", instrumentId: "synth.lead" }], patterns: [{ id: "melody", name: "Melody", kind: "synth", lengthBars: 1, events: [{ id: "note", midiNote: 23, startStep: 0, lengthSteps: 1 }] }], arrangement: [] }],
+  ["malformed synth event", { ...blankProject(), tracks: [{ ...basicDrumTrack(), id: "lead", kind: "synth", instrumentId: "synth.lead" }], patterns: [{ id: "melody", name: "Melody", kind: "synth", lengthBars: 1, events: [{ id: "note", startStep: 0, lengthSteps: 1 }] }], arrangement: [] }],
+  ["non-integer synth start", { ...blankProject(), tracks: [{ ...basicDrumTrack(), id: "lead", kind: "synth", instrumentId: "synth.lead" }], patterns: [{ id: "melody", name: "Melody", kind: "synth", lengthBars: 1, events: [{ id: "note", midiNote: 60, startStep: 0.5, lengthSteps: 1 }] }], arrangement: [] }],
+  ["invalid synth note duration", { ...blankProject(), tracks: [{ ...basicDrumTrack(), id: "lead", kind: "synth", instrumentId: "synth.lead" }], patterns: [{ id: "melody", name: "Melody", kind: "synth", lengthBars: 1, events: [{ id: "note", midiNote: 60, startStep: 15, lengthSteps: 2 }] }], arrangement: [] }],
+  ["missing clip pattern", { ...projectWithBasicDrums(), arrangement: [{ ...projectWithBasicDrums().arrangement[0]!, patternId: "missing" }] }],
+  ["missing clip track", { ...projectWithBasicDrums(), arrangement: [{ ...projectWithBasicDrums().arrangement[0]!, trackId: "missing" }] }],
+  ["incompatible clip track", incompatibleClipProject()],
+  ["non-integer clip fields", { ...projectWithBasicDrums(), arrangement: [{ ...projectWithBasicDrums().arrangement[0]!, startBar: 0.5 }] }],
+  ["invalid clip repeat", { ...projectWithBasicDrums(), arrangement: [{ ...projectWithBasicDrums().arrangement[0]!, repeatCount: 65 }] }],
+  ["arrangement past bar 256", { ...projectWithBasicDrums(), arrangement: [{ ...projectWithBasicDrums().arrangement[0]!, startBar: 256 }] }],
+  ["duplicate clip IDs", { ...projectWithBasicDrums(), arrangement: [{ ...projectWithBasicDrums().arrangement[0]!, id: "same" }, { ...projectWithBasicDrums().arrangement[0]!, id: "same", startBar: 1 }] }],
+  ["overlapping clips", overlappingClipProject()],
+];
+
+for (const [name, project] of invalidProjects) {
+  test(`load rejects schema 2 with ${name}`, async () => {
+    const indexedDB = new IDBFactory();
+    const record = { project, updatedAt: 123 };
+    await seedRawRecord(indexedDB, record);
+    const service = createService(indexedDB);
+
+    const result = await service.load();
+
+    assert.equal(result.status, "failed");
+    if (result.status === "failed") assert.equal(result.error.code, "corrupt_record");
+    assert.deepEqual(await readRawRecord(indexedDB), record);
+    const save = await service.scheduleSave(blankProject());
+    assert.equal(save.status, "failed");
+    if (save.status === "failed") assert.equal(save.error.code, "recovery_required");
+  });
+}
+
+test("load accepts inclusive persisted numeric boundaries", async () => {
+  const indexedDB = new IDBFactory();
+  const project: Project = {
+    ...projectWithBasicDrums(),
+    name: "x".repeat(40),
+    bpm: 40,
+    masterVolumeDb: -60,
+    tracks: [{ ...basicDrumTrack(), name: "x".repeat(40), volumeDb: -60, pan: -1 }],
+    patterns: [{ id: "beat", name: "x".repeat(40), kind: "drum", lengthBars: 4,
+      events: [{ id: "kick-hit", soundId: "kick", startStep: 63 }] }],
+    arrangement: [{ id: "beat-clip", patternId: "beat", trackId: "drums", startBar: 0, repeatCount: 64 }],
+  };
+  await seedRawRecord(indexedDB, { project, updatedAt: 123 });
+
+  const result = await createService(indexedDB).load();
+
+  assert.equal(result.status, "loaded");
+});
+
+test("load accepts upper persisted numeric boundaries", async () => {
+  const indexedDB = new IDBFactory();
+  const project: Project = {
+    ...blankProject(),
+    bpm: 240,
+    tracks: [{ ...basicDrumTrack(), id: "lead", kind: "synth", instrumentId: "synth.lead", volumeDb: 6, pan: 1 }],
+    patterns: [{ id: "melody", name: "Melody", kind: "synth", lengthBars: 4,
+      events: [{ id: "low", midiNote: 24, startStep: 0, lengthSteps: 1 }, { id: "high", midiNote: 96, startStep: 63, lengthSteps: 1 }, { id: "full", midiNote: 60, startStep: 0, lengthSteps: 64 }] }],
+    arrangement: [{ id: "melody-clip", patternId: "melody", trackId: "lead", startBar: 0, repeatCount: 64 }],
+  };
+  await seedRawRecord(indexedDB, { project, updatedAt: 123 });
+
+  assert.equal((await createService(indexedDB).load()).status, "loaded");
+});
+
+test("load constructs a detached canonical schema 2 project", async () => {
+  const indexedDB = new IDBFactory();
+  const project = { ...projectWithBasicDrums(), ignored: "discard me" };
+  await seedRawRecord(indexedDB, { project, updatedAt: 123 });
+
+  const result = await createService(indexedDB).load();
+
+  assert.equal(result.status, "loaded");
+  if (result.status === "loaded") {
+    assert.equal("ignored" in result.project, false);
+    assert.notEqual(result.project, project);
+  }
+});
+
+test("load rejects invalid nested schema 1 data before migration", async () => {
+  const indexedDB = new IDBFactory();
+  const project = { ...legacyProject(), bpm: "fast" };
+  await seedRawRecord(indexedDB, { project, updatedAt: 123 });
+
+  const result = await createService(indexedDB).load();
+
+  assert.equal(result.status, "failed");
+  if (result.status === "failed") assert.equal(result.error.code, "corrupt_record");
+});
+
 test("load returns empty when no project is stored", async () => {
   const result = await createService(new IDBFactory()).load();
   assert.deepEqual(result, { status: "empty" });
 });
+
+test("load preserves a present undefined record for explicit recovery", async () => {
+  const indexedDB = new IDBFactory();
+  await seedRawRecord(indexedDB, undefined);
+  const service = createService(indexedDB);
+
+  const result = await service.load();
+
+  assert.equal(result.status, "failed");
+  if (result.status === "failed") assert.equal(result.error.code, "corrupt_record");
+  const save = await service.scheduleSave(blankProject());
+  assert.equal(save.status, "failed");
+  if (save.status === "failed") assert.equal(save.error.code, "recovery_required");
+});
+
+for (const [name, project] of [
+  ["tracks", { ...blankProject(), tracks: new Array<unknown>(1) }],
+  ["patterns", { ...blankProject(), patterns: new Array<unknown>(1) }],
+  ["arrangement", { ...blankProject(), arrangement: new Array<unknown>(1) }],
+  ["pattern events", {
+    ...projectWithBasicDrums(),
+    patterns: [{ ...projectWithBasicDrums().patterns[0]!, events: new Array<unknown>(1) }],
+  }],
+] as const) {
+  test(`load rejects a sparse ${name} collection`, async () => {
+    const indexedDB = new IDBFactory();
+    await seedRawRecord(indexedDB, { project, updatedAt: 123 });
+
+    const result = await createService(indexedDB).load();
+
+    assert.equal(result.status, "failed");
+    if (result.status === "failed") assert.equal(result.error.code, "corrupt_record");
+  });
+}
 
 test("an unexpected database close reopens on the next operation", async () => {
   const connections: IDBDatabase[] = [];

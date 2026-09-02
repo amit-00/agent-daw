@@ -6,8 +6,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DrumGrid } from "@/components/editor/DrumGrid";
 import { EMPTY_PROJECT } from "@/data/studio-data";
 import type { DrumPattern, Project } from "@/project";
-import { StudioProvider, useStudioStore } from "@/stores/studio-provider";
+import { StudioProvider, useStudioStore, type StudioPersistenceSession } from "@/stores/studio-provider";
 import type { StudioState } from "@/stores/studio-store";
+
+const TEST_PERSISTENCE_SESSION: StudioPersistenceSession = {
+  service: null,
+  baseline: { status: "unsaved", updatedAt: null, errorMessage: null },
+};
 
 class TestPointerEvent extends MouseEvent {
   readonly pointerId: number;
@@ -32,7 +37,7 @@ function Harness({ patternId }: Readonly<{ patternId: string }>): React.ReactEle
 
 function mount(pattern: DrumPattern = beat): HTMLElement {
   const project: Project = { ...EMPTY_PROJECT, patterns: [pattern] };
-  render(<StudioProvider initialProject={project}><Harness patternId={pattern.id} /><Probe /></StudioProvider>);
+  render(<StudioProvider initialProject={project} persistenceSession={TEST_PERSISTENCE_SESSION}><Harness patternId={pattern.id} /><Probe /></StudioProvider>);
   const grid = screen.getByRole("region", { name: `Drum grid for ${pattern.name}` });
   Object.defineProperties(grid, {
     setPointerCapture: { value: vi.fn(), configurable: true },

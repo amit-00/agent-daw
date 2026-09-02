@@ -6,8 +6,13 @@ import { PianoRoll } from "@/components/editor/PianoRoll";
 import { PatternEditor } from "@/components/editor/PatternEditor";
 import { EMPTY_PROJECT } from "@/data/studio-data";
 import type { Project, SynthPattern } from "@/project";
-import { StudioProvider, useStudioStore } from "@/stores/studio-provider";
+import { StudioProvider, useStudioStore, type StudioPersistenceSession } from "@/stores/studio-provider";
 import type { StudioState } from "@/stores/studio-store";
+
+const TEST_PERSISTENCE_SESSION: StudioPersistenceSession = {
+  service: null,
+  baseline: { status: "unsaved", updatedAt: null, errorMessage: null },
+};
 
 class TestPointerEvent extends MouseEvent {
   readonly pointerId: number;
@@ -36,7 +41,7 @@ function Harness({ patternId }: Readonly<{ patternId: string }>): ReactElement |
 
 function mount(pattern: SynthPattern = melody): { roll: HTMLElement; cells: HTMLElement } {
   const project: Project = { ...EMPTY_PROJECT, patterns: [pattern] };
-  render(<StudioProvider initialProject={project}><Harness patternId={pattern.id} /><Probe /></StudioProvider>);
+  render(<StudioProvider initialProject={project} persistenceSession={TEST_PERSISTENCE_SESSION}><Harness patternId={pattern.id} /><Probe /></StudioProvider>);
   const roll = screen.getByRole("region", { name: `Piano roll for ${pattern.name}` });
   const cells = roll.querySelector<HTMLElement>("[data-piano-cells]")!;
   Object.defineProperties(cells, {
@@ -273,7 +278,7 @@ describe("PianoRoll", () => {
   });
 
   it("replaces the prototype synth view in the pattern editor", () => {
-    render(<StudioProvider initialProject={{ ...EMPTY_PROJECT, patterns: [melody] }}><PatternEditor /></StudioProvider>);
+    render(<StudioProvider initialProject={{ ...EMPTY_PROJECT, patterns: [melody] }} persistenceSession={TEST_PERSISTENCE_SESSION}><PatternEditor /></StudioProvider>);
     expect(screen.getByRole("region", { name: "Piano roll for Melody" })).toBeVisible();
     expect(screen.queryByTitle("Piano-roll editing is not connected yet")).not.toBeInTheDocument();
   });
