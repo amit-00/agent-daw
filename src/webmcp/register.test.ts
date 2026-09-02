@@ -89,6 +89,30 @@ describe("WebMCP browser registration", () => {
     expect(register.mock.calls.every(([, options]) => options.signal.aborted)).toBe(true);
   });
 
+  it("aborts prior registrations and rejects ready when a later registration throws synchronously", async () => {
+    const failure = new Error("synchronous registration failure");
+    const signals: AbortSignal[] = [];
+    const context: ModelContext = {
+      registerTool(tool, { signal }): Promise<void> {
+        signals.push(signal);
+        if (tool.name === "rename_track") throw failure;
+        return Promise.resolve();
+      },
+    };
+    let registration: ReturnType<typeof registerWebMCPTools> | undefined;
+
+    expect(() => {
+      registration = registerWebMCPTools(
+        context,
+        createWebMCPTools(createStudioStore(DEMO_PROJECT), () => "unused"),
+      );
+    }).not.toThrow();
+    await expect(registration!.ready).rejects.toBe(failure);
+    expect(signals.length).toBeGreaterThan(1);
+    expect(new Set(signals)).toHaveLength(1);
+    expect(signals.every((signal) => signal.aborted)).toBe(true);
+  });
+
   it("captured tools read store state at execution time", async () => {
     const store = createStudioStore(DEMO_PROJECT);
     const { context, tools } = recordingContext();

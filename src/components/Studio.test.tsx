@@ -109,11 +109,11 @@ function installModelContext(
   const tools = new Map<string, WebMCPTool>();
   const signals: AbortSignal[] = [];
   const context: ModelContext = {
-    registerTool: async (tool, options) => {
+    registerTool: (tool, options) => {
       tools.set(tool.name, tool);
       signals.push(options.signal);
       options.signal.addEventListener("abort", () => tools.delete(tool.name), { once: true });
-      await register(tool, options);
+      return register(tool, options);
     },
   };
   Object.defineProperty(document, "modelContext", { configurable: true, value: context });
@@ -762,6 +762,20 @@ describe("Studio", () => {
 
   it("shows registration failure without disabling manual editing", async () => {
     installModelContext(async () => { throw new Error("registration failed"); });
+    const user = userEvent.setup();
+    render(<Studio initialProject={DEMO_PROJECT} />);
+
+    await waitFor(() => expect(webMCPStatus("Failed")).toHaveTextContent("WebMCP: Failed"));
+    await user.click(within(screen.getByRole("group", { name: "Low Orbit track" }))
+      .getByRole("button", { name: "Mute Low Orbit" }));
+    expect(screen.getByRole("button", { name: "Unmute Low Orbit" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("shows synchronous registration failure without disabling manual editing", async () => {
+    installModelContext((tool) => {
+      if (tool.name === "rename_track") throw new Error("synchronous registration failure");
+      return Promise.resolve();
+    });
     const user = userEvent.setup();
     render(<Studio initialProject={DEMO_PROJECT} />);
 
