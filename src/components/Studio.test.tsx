@@ -1,16 +1,89 @@
 import { useEffect } from "react";
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { IDBFactory } from "fake-indexeddb";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StoreApi } from "zustand/vanilla";
 
-import { StudioSession } from "@/components/Studio";
+import { Studio, StudioSession } from "@/components/Studio";
 import { Transport } from "@/components/Transport";
 import { ActivityPanel } from "@/components/ActivityPanel";
 import { DEMO_PROJECT, EMPTY_PROJECT } from "@/data/studio-data";
-import { StudioProvider, useStudioStore, useStudioStoreApi } from "@/stores/studio-provider";
+import { ProjectPersistenceService } from "@/persistence/service";
+import { StudioProvider, useStudioStore, useStudioStoreApi, type StudioPersistenceSession } from "@/stores/studio-provider";
 import type { StudioState } from "@/stores/studio-store";
 import { FakeAudioContext } from "../../test/audio-fakes";
+
+const DATABASE_NAME = "agent-daw";
+const DATABASE_VERSION = 1;
+const STORE_NAME = "current-project";
+const RECORD_KEY = "current";
+const TEST_PERSISTENCE_SESSION: StudioPersistenceSession = {
+  service: null,
+  baseline: { status: "unsaved", updatedAt: null, errorMessage: null },
+};
+
+const indexedDBWithRawRecord = async (value: unknown): Promise<IDBFactory> => {
+  const indexedDB = new IDBFactory();
+  const database = await new Promise<IDBDatabase>((resolve, reject) => {
+    const request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
+    request.onupgradeneeded = () => request.result.createObjectStore(STORE_NAME);
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+  const transaction = database.transaction(STORE_NAME, "readwrite");
+  transaction.objectStore(STORE_NAME).put(value, RECORD_KEY);
+  await new Promise<void>((resolve, reject) => {
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error);
+    transaction.onabort = () => reject(transaction.error);
+  });
+  database.close();
+  return indexedDB;
+};
+
+const indexedDBWithProject = (project: typeof DEMO_PROJECT): Promise<IDBFactory> =>
+  indexedDBWithRawRecord({ project, updatedAt: 1_700_000_000_000 });
+
+const failingReadwriteFactory = (indexedDB: IDBFactory): IDBFactory => new Proxy(indexedDB, {
+  get(target, property, receiver) {
+    if (property !== "open") return Reflect.get(target, property, receiver);
+    return (name: string, version?: number): IDBOpenDBRequest => {
+      const request = version === undefined ? target.open(name) : target.open(name, version);
+      request.addEventListener("success", () => {
+        const database = request.result;
+        const transaction = database.transaction.bind(database);
+        Object.defineProperty(database, "transaction", {
+          configurable: true,
+          value: (storeNames: string | string[], mode: IDBTransactionMode = "readonly",
+            options?: IDBTransactionOptions): IDBTransaction => {
+            if (mode === "readwrite") throw new DOMException("Storage denied", "SecurityError");
+            return options === undefined
+              ? transaction(storeNames, mode)
+              : transaction(storeNames, mode, options);
+          },
+        });
+      }, { once: true });
+      return request;
+    };
+  },
+});
+
+const failingFirstOpenFactory = (indexedDB: IDBFactory): IDBFactory => {
+  let shouldFail = true;
+  return new Proxy(indexedDB, {
+    get(target, property, receiver) {
+      if (property !== "open") return Reflect.get(target, property, receiver);
+      return (name: string, version?: number): IDBOpenDBRequest => {
+        if (shouldFail) {
+          shouldFail = false;
+          throw new DOMException("Storage denied", "SecurityError");
+        }
+        return version === undefined ? target.open(name) : target.open(name, version);
+      };
+    },
+  });
+};
 
 function StoreApiProbe({ onStore }: Readonly<{
   onStore: (store: StoreApi<StudioState>) => void;
@@ -23,7 +96,7 @@ function StoreApiProbe({ onStore }: Readonly<{
 let sessionStore: StoreApi<StudioState> | undefined;
 
 function renderSession(project: typeof DEMO_PROJECT): void {
-  render(<StudioProvider initialProject={project}><StudioSession /><StoreApiProbe onStore={(value) => { sessionStore = value; }} /></StudioProvider>);
+  render(<StudioProvider initialProject={project} persistenceSession={TEST_PERSISTENCE_SESSION}><StudioSession /><StoreApiProbe onStore={(value) => { sessionStore = value; }} /></StudioProvider>);
 }
 
 beforeEach(() => {
@@ -34,6 +107,182 @@ beforeEach(() => {
   HTMLDialogElement.prototype.close = function (): void { this.removeAttribute("open"); };
 });
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+
+describe("Studio persistence bootstrap", () => {
+  it("shows loading before mounting a loaded project", async () => {
+    const savedProject = { ...DEMO_PROJECT, name: "Persisted Session" };
+    vi.stubGlobal("indexedDB", await indexedDBWithProject(savedProject));
+
+    render(<Studio initialProject={DEMO_PROJECT} />);
+
+    expect(screen.getByRole("status", { name: "Loading project" })).toBeVisible();
+    expect(await screen.findByText(savedProject.name)).toBeVisible();
+    expect(screen.getByText(/Saved locally/)).toBeVisible();
+  });
+
+  it("opens the unsaved demo when storage is empty", async () => {
+    vi.stubGlobal("indexedDB", new IDBFactory());
+
+    render(<Studio initialProject={DEMO_PROJECT} />);
+
+    expect(await screen.findByText(DEMO_PROJECT.name)).toBeVisible();
+    expect(screen.getByText(/Not saved yet/)).toBeVisible();
+  });
+
+  it("blocks editing until corrupt storage is explicitly cleared", async () => {
+    vi.stubGlobal("indexedDB", await indexedDBWithRawRecord({ project: { broken: true }, updatedAt: 1 }));
+    const user = userEvent.setup();
+
+    render(<Studio initialProject={DEMO_PROJECT} />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/cannot be loaded/i);
+    expect(screen.queryByRole("region", { name: "Song arrangement" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Clear stored project" }));
+    expect(await screen.findByRole("region", { name: "Song arrangement" })).toBeVisible();
+    expect(screen.getByText(/Not saved yet/)).toBeVisible();
+  });
+
+  it("blocks unsupported schema until it is explicitly cleared", async () => {
+    vi.stubGlobal("indexedDB", await indexedDBWithRawRecord({
+      project: { ...DEMO_PROJECT, schemaVersion: 3 },
+      updatedAt: 1,
+    }));
+
+    render(<Studio initialProject={DEMO_PROJECT} />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/schema 3 is unsupported/i);
+    expect(screen.queryByRole("region", { name: "Song arrangement" })).not.toBeInTheDocument();
+  });
+
+  it("keeps corrupt storage blocked when clear fails", async () => {
+    const indexedDB = await indexedDBWithRawRecord({ project: { broken: true }, updatedAt: 1 });
+    vi.stubGlobal("indexedDB", failingReadwriteFactory(indexedDB));
+    const user = userEvent.setup();
+
+    render(<Studio initialProject={DEMO_PROJECT} />);
+    await user.click(await screen.findByRole("button", { name: "Clear stored project" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/Project clear cannot access IndexedDB/i);
+    expect(screen.queryByRole("region", { name: "Song arrangement" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Clear stored project" })).toBeEnabled();
+  });
+
+  it("opens a memory-only demo after a non-recovery storage failure", async () => {
+    vi.stubGlobal("indexedDB", failingFirstOpenFactory(new IDBFactory()));
+
+    render(<Studio initialProject={DEMO_PROJECT} />);
+
+    expect(await screen.findByRole("region", { name: "Song arrangement" })).toBeVisible();
+    expect(screen.getByRole("alert")).toHaveTextContent(/Project load cannot access IndexedDB/i);
+    expect(screen.getByText(/In memory/)).toBeVisible();
+  });
+
+  it("opens a memory-only demo when IndexedDB is absent", async () => {
+    vi.stubGlobal("indexedDB", undefined);
+
+    render(<Studio initialProject={DEMO_PROJECT} />);
+
+    expect(await screen.findByRole("region", { name: "Song arrangement" })).toBeVisible();
+    expect(screen.getByRole("alert")).toHaveTextContent(/browser storage is unavailable/i);
+    expect(screen.getByText(/In memory/)).toBeVisible();
+  });
+});
+
+describe("Studio persistence autosave", () => {
+  it("autosaves every changed project identity and ignores no-op publication", async () => {
+    const indexedDB = new IDBFactory();
+    vi.stubGlobal("indexedDB", indexedDB);
+    const user = userEvent.setup();
+    render(<Studio initialProject={DEMO_PROJECT} />);
+    await screen.findByRole("region", { name: "Song arrangement" });
+
+    await user.click(screen.getByRole("button", { name: "Mixer" }));
+    const masterVolume = screen.getByRole("spinbutton", { name: "Master volume value" });
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+
+    fireEvent.change(masterVolume, { target: { value: String(DEMO_PROJECT.masterVolumeDb) } });
+    fireEvent.keyDown(masterVolume, { key: "Enter" });
+    act(() => document.dispatchEvent(new Event("visibilitychange")));
+    const afterNoOp = await new ProjectPersistenceService({ indexedDB, debounceMs: 0 }).load();
+    expect(afterNoOp.status).toBe("empty");
+
+    fireEvent.change(masterVolume, { target: { value: "-6" } });
+    fireEvent.keyDown(masterVolume, { key: "Enter" });
+    act(() => document.dispatchEvent(new Event("visibilitychange")));
+
+    expect(await screen.findByText(/Saved locally/)).toBeVisible();
+    const loaded = await new ProjectPersistenceService({ indexedDB, debounceMs: 0 }).load();
+    expect(loaded.status === "loaded" ? loaded.project.masterVolumeDb : null).toBe(-6);
+  });
+
+  it("retries the bootstrap service after a memory-only load failure", async () => {
+    const indexedDB = new IDBFactory();
+    vi.stubGlobal("indexedDB", failingFirstOpenFactory(indexedDB));
+    const user = userEvent.setup();
+    render(<Studio initialProject={DEMO_PROJECT} />);
+    await screen.findByRole("region", { name: "Song arrangement" });
+    expect(screen.getByRole("alert")).toHaveTextContent(/Project load cannot access IndexedDB/i);
+
+    await user.click(screen.getByRole("button", { name: "Mixer" }));
+    const masterVolume = screen.getByRole("spinbutton", { name: "Master volume value" });
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    fireEvent.change(masterVolume, { target: { value: "-7" } });
+    fireEvent.keyDown(masterVolume, { key: "Enter" });
+    act(() => document.dispatchEvent(new Event("visibilitychange")));
+
+    expect(await screen.findByText(/Saved locally/)).toBeVisible();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    const loaded = await new ProjectPersistenceService({ indexedDB, debounceMs: 0 }).load();
+    expect(loaded.status === "loaded" ? loaded.project.masterVolumeDb : null).toBe(-7);
+  });
+
+  it("logs rejected save scheduling and shows only retry guidance", async () => {
+    const service = new ProjectPersistenceService({ indexedDB: new IDBFactory(), debounceMs: 0 });
+    const rejection = new Error("private scheduling detail");
+    vi.spyOn(service, "scheduleSave").mockRejectedValue(rejection);
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    let store: StoreApi<StudioState> | undefined;
+    render(
+      <StudioProvider initialProject={DEMO_PROJECT} persistenceSession={{ ...TEST_PERSISTENCE_SESSION, service }}>
+        <StudioSession />
+        <StoreApiProbe onStore={(value) => { store = value; }} />
+      </StudioProvider>,
+    );
+
+    act(() => store!.getState().setMasterVolume(-6));
+
+    await waitFor(() => expect(store!.getState().persistence.status).toBe("failed"));
+    expect(screen.getByRole("alert")).toHaveTextContent(/Keep this page open and try another edit/);
+    expect(screen.getByRole("alert")).not.toHaveTextContent(rejection.message);
+    expect(log).toHaveBeenCalledWith("Project persistence failed unexpectedly", rejection);
+  });
+
+  it("logs a rejected hidden-document flush and shows only retry guidance", async () => {
+    const service = new ProjectPersistenceService({ indexedDB: new IDBFactory(), debounceMs: 0 });
+    vi.spyOn(service, "scheduleSave").mockResolvedValue({ status: "saved", updatedAt: 1 });
+    const rejection = new Error("private flush detail");
+    vi.spyOn(service, "flush").mockRejectedValue(rejection);
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    let store: StoreApi<StudioState> | undefined;
+    render(
+      <StudioProvider initialProject={DEMO_PROJECT} persistenceSession={{ ...TEST_PERSISTENCE_SESSION, service }}>
+        <StudioSession />
+        <StoreApiProbe onStore={(value) => { store = value; }} />
+      </StudioProvider>,
+    );
+
+    act(() => {
+      store!.getState().setMasterVolume(-6);
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+
+    await waitFor(() => expect(store!.getState().persistence.status).toBe("failed"));
+    expect(screen.getByRole("alert")).toHaveTextContent(/Keep this page open and try another edit/);
+    expect(screen.getByRole("alert")).not.toHaveTextContent(rejection.message);
+    expect(log).toHaveBeenCalledWith("Project persistence failed unexpectedly", rejection);
+  });
+});
 
 describe("Studio", () => {
   it("plays, pauses, and stops from the transport", async () => {
@@ -185,7 +434,7 @@ describe("Studio", () => {
   it("forwards each changed project identity to the mounted audio engine", () => {
     let store: StoreApi<StudioState> | undefined;
     const project = { ...DEMO_PROJECT, arrangement: [{ ...DEMO_PROJECT.arrangement[0]!, id: "only" }] };
-    render(<StudioProvider initialProject={project}><StoreApiProbe onStore={(value) => { store = value; }} /></StudioProvider>);
+    render(<StudioProvider initialProject={project} persistenceSession={TEST_PERSISTENCE_SESSION}><StoreApiProbe onStore={(value) => { store = value; }} /></StudioProvider>);
     expect(store!.getState().audio.snapshot.arrangementEndStep).toBeGreaterThan(0);
 
     act(() => store!.getState().deleteClip("only"));
@@ -211,7 +460,7 @@ describe("Studio", () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(new ArrayBuffer(8))));
     vi.stubGlobal("requestAnimationFrame", requestFrame);
     vi.stubGlobal("cancelAnimationFrame", cancelFrame);
-    render(<StudioProvider initialProject={DEMO_PROJECT}><StoreApiProbe onStore={(value) => { store = value; }} /></StudioProvider>);
+    render(<StudioProvider initialProject={DEMO_PROJECT} persistenceSession={TEST_PERSISTENCE_SESSION}><StoreApiProbe onStore={(value) => { store = value; }} /></StudioProvider>);
 
     await act(() => store!.getState().playPause());
     expect(contexts).toHaveLength(1);
@@ -243,7 +492,7 @@ describe("Studio", () => {
       return 1;
     });
     vi.stubGlobal("clearInterval", vi.fn());
-    render(<StudioProvider initialProject={DEMO_PROJECT}><StoreApiProbe onStore={(value) => { store = value; }} /></StudioProvider>);
+    render(<StudioProvider initialProject={DEMO_PROJECT} persistenceSession={TEST_PERSISTENCE_SESSION}><StoreApiProbe onStore={(value) => { store = value; }} /></StudioProvider>);
 
     await act(() => store!.getState().playPause());
     contexts[0]!.currentTime = 60;
@@ -268,7 +517,7 @@ describe("Studio", () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(new ArrayBuffer(8))));
     vi.stubGlobal("requestAnimationFrame", requestFrame);
     vi.stubGlobal("cancelAnimationFrame", cancelFrame);
-    const { unmount } = render(<StudioProvider initialProject={DEMO_PROJECT}><StoreApiProbe onStore={(value) => { store = value; }} /></StudioProvider>);
+    const { unmount } = render(<StudioProvider initialProject={DEMO_PROJECT} persistenceSession={TEST_PERSISTENCE_SESSION}><StoreApiProbe onStore={(value) => { store = value; }} /></StudioProvider>);
 
     await act(() => store!.getState().playPause());
     await act(async () => { unmount(); });
@@ -597,7 +846,7 @@ describe("Studio", () => {
       return null;
     }
     const user = userEvent.setup();
-    render(<StudioProvider initialProject={EMPTY_PROJECT}><Transport /><ActivityPanel /><Probe /></StudioProvider>);
+    render(<StudioProvider initialProject={EMPTY_PROJECT} persistenceSession={TEST_PERSISTENCE_SESSION}><Transport /><ActivityPanel /><Probe /></StudioProvider>);
     await user.click(screen.getByRole("button", { name: "Show activity" }));
     act(() => state!.dispatch({
       id: "rename", source: "agent", label: "Agent named song", kind: "operation",
@@ -620,7 +869,7 @@ describe("Studio", () => {
       return null;
     }
     const user = userEvent.setup();
-    render(<StudioProvider initialProject={EMPTY_PROJECT}><Transport /><ActivityPanel /><Probe /></StudioProvider>);
+    render(<StudioProvider initialProject={EMPTY_PROJECT} persistenceSession={TEST_PERSISTENCE_SESSION}><Transport /><ActivityPanel /><Probe /></StudioProvider>);
     await user.click(screen.getByRole("button", { name: "Show activity" }));
     act(() => state!.dispatch({
       id: "rename", source: "agent", label: "Agent named song", kind: "operation",

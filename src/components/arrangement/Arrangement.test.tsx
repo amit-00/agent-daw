@@ -5,8 +5,13 @@ import type { StoreApi } from "zustand/vanilla";
 
 import { Arrangement } from "@/components/arrangement/Arrangement";
 import { DEMO_PROJECT } from "@/data/studio-data";
-import { StudioProvider, useStudioStore, useStudioStoreApi } from "@/stores/studio-provider";
+import { StudioProvider, useStudioStore, useStudioStoreApi, type StudioPersistenceSession } from "@/stores/studio-provider";
 import type { StudioState } from "@/stores/studio-store";
+
+const TEST_PERSISTENCE_SESSION: StudioPersistenceSession = {
+  service: null,
+  baseline: { status: "unsaved", updatedAt: null, errorMessage: null },
+};
 
 class TestPointerEvent extends MouseEvent {
   readonly pointerId: number;
@@ -27,7 +32,7 @@ function Probe(): null {
 
 beforeEach(() => {
   vi.stubGlobal("PointerEvent", TestPointerEvent);
-  render(<StudioProvider initialProject={DEMO_PROJECT}><Arrangement /><Probe /></StudioProvider>);
+  render(<StudioProvider initialProject={DEMO_PROJECT} persistenceSession={TEST_PERSISTENCE_SESSION}><Arrangement /><Probe /></StudioProvider>);
 });
 afterEach(() => vi.unstubAllGlobals());
 

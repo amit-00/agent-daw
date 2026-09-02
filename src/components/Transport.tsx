@@ -19,8 +19,8 @@ export function Transport(): ReactElement {
   const audioSubtitle = audio.pending ? "Preparing audio" : isClosed || audio.errorMessage ? "Audio unavailable"
     : audio.snapshot.status === "blocked" ? "Audio blocked"
       : audio.snapshot.unavailableSoundIds.length > 0 ? "Degraded audio" : "Audio ready";
-  const persistenceSubtitle = persistence.status === "saving" ? "Saving" : persistence.status === "saved" ? "Saved"
-    : persistence.status === "memory-only" ? "In memory" : persistence.status === "failed" ? "Storage unavailable" : "Unsaved";
+  const persistenceSubtitle = persistence.status === "saving" ? "Saving" : persistence.status === "saved" ? "Saved locally"
+    : persistence.status === "memory-only" ? "In memory" : persistence.status === "failed" ? "Storage unavailable" : "Not saved yet";
   return (
     <header className="relative z-[4] grid min-h-[58px] grid-cols-[1fr_auto_1fr] items-center gap-4 border-b border-white/10 bg-zinc-950/95 px-3.5 backdrop-blur-[18px]" role="banner">
       <div className="flex min-w-0 items-center gap-2 rounded-[7px] px-2 py-[7px] text-xs text-zinc-300">
