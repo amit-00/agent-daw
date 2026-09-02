@@ -71,7 +71,7 @@ function historyCount(): number {
 it("previews a snapped clip move, preserving the grab offset, and commits once on release", () => {
   start("Select Low Orbit phrase", 314, 200);
   move(434, 200);
-  expect(screen.getByRole("status")).toHaveTextContent(/bar 3/i);
+  expect(within(surface).getByRole("status")).toHaveTextContent(/bar 3/i);
   expect(screen.getByRole("button", { name: "Select Low Orbit phrase" })).toHaveStyle({ left: "6.25%" });
   expect(historyCount()).toBe(0);
   release(434, 200);
@@ -187,7 +187,7 @@ it("does not scroll a partially visible clip into view when a drag starts", () =
 it.each(["source", "destination"])("refuses a release after the %s is deleted", (deleted) => {
   start("Select Low Orbit phrase", 314, 200);
   move(414, 300);
-  expect(screen.getByRole("status")).toHaveTextContent(/bar 3/i);
+  expect(within(surface).getByRole("status")).toHaveTextContent(/bar 3/i);
   if (deleted === "source") {
     fireEvent.click(screen.getByRole("button", { name: "Edit clip Low Orbit phrase at bar 2" }));
     fireEvent.click(screen.getByRole("button", { name: "Delete clip" }));
@@ -273,7 +273,7 @@ it("allows selecting an unplaced pattern after the last track is removed", () =>
 it("resizes by whole patterns and creates one undoable repeat change", () => {
   start("Resize repeats for Low Orbit phrase at bar 2", 452, 200);
   move(652, 200);
-  expect(screen.getByRole("status")).toHaveTextContent(/×2/);
+  expect(within(surface).getByRole("status")).toHaveTextContent(/×2/);
   expect(screen.getByRole("button", { name: "Select Low Orbit phrase" })).toHaveTextContent("×1");
   expect(historyCount()).toBe(0);
   release(652, 200);
@@ -286,12 +286,12 @@ it("resizes by whole patterns and creates one undoable repeat change", () => {
 it.each(["pointercancel", "escape", "lostcapture"])("cancels a clip preview on %s without edits", (cancel) => {
   start("Select Low Orbit phrase", 314, 200);
   move(414, 300);
-  expect(screen.getByRole("status")).toHaveTextContent(/bar 3/i);
+  expect(within(surface).getByRole("status")).toHaveTextContent(/bar 3/i);
   if (cancel === "pointercancel") fireEvent.pointerCancel(surface, { pointerId: 1 });
   if (cancel === "escape") fireEvent.keyDown(surface, { key: "Escape" });
   if (cancel === "lostcapture") fireEvent.lostPointerCapture(surface, { pointerId: 1 });
   release(414, 300);
-  expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  expect(within(surface).queryByRole("status")).not.toBeInTheDocument();
   expect(within(screen.getByRole("region", { name: "Low Orbit lane" })).getByRole("button", { name: "Select Low Orbit phrase" })).toHaveStyle({ left: "6.25%" });
   expect(historyCount()).toBe(0);
 });
@@ -323,7 +323,7 @@ it("does not commit a stationary clip press or a cancelled library drag", () => 
   release(314, 200);
   start("Select pattern Unused idea", 80, 600);
   move(404, 300);
-  expect(screen.getByRole("status")).toHaveTextContent(/bar 3/i);
+  expect(within(surface).getByRole("status")).toHaveTextContent(/bar 3/i);
   fireEvent.keyDown(surface, { key: "Escape" });
   release(404, 300);
   expect(screen.getByRole("button", { name: "Select pattern Unused idea" })).toHaveTextContent("Unplaced");

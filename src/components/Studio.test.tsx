@@ -120,6 +120,9 @@ function installModelContext(
   return { tools, signals };
 }
 
+const webMCPStatus = (value: "Unsupported" | "Registering" | "Ready" | "Failed") =>
+  screen.getByRole("status", { name: `WebMCP status: ${value}` });
+
 beforeEach(() => {
   HTMLDivElement.prototype.setPointerCapture = vi.fn();
   HTMLDivElement.prototype.hasPointerCapture = () => false;
@@ -745,16 +748,16 @@ describe("Studio", () => {
     installModelContext(async () => pending);
 
     render(<Studio initialProject={DEMO_PROJECT} />);
-    expect(await screen.findByLabelText("WebMCP status")).toHaveTextContent("WebMCP: Registering");
+    expect(await screen.findByRole("status", { name: "WebMCP status: Registering" })).toHaveTextContent("WebMCP: Registering");
     finishRegistration();
 
-    await waitFor(() => expect(screen.getByLabelText("WebMCP status")).toHaveTextContent("WebMCP: Ready"));
+    await waitFor(() => expect(webMCPStatus("Ready")).toHaveTextContent("WebMCP: Ready"));
   });
 
   it("shows unsupported when the browser has no model context", async () => {
     render(<Studio initialProject={DEMO_PROJECT} />);
 
-    expect(await screen.findByLabelText("WebMCP status")).toHaveTextContent("WebMCP: Unsupported");
+    expect(await screen.findByRole("status", { name: "WebMCP status: Unsupported" })).toHaveTextContent("WebMCP: Unsupported");
   });
 
   it("shows registration failure without disabling manual editing", async () => {
@@ -762,7 +765,7 @@ describe("Studio", () => {
     const user = userEvent.setup();
     render(<Studio initialProject={DEMO_PROJECT} />);
 
-    await waitFor(() => expect(screen.getByLabelText("WebMCP status")).toHaveTextContent("WebMCP: Failed"));
+    await waitFor(() => expect(webMCPStatus("Failed")).toHaveTextContent("WebMCP: Failed"));
     await user.click(within(screen.getByRole("group", { name: "Low Orbit track" }))
       .getByRole("button", { name: "Mute Low Orbit" }));
     expect(screen.getByRole("button", { name: "Unmute Low Orbit" })).toHaveAttribute("aria-pressed", "true");
@@ -771,7 +774,7 @@ describe("Studio", () => {
   it("aborts browser tool registrations when the studio unmounts", async () => {
     const registration = installModelContext();
     const view = render(<Studio initialProject={DEMO_PROJECT} />);
-    await waitFor(() => expect(screen.getByLabelText("WebMCP status")).toHaveTextContent("WebMCP: Ready"));
+    await waitFor(() => expect(webMCPStatus("Ready")).toHaveTextContent("WebMCP: Ready"));
 
     view.unmount();
 
@@ -784,7 +787,7 @@ describe("Studio", () => {
     const registration = installModelContext();
     const user = userEvent.setup();
     render(<Studio initialProject={DEMO_PROJECT} />);
-    await waitFor(() => expect(screen.getByLabelText("WebMCP status")).toHaveTextContent("WebMCP: Ready"));
+    await waitFor(() => expect(webMCPStatus("Ready")).toHaveTextContent("WebMCP: Ready"));
 
     await act(async () => {
       await registration.tools.get("rename_track")!.execute(
@@ -805,7 +808,7 @@ describe("Studio", () => {
   it("publishes a captured atomic pattern and clip creation", async () => {
     const registration = installModelContext();
     render(<Studio initialProject={DEMO_PROJECT} />);
-    await waitFor(() => expect(screen.getByLabelText("WebMCP status")).toHaveTextContent("WebMCP: Ready"));
+    await waitFor(() => expect(webMCPStatus("Ready")).toHaveTextContent("WebMCP: Ready"));
 
     await act(async () => {
       await registration.tools.get("apply_project_changes")!.execute({
@@ -838,7 +841,7 @@ describe("Studio", () => {
   it("preserves selection across agent edits until the selected entity is deleted", async () => {
     const registration = installModelContext();
     render(<Studio initialProject={DEMO_PROJECT} />);
-    await waitFor(() => expect(screen.getByLabelText("WebMCP status")).toHaveTextContent("WebMCP: Ready"));
+    await waitFor(() => expect(webMCPStatus("Ready")).toHaveTextContent("WebMCP: Ready"));
     const selectedClip = within(screen.getByRole("region", { name: "Neon Kit lane" }))
       .getAllByRole("button", { name: "Select Neon beat" })[0]!;
     expect(selectedClip).toHaveAttribute("aria-pressed", "true");

@@ -55,7 +55,7 @@ describe("WebMCP browser registration", () => {
     const signals = register.mock.calls.map(([, options]) => options.signal);
     expect(new Set(signals)).toHaveLength(1);
     for (const [, options] of register.mock.calls) expect(Object.keys(options)).toEqual(["signal"]);
-    expect([...tools.keys()]).not.toEqual(expect.arrayContaining([...deferredTools]));
+    for (const name of deferredTools) expect(tools.has(name), name).toBe(false);
   });
 
   it("unregisters all tools by aborting the shared controller only once", async () => {
