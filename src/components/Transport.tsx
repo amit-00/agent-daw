@@ -16,7 +16,7 @@ export function Transport(): ReactElement {
   const isClosed = audio.snapshot.status === "closed";
   const controlsDisabled = !audio.engineReady || audio.pending || isClosed;
   const playbackLabel = audio.snapshot.status === "playing" ? "Pause" : "Play";
-  const audioSubtitle = audio.pending ? "Preparing audio" : isClosed ? "Audio unavailable"
+  const audioSubtitle = audio.pending ? "Preparing audio" : isClosed || audio.errorMessage ? "Audio unavailable"
     : audio.snapshot.status === "blocked" ? "Audio blocked"
       : audio.snapshot.unavailableSoundIds.length > 0 ? "Degraded audio" : "Audio ready";
   const persistenceSubtitle = persistence.status === "saving" ? "Saving" : persistence.status === "saved" ? "Saved"
@@ -53,7 +53,7 @@ export function Transport(): ReactElement {
       </div>
 
       <div className="flex items-center justify-end gap-1.5">
-        <button disabled type="button" title="Export is not available in this silent editor" className="flex items-center gap-[7px] rounded-[7px] border border-white/15 bg-white/[0.055] px-3 py-2 text-xs text-zinc-200"><Icon name="download" /> Export</button>
+        <button disabled type="button" title="Export is not available yet" className="flex items-center gap-[7px] rounded-[7px] border border-white/15 bg-white/[0.055] px-3 py-2 text-xs text-zinc-200"><Icon name="download" /> Export</button>
         <button type="button" aria-label={activityOpen ? "Hide activity" : "Show activity"} aria-pressed={activityOpen} onClick={toggleActivity} className={`flex items-center gap-[7px] rounded-[7px] border border-white/15 px-3 py-2 text-xs hover:border-white/20 hover:bg-white/[0.09] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-300 ${activityOpen ? "bg-white/[0.08] text-zinc-200" : "bg-transparent text-zinc-500"}`}><Icon name="activity" /> Activity</button>
       </div>
     </header>

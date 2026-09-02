@@ -19,8 +19,10 @@ export function StudioSession(): ReactElement {
   const undo = useStudioStore((state) => state.undo);
   const redo = useStudioStore((state) => state.redo);
   const [previewEndBar, setPreviewEndBar] = useState<number | null>(null);
-  const audioMessage = audio.errorMessage ?? (audio.snapshot.unavailableSoundIds.length > 0
-    ? `Playback is degraded: ${audio.snapshot.unavailableSoundIds.join(", ")} unavailable.` : null);
+  const audioMessage = audio.snapshot.status === "closed"
+    ? "Audio engine is closed. Reload to restore playback."
+    : audio.errorMessage ?? (audio.snapshot.unavailableSoundIds.length > 0
+      ? `Playback is degraded: ${audio.snapshot.unavailableSoundIds.join(", ")} unavailable.` : null);
 
   function handleKeyboard(event: KeyboardEvent<HTMLElement>): void {
     const target = event.target;

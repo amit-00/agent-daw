@@ -156,7 +156,7 @@ describe("Studio", () => {
 
     await user.click(screen.getByRole("button", { name: "Play" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("Audio engine is closed; create a new engine");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Audio engine is closed. Reload to restore playback.");
     expect(screen.getByRole("button", { name: "Play" })).toBeDisabled();
   });
 
@@ -173,6 +173,14 @@ describe("Studio", () => {
 
     expect(screen.getByRole("button", { name: "Play" })).toBeEnabled();
     expect(screen.getByRole("alert")).toHaveTextContent("Audio playback failed. Try again or reload.");
+    expect(screen.getByRole("banner")).toHaveTextContent("Audio unavailable");
+  });
+
+  it("keeps Export inactive without a stale silent-editor claim", () => {
+    renderSession(DEMO_PROJECT);
+
+    expect(screen.getByRole("button", { name: "Export" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Export" })).toHaveAttribute("title", "Export is not available yet");
   });
   it("forwards each changed project identity to the mounted audio engine", () => {
     let store: StoreApi<StudioState> | undefined;
