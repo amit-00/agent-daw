@@ -2,6 +2,7 @@ import type { Project, Track } from "../project/index.ts";
 import {
   BASIC_DRUM_KIT,
   SYNTH_PRESETS,
+  findDrumSound,
   findSynthPreset,
 } from "./catalog.ts";
 import type { LoadArrayBuffer } from "./sampler.ts";
@@ -13,6 +14,26 @@ const CHANNELS = 2;
 const SAMPLE_RATE = 44_100;
 const BYTES_PER_SAMPLE = 2;
 const WAV_HEADER_BYTES = 44;
+
+export type WavExportErrorCode =
+  | "empty_arrangement"
+  | "duration_exceeded"
+  | "invalid_project_reference"
+  | "unknown_preset"
+  | "missing_sample"
+  | "sample_load_failed"
+  | "render_failed"
+  | "download_failed";
+
+export class WavExportError extends Error {
+  readonly code: WavExportErrorCode;
+
+  constructor(code: WavExportErrorCode, message: string, cause?: unknown) {
+    super(message, cause === undefined ? undefined : { cause });
+    this.name = "WavExportError";
+    this.code = code;
+  }
+}
 
 const writeAscii = (view: DataView, offset: number, value: string): void => {
   for (let index = 0; index < value.length; index += 1) {
@@ -85,11 +106,43 @@ export async function renderProjectToWav(
 ): Promise<Blob> {
   const endStep = arrangementEndStep(project);
   const expansion = expandTimeline(project, 0, endStep);
+  if (project.arrangement.length === 0) {
+    throw new WavExportError("empty_arrangement", "Add an arrangement clip before exporting WAV");
+  }
+  if (endStep === 0 || expansion.issues.length > 0) {
+    const issue = expansion.issues[0];
+    throw new WavExportError(
+      "invalid_project_reference",
+      `Cannot export because the arrangement references a missing ${issue?.code === "missing_track" ? "track" : "pattern"}${issue?.relatedId === undefined ? "" : `: ${issue.relatedId}`}`,
+    );
+  }
+  const unknownPreset = expansion.events.find((event) =>
+    event.kind === "synth" && findSynthPreset(event.instrumentId) === undefined);
+  if (unknownPreset?.kind === "synth") {
+    throw new WavExportError(
+      "unknown_preset",
+      `Cannot export because synth preset ${unknownPreset.instrumentId} is unavailable`,
+    );
+  }
+  const unknownSound = expansion.events.find((event) =>
+    event.kind === "drum" && findDrumSound(event.soundId) === undefined);
+  if (unknownSound?.kind === "drum") {
+    throw new WavExportError(
+      "missing_sample",
+      `Cannot export because drum sample ${unknownSound.soundId} is unavailable`,
+    );
+  }
   const releaseSeconds = expansion.events.reduce((longest, event) =>
     event.kind === "synth"
       ? Math.max(longest, findSynthPreset(event.instrumentId)?.releaseSeconds ?? 0)
       : longest, 0);
   const durationSeconds = endStep * secondsPerStep(project.bpm) + releaseSeconds;
+  if (durationSeconds > 600) {
+    throw new WavExportError(
+      "duration_exceeded",
+      "WAV export cannot exceed 10 minutes; shorten the arrangement or raise its BPM",
+    );
+  }
   const context = platform.createContext(
     CHANNELS,
     Math.ceil(durationSeconds * SAMPLE_RATE),
@@ -111,15 +164,31 @@ export async function renderProjectToWav(
   const usedSoundIds = new Set(expansion.events
     .filter((event) => event.kind === "drum")
     .map(({ soundId }) => soundId));
+  let sampleLoadCause: unknown;
   const sampler = new Sampler({
     context,
     kit: {
       ...BASIC_DRUM_KIT,
       sounds: BASIC_DRUM_KIT.sounds.filter(({ id }) => usedSoundIds.has(id)),
     },
-    loadArrayBuffer: platform.loadArrayBuffer,
+    loadArrayBuffer: async (url) => {
+      try {
+        return await platform.loadArrayBuffer(url);
+      } catch (cause) {
+        sampleLoadCause = cause;
+        throw cause;
+      }
+    },
   });
-  await sampler.prepare();
+  const preparation = await sampler.prepare();
+  if (preparation.unavailableSoundIds.length > 0) {
+    const soundId = preparation.unavailableSoundIds[0]!;
+    throw new WavExportError(
+      sampleLoadCause === undefined ? "missing_sample" : "sample_load_failed",
+      `Cannot export because drum sample ${soundId} could not be loaded; retry the export`,
+      sampleLoadCause,
+    );
+  }
   const synthEvents = expansion.events.filter((event) => event.kind === "synth");
   const synth = new Synth({
     context,
@@ -139,5 +208,15 @@ export async function renderProjectToWav(
       destination,
     );
   }
-  return encodeWav(await context.startRendering());
+  let rendered: AudioBuffer;
+  try {
+    rendered = await context.startRendering();
+  } catch (cause) {
+    throw new WavExportError(
+      "render_failed",
+      "WAV rendering failed; retry the export",
+      cause,
+    );
+  }
+  return encodeWav(rendered);
 }
