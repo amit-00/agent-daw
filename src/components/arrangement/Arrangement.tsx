@@ -38,13 +38,15 @@ const playheadLabel = (step: number): string =>
 
 export function Arrangement({ previewEndBar = null }: Readonly<{ previewEndBar?: number | null }>): ReactElement {
   const project = useStudioStore((state) => state.project);
+  const audio = useStudioStore((state) => state.audio);
   const reorderTrack = useStudioStore((state) => state.reorderTrack);
+  const seekPlayback = useStudioStore((state) => state.seekPlayback);
   const scroller = useRef<HTMLDivElement>(null);
   const arrangement = useRef<HTMLElement>(null);
   const dragHandle = useRef<HTMLButtonElement>(null);
   const [drag, setDrag] = useState<TrackDrag | null>(null);
   const playheadDrag = useRef<PlayheadDrag | null>(null);
-  const [playheadStep, setPlayheadStep] = useState(0);
+  const [seekPreviewStep, setSeekPreviewStep] = useState<number | null>(null);
   const addButton = useRef<HTMLButtonElement>(null);
   const [adding, setAdding] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -88,12 +90,13 @@ export function Arrangement({ previewEndBar = null }: Readonly<{ previewEndBar?:
   }, 0);
   const bars = Math.min(PROJECT_CAPS.maxArrangementBars,
     Math.max(ARRANGEMENT_MIN_BARS, furthestClipEnd + ARRANGEMENT_BUFFER_BARS, (previewEndBar ?? 0) + ARRANGEMENT_BUFFER_BARS));
-  const currentPlayheadStep = Math.min(playheadStep, bars * 16);
-  const playheadLeft = TRACK_COLUMN_WIDTH + currentPlayheadStep / 16 * ARRANGEMENT_BAR_WIDTH;
+  const transportEndStep = audio.snapshot.arrangementEndStep;
+  const displayedStep = Math.min(seekPreviewStep ?? audio.snapshot.positionStep, transportEndStep);
+  const playheadLeft = TRACK_COLUMN_WIDTH + displayedStep / 16 * ARRANGEMENT_BAR_WIDTH;
 
   function playheadStepAt(clientX: number, grabOffset: number): number {
     const left = arrangement.current!.getBoundingClientRect().left + TRACK_COLUMN_WIDTH + grabOffset;
-    return clamp(Math.round((clientX - left) / (ARRANGEMENT_BAR_WIDTH / 16)), 0, bars * 16);
+    return clamp(Math.round((clientX - left) / (ARRANGEMENT_BAR_WIDTH / 16)), 0, transportEndStep);
   }
 
   function startPlayheadDrag(event: PointerEvent<HTMLDivElement>): void {
@@ -107,19 +110,28 @@ export function Arrangement({ previewEndBar = null }: Readonly<{ previewEndBar?:
 
   function movePlayhead(event: PointerEvent<HTMLDivElement>): void {
     const current = playheadDrag.current;
-    if (event.pointerId === current?.pointerId) setPlayheadStep(playheadStepAt(event.clientX, current.grabOffset));
+    if (event.pointerId === current?.pointerId) setSeekPreviewStep(playheadStepAt(event.clientX, current.grabOffset));
   }
 
   function finishPlayheadDrag(event: PointerEvent<HTMLDivElement>): void {
-    if (event.pointerId !== playheadDrag.current?.pointerId) return;
+    const current = playheadDrag.current;
+    if (event.pointerId !== current?.pointerId) return;
     playheadDrag.current = null;
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    setSeekPreviewStep(null);
+    seekPlayback(playheadStepAt(event.clientX, current.grabOffset));
+  }
+
+  function cancelPlayheadDrag(event: PointerEvent<HTMLDivElement>): void {
+    if (event.pointerId !== playheadDrag.current?.pointerId) return;
+    playheadDrag.current = null;
+    setSeekPreviewStep(null);
   }
 
   function movePlayheadWithKeyboard(event: KeyboardEvent<HTMLDivElement>): void {
     if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
     event.preventDefault();
-    setPlayheadStep(clamp(currentPlayheadStep + (event.key === "ArrowRight" ? 1 : -1), 0, bars * 16));
+    seekPlayback(clamp(Math.floor(displayedStep) + (event.key === "ArrowRight" ? 1 : -1), 0, transportEndStep));
   }
 
   return (
@@ -152,12 +164,10 @@ export function Arrangement({ previewEndBar = null }: Readonly<{ previewEndBar?:
         {project.tracks.map((track) => <TrackLane key={track.id + "-lane"} row={tracks.findIndex((item) => item.id === track.id) + 2} track={track} bars={bars} onEditClip={setEditingClipId} />)}
         {project.tracks.length === 0 && <p className="col-span-2 p-6 text-xs text-zinc-500">Add a track to start arranging.</p>}
         <span aria-hidden="true" className="pointer-events-none absolute inset-y-0 z-[2] w-px bg-white/90" style={{ left: playheadLeft }} />
-        <div role="slider" aria-label="Playhead" aria-valuemin={0} aria-valuemax={bars * 16} aria-valuenow={currentPlayheadStep}
-          aria-valuetext={playheadLabel(currentPlayheadStep)} tabIndex={0} style={{ left: playheadLeft }}
+        <div role="slider" aria-label="Playhead" aria-valuemin={0} aria-valuemax={transportEndStep} aria-valuenow={displayedStep}
+          aria-valuetext={playheadLabel(Math.floor(displayedStep))} tabIndex={0} style={{ left: playheadLeft }}
           onPointerDown={startPlayheadDrag} onPointerMove={movePlayhead} onPointerUp={finishPlayheadDrag}
-          onPointerCancel={finishPlayheadDrag} onLostPointerCapture={(event) => {
-            if (event.pointerId === playheadDrag.current?.pointerId) playheadDrag.current = null;
-          }} onKeyDown={movePlayheadWithKeyboard}
+          onPointerCancel={cancelPlayheadDrag} onLostPointerCapture={cancelPlayheadDrag} onKeyDown={movePlayheadWithKeyboard}
           className="absolute top-[29px] z-[2] grid h-5 w-4 -translate-x-1/2 touch-none cursor-col-resize place-items-center focus-visible:outline-2 focus-visible:outline-violet-300">
           <span aria-hidden="true" className="h-[7px] w-[7px] rounded-b-full rounded-t-sm bg-white" />
         </div>
