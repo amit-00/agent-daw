@@ -184,7 +184,7 @@ Own the client-only startup state and prevent editor construction until persiste
 ### Outputs
 
 - One validated initial project and persistence service for the studio session.
-- Loading, memory-only warning, or blocking recovery presentation.
+- Loading, unsaved fallback, memory-only warning, or blocking recovery presentation.
 
 ### Error handling and failure modes
 
@@ -734,7 +734,7 @@ No component calls IndexedDB or Web Audio directly. No service imports React or 
 ## 12.2 Local signals
 
 - Startup load status and loaded `updatedAt`.
-- Current persistence status: saved, saving, memory-only, or failed.
+- Current persistence status: unsaved, saving, saved, memory-only, or failed.
 - Audio presentation status: engine status plus derived preparing and degraded indicators.
 - Audio unavailable sound IDs and last runtime issue.
 - Existing scheduler late-wakeup count for local diagnosis.
