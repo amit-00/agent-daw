@@ -55,6 +55,14 @@ export interface WavExportPlatform {
   readonly loadArrayBuffer: LoadArrayBuffer;
 }
 
+const loadArrayBuffer = async (url: string): Promise<ArrayBuffer> => {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`Drum sample request failed with HTTP ${response.status}`);
+  }
+  return response.arrayBuffer();
+};
+
 export function encodeWav(buffer: AudioBuffer): Blob {
   if (buffer.numberOfChannels !== CHANNELS || buffer.sampleRate !== SAMPLE_RATE) {
     throw new RangeError("WAV export requires a 44.1 kHz stereo audio buffer");
@@ -219,4 +227,31 @@ export async function renderProjectToWav(
     );
   }
   return encodeWav(rendered);
+}
+
+export async function downloadProjectWav(project: Project): Promise<void> {
+  const blob = await renderProjectToWav(project, {
+    createContext: (channels, length, sampleRate) =>
+      new OfflineAudioContext(channels, length, sampleRate),
+    loadArrayBuffer,
+  });
+  let url: string | undefined;
+  let anchor: HTMLAnchorElement | undefined;
+  try {
+    url = URL.createObjectURL(blob);
+    anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = wavFileName(project.name);
+    document.body.append(anchor);
+    anchor.click();
+  } catch (cause) {
+    throw new WavExportError(
+      "download_failed",
+      "WAV download failed; retry the export",
+      cause,
+    );
+  } finally {
+    anchor?.remove();
+    if (url !== undefined) URL.revokeObjectURL(url);
+  }
 }

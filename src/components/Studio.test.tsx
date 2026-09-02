@@ -8,6 +8,8 @@ import { ActivityPanel } from "@/components/ActivityPanel";
 import { DEMO_PROJECT, EMPTY_PROJECT } from "@/data/studio-data";
 import { StudioProvider, useStudioStore } from "@/stores/studio-provider";
 import type { StudioState } from "@/stores/studio-store";
+import { audioProject } from "../../test/audio-fixtures";
+import { FakeOfflineAudioContext } from "../../test/audio-fakes";
 
 beforeEach(() => {
   HTMLDivElement.prototype.setPointerCapture = vi.fn();
@@ -351,6 +353,113 @@ describe("Studio", () => {
     expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
     await user.click(screen.getByRole("button", { name: "Redo" }));
     expect(screen.getByText("Named song")).toBeVisible();
+  });
+
+  it("downloads one WAV from a frozen project without creating history", async () => {
+    let state: StudioState | undefined;
+    function Probe(): null {
+      state = useStudioStore((value) => value);
+      return null;
+    }
+    let resolveRender: (() => void) | undefined;
+    vi.stubGlobal("OfflineAudioContext", class extends FakeOfflineAudioContext {
+      constructor(channels: number, length: number, sampleRate: number) {
+        super(channels, length, sampleRate);
+      }
+      override startRendering(): Promise<AudioBuffer> {
+        return new Promise((resolve) => {
+          resolveRender = () => resolve({
+            duration: this.length / this.sampleRate,
+            length: this.length,
+            numberOfChannels: 2,
+            sampleRate: this.sampleRate,
+            getChannelData: () => new Float32Array(this.length),
+          } as unknown as AudioBuffer);
+        });
+      }
+    });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(new ArrayBuffer(8))));
+    const createObjectURL = vi.fn(() => "blob:wav");
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal("URL", { createObjectURL, revokeObjectURL });
+    let downloadedName = "";
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
+      downloadedName = this.download;
+    });
+    const user = userEvent.setup();
+    render(
+      <StudioProvider initialProject={{ ...audioProject(), name: "Demo/Beat" }}>
+        <Transport />
+        <Probe />
+      </StudioProvider>,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Export" }));
+    expect(screen.getByRole("button", { name: "Exporting…" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Exporting…" }));
+    await vi.waitFor(() => expect(resolveRender).toBeTypeOf("function"));
+    act(() => state!.dispatch({
+      id: "rename-during-export",
+      source: "manual",
+      label: "Rename during export",
+      kind: "operation",
+      operation: { type: "project.update", changes: { name: "Changed" } },
+    }));
+    resolveRender?.();
+    await screen.findByRole("button", { name: "Export" });
+
+    expect(click).toHaveBeenCalledOnce();
+    expect(downloadedName).toBe("Demo-Beat.wav");
+    expect(createObjectURL).toHaveBeenCalledOnce();
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:wav");
+    expect(state?.history).toHaveLength(1);
+  });
+
+  it("keeps empty export disabled and reports a rendering failure", async () => {
+    const user = userEvent.setup();
+    const empty = render(
+      <StudioProvider initialProject={EMPTY_PROJECT}><Transport /></StudioProvider>,
+    );
+    expect(screen.getByRole("button", { name: "Export" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Export" })).toHaveAttribute(
+      "title",
+      "Add an arrangement clip before exporting WAV",
+    );
+    empty.unmount();
+
+    vi.stubGlobal("OfflineAudioContext", class extends FakeOfflineAudioContext {
+      override startRendering(): Promise<AudioBuffer> {
+        return Promise.reject(new Error("render stopped"));
+      }
+    });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(new ArrayBuffer(8))));
+    render(
+      <StudioProvider initialProject={audioProject()}><Transport /></StudioProvider>,
+    );
+    await user.click(screen.getByRole("button", { name: "Export" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "WAV rendering failed; retry the export",
+    );
+  });
+
+  it("reports a browser download failure without creating history", async () => {
+    vi.stubGlobal("OfflineAudioContext", FakeOfflineAudioContext);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(new ArrayBuffer(8))));
+    vi.stubGlobal("URL", {
+      createObjectURL: () => { throw new Error("downloads blocked"); },
+      revokeObjectURL: vi.fn(),
+    });
+    const user = userEvent.setup();
+    render(
+      <StudioProvider initialProject={audioProject()}><Transport /></StudioProvider>,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Export" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "WAV download failed; retry the export",
+    );
+    expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
   });
 
   it("confirms restore from real attributed history and makes it undoable", async () => {

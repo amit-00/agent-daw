@@ -1,12 +1,31 @@
 "use client";
 
-import type { ReactElement } from "react";
+import { useState, type ReactElement } from "react";
 
+import { downloadProjectWav, WavExportError } from "@/audio";
 import { Icon, TransportIcon } from "@/components/icons";
 import { useStudioStore } from "@/stores/studio-provider";
 
 export function Transport(): ReactElement {
   const { project, history, historyCursor, undo, redo, activityOpen, toggleActivity } = useStudioStore((state) => state);
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+
+  async function handleExport(): Promise<void> {
+    if (exporting || project.arrangement.length === 0) return;
+    setExporting(true);
+    setExportError(null);
+    try {
+      await downloadProjectWav(structuredClone(project));
+    } catch (error) {
+      setExportError(error instanceof WavExportError
+        ? error.message
+        : "WAV export failed; retry the export");
+    } finally {
+      setExporting(false);
+    }
+  }
+
   return (
     <header className="relative z-[4] grid min-h-[58px] grid-cols-[1fr_auto_1fr] items-center gap-4 border-b border-white/10 bg-zinc-950/95 px-3.5 backdrop-blur-[18px]" role="banner">
       <div className="flex min-w-0 items-center gap-2 rounded-[7px] px-2 py-[7px] text-xs text-zinc-300">
@@ -39,7 +58,20 @@ export function Transport(): ReactElement {
       </div>
 
       <div className="flex items-center justify-end gap-1.5">
-        <button disabled type="button" title="Export is not available in this silent editor" className="flex items-center gap-[7px] rounded-[7px] border border-white/15 bg-white/[0.055] px-3 py-2 text-xs text-zinc-200"><Icon name="download" /> Export</button>
+        <button
+          type="button"
+          disabled={exporting || project.arrangement.length === 0}
+          aria-busy={exporting}
+          title={project.arrangement.length === 0
+            ? "Add an arrangement clip before exporting WAV"
+            : "Download WAV"}
+          onClick={() => void handleExport()}
+          className="flex items-center gap-[7px] rounded-[7px] border border-white/15 bg-white/[0.055] px-3 py-2 text-xs text-zinc-200 enabled:hover:border-white/25 enabled:hover:bg-white/[0.09] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-300 disabled:text-zinc-600"
+        >
+          <Icon name="download" /> {exporting ? "Exporting…" : "Export"}
+        </button>
+        {exporting && <span className="sr-only" role="status">Exporting WAV</span>}
+        {exportError && <p className="absolute right-3 top-full mt-2 rounded-md border border-rose-400/20 bg-rose-950/95 px-3 py-2 text-xs text-rose-200" role="alert">{exportError}</p>}
         <button type="button" aria-label={activityOpen ? "Hide activity" : "Show activity"} aria-pressed={activityOpen} onClick={toggleActivity} className={`flex items-center gap-[7px] rounded-[7px] border border-white/15 px-3 py-2 text-xs hover:border-white/20 hover:bg-white/[0.09] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-300 ${activityOpen ? "bg-white/[0.08] text-zinc-200" : "bg-transparent text-zinc-500"}`}><Icon name="activity" /> Activity</button>
       </div>
     </header>
