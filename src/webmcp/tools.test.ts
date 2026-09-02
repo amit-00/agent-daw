@@ -401,6 +401,130 @@ describe("inspection tools", () => {
       .resolves.toMatchObject({ success: false, error: { code: "HISTORY_ENTRY_NOT_FOUND", field: "history_entry_id" } });
   });
 
+  test("get_history normalizes project, track, and pattern actions for public output", async () => {
+    const store = createStudioStore(DEMO_PROJECT);
+    store.getState().dispatch({
+      id: "structural-batch", source: "agent", label: "Structural batch", kind: "batch",
+      operations: [
+        { type: "project.update", changes: { name: "Public", bpm: 121, masterVolumeDb: -4 } },
+        { type: "track.create", track: { id: "new-track", name: "New track", kind: "synth",
+          instrumentId: "synth.pad", volumeDb: -2, pan: 0.25, muted: true, soloed: false, color: "#123456" } },
+        { type: "track.update", trackId: "bass", changes: { name: "Bass two", instrumentId: "synth.lead",
+          volumeDb: -5, pan: -0.25, muted: true, soloed: true } },
+        { type: "track.reorder", trackId: "bass", toIndex: 0 },
+        { type: "track.delete", trackId: "pad" },
+        { type: "pattern.create", pattern: { id: "new-pattern", name: "New pattern", kind: "drum",
+          lengthBars: 1, events: [{ id: "new-hit", soundId: "kick", startStep: 0 }] } },
+        { type: "pattern.duplicate", patternId: "afterglow", duplicatePatternId: "afterglow-copy",
+          duplicateName: "Afterglow copy", duplicateEventIds: ["copy-1", "copy-2", "copy-3", "copy-4"] },
+        { type: "pattern.update", patternId: "orbit", changes: { name: "Orbit two", lengthBars: 4 } },
+        { type: "pattern.delete", patternId: "unused-idea" },
+      ],
+    });
+    const entryId = store.getState().history[0]!.id;
+
+    const response = await execute(store, "get_history", { view: "entry", history_entry_id: entryId });
+    const action = (response.result!.items as { action: unknown }[])[0]!.action;
+
+    expect(action).toEqual({ kind: "batch", operations: [
+      { type: "project.update", changes: { name: "Public", bpm: 121, master_volume_db: -4 } },
+      { type: "track.create", track: { id: "new-track", name: "New track", kind: "synth",
+        instrument_id: "synth.pad", volume_db: -2, pan: 0.25, muted: true, soloed: false, color: "#123456" } },
+      { type: "track.update", track_id: "bass", changes: { name: "Bass two", instrument_id: "synth.lead",
+        volume_db: -5, pan: -0.25, muted: true, soloed: true } },
+      { type: "track.reorder", track_id: "bass", position: 1 },
+      { type: "track.delete", track_id: "pad" },
+      { type: "pattern.create", pattern: { id: "new-pattern", name: "New pattern", kind: "drum",
+        length_bars: 1, events: [{ id: "new-hit", sound_id: "kick", step: 1 }] } },
+      { type: "pattern.duplicate", pattern_id: "afterglow", duplicate_pattern_id: "afterglow-copy",
+        duplicate_name: "Afterglow copy", duplicate_event_ids: ["copy-1", "copy-2", "copy-3", "copy-4"] },
+      { type: "pattern.update", pattern_id: "orbit", changes: { name: "Orbit two", length_bars: 4 } },
+      { type: "pattern.delete", pattern_id: "unused-idea" },
+    ] });
+    expect(JSON.stringify(action)).not.toMatch(/masterVolumeDb|instrumentId|trackId|toIndex|lengthBars|startStep/);
+  });
+
+  test("get_history normalizes arrangement and event action coordinates", async () => {
+    const store = createStudioStore(DEMO_PROJECT);
+    store.getState().dispatch({
+      id: "event-batch", source: "agent", label: "Event batch", kind: "batch",
+      operations: [
+        { type: "arrangement.place", clip: { id: "new-clip", patternId: "neon", trackId: "drums",
+          startBar: 8, repeatCount: 2 } },
+        { type: "arrangement.update", clipId: "bass-a", changes: {
+          patternId: "afterglow", trackId: "melody", startBar: 9, repeatCount: 3,
+        } },
+        { type: "arrangement.delete", clipId: "drums-b" },
+        { type: "drum-hits.add", patternId: "neon", hits: [{ id: "hit-add", soundId: "hat", startStep: 1 }] },
+        { type: "drum-hits.update", patternId: "neon", updates: [
+          { hitId: "kick-0", changes: { soundId: "snare", startStep: 2 } },
+        ] },
+        { type: "drum-hits.delete", patternId: "neon", hitIds: ["kick-4"] },
+        { type: "synth-notes.add", patternId: "afterglow", notes: [
+          { id: "note-add", midiNote: 80, startStep: 1, lengthSteps: 2 },
+        ] },
+        { type: "synth-notes.update", patternId: "afterglow", updates: [
+          { noteId: "lead-1", changes: { midiNote: 74, startStep: 3, lengthSteps: 5 } },
+        ] },
+        { type: "synth-notes.delete", patternId: "afterglow", noteIds: ["lead-2"] },
+      ],
+    });
+    const entryId = store.getState().history[0]!.id;
+
+    const response = await execute(store, "get_history", { view: "entry", history_entry_id: entryId });
+    const action = (response.result!.items as { action: unknown }[])[0]!.action;
+
+    expect(action).toEqual({ kind: "batch", operations: [
+      { type: "arrangement.place", clip: { id: "new-clip", pattern_id: "neon", track_id: "drums",
+        start_bar: 9, repeat_count: 2 } },
+      { type: "arrangement.update", clip_id: "bass-a", changes: {
+        pattern_id: "afterglow", track_id: "melody", start_bar: 10, repeat_count: 3,
+      } },
+      { type: "arrangement.delete", clip_id: "drums-b" },
+      { type: "drum-hits.add", pattern_id: "neon", hits: [{ id: "hit-add", sound_id: "hat", step: 2 }] },
+      { type: "drum-hits.update", pattern_id: "neon", updates: [
+        { hit_id: "kick-0", changes: { sound_id: "snare", step: 3 } },
+      ] },
+      { type: "drum-hits.delete", pattern_id: "neon", hit_ids: ["kick-4"] },
+      { type: "synth-notes.add", pattern_id: "afterglow", notes: [
+        { id: "note-add", midi_note: 80, start_step: 2, length_steps: 2 },
+      ] },
+      { type: "synth-notes.update", pattern_id: "afterglow", updates: [
+        { note_id: "lead-1", changes: { midi_note: 74, start_step: 4, length_steps: 5 } },
+      ] },
+      { type: "synth-notes.delete", pattern_id: "afterglow", note_ids: ["lead-2"] },
+    ] });
+    expect(JSON.stringify(action)).not.toMatch(/patternId|trackId|clipId|startBar|repeatCount|soundId|startStep|lengthSteps|midiNote|hitId|noteId/);
+  });
+
+  test("get_history exposes single and restore actions in public form", async () => {
+    const store = createStudioStore(DEMO_PROJECT);
+    store.getState().dispatch({
+      id: "rename", source: "manual", label: "Rename", kind: "operation",
+      operation: { type: "project.update", changes: { name: "Target" } },
+    });
+    const targetEntryId = store.getState().history[0]!.id;
+    store.getState().dispatch({
+      id: "tempo", source: "manual", label: "Tempo", kind: "operation",
+      operation: { type: "project.update", changes: { bpm: 130 } },
+    });
+    const singleEntryId = store.getState().history[1]!.id;
+
+    const single = await execute(store, "get_history", { view: "entry", history_entry_id: singleEntryId });
+    expect((single.result!.items as { action: unknown }[])[0]!.action).toEqual({
+      kind: "operation", operations: [{ type: "project.update", changes: { bpm: 130 } }],
+    });
+
+    store.getState().executeRestore({
+      id: "restore", source: "agent", toolName: "restore_history", label: "Restore", targetEntryId,
+    });
+    const restoreEntryId = store.getState().history.at(-1)!.id;
+    const restored = await execute(store, "get_history", { view: "entry", history_entry_id: restoreEntryId });
+    expect((restored.result!.items as { action: unknown }[])[0]!.action).toEqual({
+      type: "restore_history", history_entry_id: targetEntryId,
+    });
+  });
+
   test("inspection cursors reject corruption, wrong views, and stale revisions", async () => {
     const store = createStudioStore(DEMO_PROJECT);
     const page = await execute(store, "get_project", { view: "tracks", limit: 1 });

@@ -6,6 +6,7 @@ import {
   type HistoryAction,
   type HistoryEntry,
   type DrumHit,
+  type Operation,
   type Pattern,
   type Project,
   type SynthNote,
@@ -354,11 +355,29 @@ const publicChanges = (changes: ChangeSummary) => {
   };
 };
 
+const snakeCase = (key: string): string => key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
+
+const normalizeOperation = (operation: Operation): unknown => {
+  const drumSteps = operation.type.startsWith("drum-hits.")
+    || (operation.type === "pattern.create" && operation.pattern.kind === "drum");
+  const visit = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(visit);
+    if (typeof value !== "object" || value === null) return value;
+    return Object.fromEntries(Object.entries(value).map(([key, nested]) => {
+      if (key === "startBar") return ["start_bar", (nested as number) + 1];
+      if (key === "startStep") return [drumSteps ? "step" : "start_step", (nested as number) + 1];
+      if (key === "toIndex") return ["position", (nested as number) + 1];
+      return [snakeCase(key), visit(nested)];
+    }));
+  };
+  return visit(operation);
+};
+
 const normalizeAction = (action: HistoryAction) => action.kind === "restore"
-  ? { kind: "restore", history_entry_id: action.targetEntryId }
+  ? { type: "restore_history", history_entry_id: action.targetEntryId }
   : {
       kind: action.kind,
-      operations: structuredClone(action.kind === "operation" ? [action.operation] : action.operations),
+      operations: (action.kind === "operation" ? [action.operation] : action.operations).map(normalizeOperation),
     };
 
 const affectedEntities = (project: Project, ids: ChangeSummary["created"]) => {
