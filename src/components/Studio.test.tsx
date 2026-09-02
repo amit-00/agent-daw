@@ -150,7 +150,7 @@ describe("Studio persistence bootstrap", () => {
     expect(registration.tools).toHaveLength(0);
 
     await act(async () => finishLoad({ status: "empty" }));
-    await waitFor(() => expect(registration.tools).toHaveLength(40));
+    await waitFor(() => expect(registration.tools).toHaveLength(41));
   });
 
   it("does not register WebMCP while corrupt storage requires recovery", async () => {
@@ -694,6 +694,44 @@ describe("Studio", () => {
     expect(store!.getState().history).toHaveLength(1);
   });
 
+  it("keeps Transport export state local while WebMCP exports", async () => {
+    let resolveRender!: (buffer: AudioBuffer) => void;
+    const registration = installModelContext();
+    vi.stubGlobal("AudioContext", FakeAudioContext);
+    vi.stubGlobal("OfflineAudioContext", class extends FakeOfflineAudioContext {
+      override startRendering(): Promise<AudioBuffer> {
+        return new Promise((resolve) => { resolveRender = resolve; });
+      }
+    });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(new ArrayBuffer(8))));
+    vi.stubGlobal("URL", { createObjectURL: () => "blob:wav", revokeObjectURL: vi.fn() });
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+    const project = audioProject();
+    render(
+      <StudioProvider initialProject={project} persistenceSession={TEST_PERSISTENCE_SESSION}>
+        <StudioSession />
+      </StudioProvider>,
+    );
+    await waitFor(() => expect(registration.tools).toHaveLength(41));
+
+    const result = registration.tools.get("export_wav")!.execute(
+      {},
+      { signal: new AbortController().signal },
+    );
+    await waitFor(() => expect(resolveRender).toBeTypeOf("function"));
+    expect(screen.getByRole("button", { name: "Export" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Export" })).toHaveAttribute("aria-busy", "false");
+
+    resolveRender({
+      duration: 1,
+      length: 1,
+      numberOfChannels: 2,
+      sampleRate: 44_100,
+      getChannelData: () => new Float32Array(1),
+    } as AudioBuffer);
+    await expect(result).resolves.toMatchObject({ success: true });
+  });
+
   it("keeps empty export disabled and reports a rendering failure", async () => {
     vi.stubGlobal("AudioContext", FakeAudioContext);
     const user = userEvent.setup();
@@ -887,7 +925,7 @@ describe("Studio", () => {
 
     view.unmount();
 
-    expect(registration.signals).toHaveLength(40);
+    expect(registration.signals).toHaveLength(41);
     expect(registration.signals.every((signal) => signal.aborted)).toBe(true);
     expect(registration.tools).toHaveLength(0);
   });

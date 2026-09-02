@@ -22,7 +22,7 @@ export function Transport(): ReactElement {
     setExporting(true);
     setExportError(null);
     try {
-      await downloadProjectWav(structuredClone(project));
+      await downloadProjectWav(structuredClone(project), {});
     } catch (error) {
       setExportError(error instanceof WavExportError
         ? error.message

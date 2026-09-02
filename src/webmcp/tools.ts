@@ -1,4 +1,4 @@
-import type { AudioControlResult } from "@/audio";
+import { downloadProjectWav, WavExportError, type AudioControlResult } from "@/audio";
 import { SOUND_CATALOG } from "@/audio/catalog";
 import { getTrackColor, INSTRUMENT_NAMES, TRACK_COLOR_WHEEL } from "@/data/studio-data";
 import {
@@ -1564,6 +1564,30 @@ export function createWebMCPTools(
       ({ bar, step }) => {
         const result = audioResult(store.getState().seekPlayback(checkedPosition(store.getState(), bar, step, "bar")));
         return publicPlayback(result.status, result.positionStep);
+      },
+    ),
+    defineWebMCPTool(
+      contract("export_wav"),
+      (input) => ({
+        fileName: input.file_name === undefined
+          ? undefined
+          : expectString(input.file_name, "file_name", 1, 120).trim(),
+      }),
+      async ({ fileName }, signal) => {
+        try {
+          const downloaded = await downloadProjectWav(
+            structuredClone(store.getState().project),
+            { ...(fileName === undefined ? {} : { fileName }), signal },
+          );
+          return { file_name: downloaded };
+        } catch (error) {
+          signal.throwIfAborted();
+          if (error instanceof WavExportError) {
+            const retryable = ["sample_load_failed", "render_failed", "download_failed"].includes(error.code);
+            throw new ToolExecutionError("EXPORT_FAILED", undefined, error.message, undefined, retryable);
+          }
+          throw error;
+        }
       },
     ),
     defineMutationTool(

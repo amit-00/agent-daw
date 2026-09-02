@@ -5,7 +5,8 @@ import { AudioEngine } from "@/audio";
 import { PROJECT_CAPS, type Project } from "@/project";
 import { DEMO_PROJECT } from "@/data/studio-data";
 import { createStudioStore as createStudioStoreBase, type StudioState } from "@/stores/studio-store";
-import { FakeAudioContext, FakeTimers } from "../../test/audio-fakes";
+import { audioProject } from "../../test/audio-fixtures";
+import { FakeAudioContext, FakeOfflineAudioContext, FakeTimers } from "../../test/audio-fakes";
 
 import { TOOL_CONTRACTS } from "./contracts.ts";
 import type { WebMCPToolName } from "./contracts.ts";
@@ -41,9 +42,9 @@ const createAudioStore = (project: Project, context: FakeAudioContext): {
 };
 
 const readNames = ["get_project", "get_sound_catalog", "get_history"];
-const runtimeNames = ["play", "pause", "stop", "seek"];
+const runtimeNames = ["play", "pause", "stop", "seek", "export_wav"];
 const futureAndDeferredNames = [
-  "export_wav", "duplicate_track",
+  "duplicate_track",
   "quantize_notes", "transpose_notes", "humanize_notes", "edit_drum_hits",
   "update_track", "apply_operations", "toggle_mute", "get_tracks",
 ];
@@ -87,13 +88,13 @@ describe("WebMCP tool contracts", () => {
     }
   });
 
-  test("publish exactly the 40 approved unique tool names", () => {
+  test("publish exactly the 41 approved unique tool names", () => {
     const names = TOOL_CONTRACTS.map(({ name }) => name);
-    expect(names).toHaveLength(40);
-    expect(new Set(names)).toHaveLength(40);
+    expect(names).toHaveLength(41);
+    expect(new Set(names)).toHaveLength(41);
     expect(names).toEqual([
       "get_project", "get_sound_catalog", "get_history",
-      "play", "pause", "stop", "seek",
+      "play", "pause", "stop", "seek", "export_wav",
       "rename_project", "set_tempo", "set_master_volume",
       "create_track", "rename_track", "set_track_instrument",
       "reorder_track", "set_track_mix", "set_track_mute",
@@ -166,6 +167,16 @@ describe("WebMCP tool contracts", () => {
         step: { type: "integer", minimum: 1, maximum: 16 },
       },
     });
+  });
+
+  test("publishes optional bounded WAV filenames without request IDs", () => {
+    expect(schemaOf("export_wav")).toMatchObject({
+      additionalProperties: false,
+      properties: {
+        file_name: { type: "string", minLength: 1, maxLength: 120 },
+      },
+    });
+    expect(schemaOf("export_wav").required ?? []).not.toContain("file_name");
   });
 
   test("omit future and deferred tool names", () => {
@@ -724,6 +735,81 @@ describe("playback controls", () => {
     context.state = "running";
     finishResume();
     await vi.waitFor(() => expect(engine.getSnapshot().status).toBe("stopped"));
+  });
+});
+
+describe("WAV export", () => {
+  test("downloads a frozen project under a sanitized optional filename without changing state", async () => {
+    const project = { ...audioProject(), name: "Original" };
+    const store = createStudioStore(project);
+    vi.stubGlobal("OfflineAudioContext", FakeOfflineAudioContext);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(new ArrayBuffer(8))));
+    vi.stubGlobal("URL", { createObjectURL: () => "blob:wav", revokeObjectURL: vi.fn() });
+    let downloadedName = "";
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
+      downloadedName = this.download;
+    });
+
+    const before = store.getState();
+    await expect(executeMutation(
+      store,
+      "export_wav" as WebMCPToolName,
+      { file_name: "  Custom Mix.WAV  " },
+    )).resolves.toEqual({ success: true, result: { file_name: "Custom Mix.wav" } });
+
+    expect(downloadedName).toBe("Custom Mix.wav");
+    expect(store.getState().project).toBe(before.project);
+    expect(store.getState()).toMatchObject({ revision: before.revision, history: before.history });
+  });
+
+  test("maps invalid names, cancellation, and render failures to public errors", async () => {
+    const store = createStudioStore(audioProject());
+    const cancelled = new AbortController();
+    cancelled.abort();
+    const tool = createWebMCPTools(store, () => "unused")
+      .find((candidate) => candidate.name === ("export_wav" as WebMCPToolName));
+
+    await expect(tool?.execute({ file_name: "   " }, { signal: new AbortController().signal }))
+      .resolves.toMatchObject({ success: false, error: { code: "INVALID_INPUT", field: "file_name" } });
+    await expect(tool?.execute({}, { signal: cancelled.signal }))
+      .resolves.toMatchObject({ success: false, error: { code: "EXECUTION_CANCELLED" } });
+
+    vi.stubGlobal("OfflineAudioContext", class extends FakeOfflineAudioContext {
+      override startRendering(): Promise<AudioBuffer> {
+        return Promise.reject(new Error("render stopped"));
+      }
+    });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(new ArrayBuffer(8))));
+    await expect(tool?.execute({}, { signal: new AbortController().signal }))
+      .resolves.toMatchObject({ success: false, error: { code: "EXPORT_FAILED", retryable: true } });
+  });
+
+  test("cancellation during rendering suppresses the browser download", async () => {
+    let resolveRender!: (buffer: AudioBuffer) => void;
+    vi.stubGlobal("OfflineAudioContext", class extends FakeOfflineAudioContext {
+      override startRendering(): Promise<AudioBuffer> {
+        return new Promise((resolve) => { resolveRender = resolve; });
+      }
+    });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(new ArrayBuffer(8))));
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+    const tool = createWebMCPTools(createStudioStore(audioProject()), () => "unused")
+      .find((candidate) => candidate.name === "export_wav")!;
+    const controller = new AbortController();
+
+    const result = tool.execute({}, { signal: controller.signal });
+    await vi.waitFor(() => expect(resolveRender).toBeTypeOf("function"));
+    controller.abort();
+    resolveRender({
+      duration: 1,
+      length: 1,
+      numberOfChannels: 2,
+      sampleRate: 44_100,
+      getChannelData: () => new Float32Array(1),
+    } as AudioBuffer);
+
+    await expect(result).resolves.toMatchObject({ success: false, error: { code: "EXECUTION_CANCELLED" } });
+    expect(click).not.toHaveBeenCalled();
   });
 });
 

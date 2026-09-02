@@ -1,6 +1,6 @@
 export type WebMCPToolName =
   | "get_project" | "get_sound_catalog" | "get_history"
-  | "play" | "pause" | "stop" | "seek"
+  | "play" | "pause" | "stop" | "seek" | "export_wav"
   | "rename_project" | "set_tempo" | "set_master_volume"
   | "create_track" | "rename_track" | "set_track_instrument"
   | "reorder_track" | "set_track_mix" | "set_track_mute"
@@ -322,6 +322,9 @@ export const TOOL_CONTRACTS: readonly ToolContract[] = [
     bar: integer(1, 256),
     step: integer(1, 16),
   }, ["bar"])),
+  mutation("export_wav", "Export WAV", "Renders a frozen project and downloads a WAV file.", object({
+    file_name: string(1, 120),
+  })),
 
   mutation("rename_project", "Rename project", "Renames the current project." + BATCH_ADVICE, directSchema({ name: NAME_80 }, ["name"])),
   mutation("set_tempo", "Set tempo", "Sets the project tempo in beats per minute." + BATCH_ADVICE, directSchema({ bpm: number(40, 240) }, ["bpm"])),

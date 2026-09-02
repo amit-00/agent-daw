@@ -55,8 +55,8 @@ export interface WavExportPlatform {
   readonly loadArrayBuffer: LoadArrayBuffer;
 }
 
-const loadArrayBuffer = async (url: string): Promise<ArrayBuffer> => {
-  const response = await fetch(url);
+const loadArrayBuffer = async (url: string, signal?: AbortSignal): Promise<ArrayBuffer> => {
+  const response = await fetch(url, signal === undefined ? undefined : { signal });
   if (!response.ok) {
     throw new Error(`Drum sample request failed with HTTP ${response.status}`);
   }
@@ -98,6 +98,7 @@ export function encodeWav(buffer: AudioBuffer): Blob {
 export function wavFileName(projectName: string): string {
   const safeName = projectName
     .trim()
+    .replace(/(?:\.wav)+$/i, "")
     .replace(/[\\/:*?"<>|\u0000-\u001f]/g, "-")
     .replace(/[. ]+$/g, "")
     .replace(/^[-. ]+$/g, "");
@@ -229,20 +230,32 @@ export async function renderProjectToWav(
   return encodeWav(rendered);
 }
 
-export async function downloadProjectWav(project: Project): Promise<void> {
+export interface DownloadWavOptions {
+  readonly fileName?: string;
+  readonly signal?: AbortSignal;
+}
+
+export async function downloadProjectWav(
+  project: Project,
+  options: DownloadWavOptions,
+): Promise<string> {
+  options.signal?.throwIfAborted();
   const blob = await renderProjectToWav(project, {
     createContext: (channels, length, sampleRate) =>
       new OfflineAudioContext(channels, length, sampleRate),
-    loadArrayBuffer,
+    loadArrayBuffer: (url) => loadArrayBuffer(url, options.signal),
   });
+  options.signal?.throwIfAborted();
+  const fileName = wavFileName(options.fileName ?? project.name);
   let url: string | undefined;
   let anchor: HTMLAnchorElement | undefined;
   try {
     url = URL.createObjectURL(blob);
     anchor = document.createElement("a");
     anchor.href = url;
-    anchor.download = wavFileName(project.name);
+    anchor.download = fileName;
     document.body.append(anchor);
+    options.signal?.throwIfAborted();
     anchor.click();
   } catch (cause) {
     throw new WavExportError(
@@ -254,4 +267,5 @@ export async function downloadProjectWav(project: Project): Promise<void> {
     anchor?.remove();
     if (url !== undefined) URL.revokeObjectURL(url);
   }
+  return fileName;
 }

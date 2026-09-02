@@ -58,6 +58,8 @@ test("encodeWav rejects buffers outside the fixed stereo 44.1 kHz format", () =>
 
 test("wavFileName keeps a readable safe name and has a fallback", () => {
   assert.equal(wavFileName("  Demo: Beat/One.  "), "Demo- Beat-One.wav");
+  assert.equal(wavFileName("  Demo Mix.WAV  "), "Demo Mix.wav");
+  assert.equal(wavFileName("Demo.wav.wav"), "Demo.wav");
   assert.equal(wavFileName(' \\ / : * ? " < > | . '), "agentdaw.wav");
 });
 
