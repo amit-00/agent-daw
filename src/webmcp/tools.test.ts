@@ -720,6 +720,27 @@ describe("project and track mutations", () => {
     expect(store.getState().project.tracks.filter(({ id }) => id === "created-once")).toHaveLength(1);
   });
 
+  test("replays a successful creation before validating action fields or unknown keys", async () => {
+    const store = createStudioStore(DEMO_PROJECT);
+    const createId = vi.fn(() => "retained-track");
+    const first = await executeMutation(store, "create_track", {
+      request_id: "retained", kind: "synth", instrument_id: "synth.pad",
+    }, createId);
+
+    for (const retry of [
+      { request_id: "retained" },
+      { request_id: "retained", kind: 42, instrument_id: [] },
+      { request_id: "retained", kind: "drum", instrument_id: "kit.basic", extra: true },
+    ]) {
+      await expect(executeMutation(store, "create_track", retry, createId)).resolves.toMatchObject({
+        success: true, result: { track_id: "retained-track", changed: true, deduplicated: true },
+      });
+    }
+    expect(first).toMatchObject({ success: true, result: { track_id: "retained-track" } });
+    expect(createId).toHaveBeenCalledOnce();
+    expect(store.getState().project.tracks.filter(({ id }) => id === "retained-track")).toHaveLength(1);
+  });
+
   test("rejects stale revisions before mutation construction for every project and track tool", async () => {
     const cases = [
       ["rename_project", { name: "New" }], ["set_tempo", { bpm: 126 }],
@@ -768,6 +789,13 @@ describe("project and track mutations", () => {
     });
     expect(reorder).toMatchObject({ success: false, error: { code: "OUT_OF_RANGE", field: "position" } });
     expect(JSON.stringify(reorder)).not.toContain("to_index");
+    const masterVolume = await executeMutation(store, "set_master_volume", {
+      request_id: "bad-master-volume", volume_db: -61,
+    });
+    expect(masterVolume).toMatchObject({
+      success: false, error: { code: "OUT_OF_RANGE", field: "volume_db" },
+    });
+    expect(JSON.stringify(masterVolume)).not.toContain("master_volume_db");
     const mix = await executeMutation(store, "set_track_mix", { request_id: "empty", track_id: "bass" });
     expect(mix).toMatchObject({ success: false, error: { code: "INVALID_INPUT", field: "$" } });
     expect(JSON.stringify(mix)).not.toContain("Low Orbit");

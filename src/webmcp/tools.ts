@@ -163,7 +163,11 @@ const mapKnownError = (toolName: WebMCPToolName, error: unknown): ToolFailure =>
     return failure(error.code, error.message, false, error.field, error.currentRevision);
   }
   if (error instanceof ProjectValidationError) {
-    const field = toolName === "reorder_track" && error.field === "to_index" ? "position" : error.field;
+    const field = toolName === "reorder_track" && error.field === "to_index"
+      ? "position"
+      : toolName === "set_master_volume" && error.field === "master_volume_db"
+        ? "volume_db"
+        : error.field;
     const message = field === error.field ? error.message : error.message.replace(error.field, field);
     return failure(error.code, message, false, field);
   }
@@ -561,6 +565,28 @@ const mutationResult = (
   ...extra,
 });
 
+const defineMutationTool = <T>(
+  toolContract: ToolContract,
+  store: Pick<StoreApi<StudioState>, "getState">,
+  parse: (input: Readonly<Record<string, unknown>>) => T,
+  run: (input: T, signal: AbortSignal) => unknown | Promise<unknown>,
+  extras: (result: DispatchResult) => Readonly<Record<string, unknown>> = () => ({}),
+): WebMCPTool => {
+  const schemaProperties = expectObject(toolContract.inputSchema.properties, "inputSchema.properties");
+  const allowedKeys = Object.keys(schemaProperties);
+  return {
+    ...toolContract,
+    execute: (input, { signal }) => executeSafely(toolContract.name, signal, () => {
+      const object = expectObject(input, "$");
+      const requestId = expectString(object.request_id, "request_id", 1, 128);
+      const replayed = store.getState().replayDispatch(`webmcp:${toolContract.name}:${requestId}`);
+      if (replayed !== null) return mutationResult(store.getState(), replayed, extras(replayed));
+      expectAllowedKeys(object, allowedKeys, "$");
+      return run(parse(object), signal);
+    }),
+  };
+};
+
 const runDirectMutation = (
   store: Pick<StoreApi<StudioState>, "getState">,
   toolName: WebMCPToolName,
@@ -572,8 +598,6 @@ const runDirectMutation = (
   signal.throwIfAborted();
   const commandId = `webmcp:${toolName}:${input.requestId}`;
   let state = store.getState();
-  const replayed = state.replayDispatch(commandId);
-  if (replayed !== null) return mutationResult(store.getState(), replayed, extras(replayed));
   if (input.baseRevision !== undefined && input.baseRevision !== state.revision) {
     toolError("REVISION_CONFLICT", "base_revision", "The project has changed; inspect it and retry.", state.revision);
   }
@@ -648,26 +672,30 @@ export function createWebMCPTools(
         input.limit,
       );
     }),
-    defineWebMCPTool(
+    defineMutationTool(
       contract("rename_project"),
+      store,
       (input) => ({ ...parseMutationMetadata(input), name: expectString(input.name, "name").trim() }),
       (input, signal) => projectUpdate(store, "rename_project", input, signal, { name: input.name }),
     ),
-    defineWebMCPTool(
+    defineMutationTool(
       contract("set_tempo"),
+      store,
       (input) => ({ ...parseMutationMetadata(input), bpm: expectFiniteNumber(input.bpm, "bpm") }),
       (input, signal) => projectUpdate(store, "set_tempo", input, signal, { bpm: input.bpm }),
     ),
-    defineWebMCPTool(
+    defineMutationTool(
       contract("set_master_volume"),
+      store,
       (input) => ({
         ...parseMutationMetadata(input), volumeDb: expectFiniteNumber(input.volume_db, "volume_db"),
       }),
       (input, signal) => projectUpdate(store, "set_master_volume", input, signal,
         { masterVolumeDb: input.volumeDb }),
     ),
-    defineWebMCPTool(
+    defineMutationTool(
       contract("create_track"),
+      store,
       (input) => ({
         ...parseMutationMetadata(input),
         kind: expectEnum(input.kind, "kind", ["drum", "synth"] as const),
@@ -686,26 +714,31 @@ export function createWebMCPTools(
           muted: false, soloed: false, color: TRACK_COLOR_WHEEL[colorIndex]!,
         } }];
       }, (result) => ({ track_id: result.changes.created.trackIds[0] })),
+      (result) => ({ track_id: result.changes.created.trackIds[0] }),
     ),
-    defineWebMCPTool(
+    defineMutationTool(
       contract("rename_track"),
+      store,
       (input) => ({ ...parseTrackId(input), name: expectString(input.name, "name").trim() }),
       (input, signal) => trackUpdate(store, "rename_track", input, signal, { name: input.name }),
     ),
-    defineWebMCPTool(
+    defineMutationTool(
       contract("set_track_instrument"),
+      store,
       (input) => ({ ...parseTrackId(input), instrumentId: expectString(input.instrument_id, "instrument_id") }),
       (input, signal) => trackUpdate(store, "set_track_instrument", input, signal,
         { instrumentId: input.instrumentId }),
     ),
-    defineWebMCPTool(
+    defineMutationTool(
       contract("reorder_track"),
+      store,
       (input) => ({ ...parseTrackId(input), position: expectInteger(input.position, "position", 1) }),
       (input, signal) => runDirectMutation(store, "reorder_track", input, signal,
         () => [{ type: "track.reorder", trackId: input.trackId, toIndex: input.position - 1 }]),
     ),
-    defineWebMCPTool(
+    defineMutationTool(
       contract("set_track_mix"),
+      store,
       (input) => {
         const parsed = {
           ...parseTrackId(input),
@@ -718,18 +751,21 @@ export function createWebMCPTools(
       (input, signal) => trackUpdate(store, "set_track_mix", input, signal,
         { volumeDb: input.volumeDb, pan: input.pan }),
     ),
-    defineWebMCPTool(
+    defineMutationTool(
       contract("set_track_mute"),
+      store,
       (input) => ({ ...parseTrackId(input), muted: expectBoolean(input.muted, "muted") }),
       (input, signal) => trackUpdate(store, "set_track_mute", input, signal, { muted: input.muted }),
     ),
-    defineWebMCPTool(
+    defineMutationTool(
       contract("set_track_solo"),
+      store,
       (input) => ({ ...parseTrackId(input), soloed: expectBoolean(input.soloed, "soloed") }),
       (input, signal) => trackUpdate(store, "set_track_solo", input, signal, { soloed: input.soloed }),
     ),
-    defineWebMCPTool(
+    defineMutationTool(
       contract("delete_track"),
+      store,
       (input) => ({
         ...parseTrackId(input),
         deleteClips: input.delete_clips === undefined ? false : expectBoolean(input.delete_clips, "delete_clips"),
