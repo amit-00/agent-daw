@@ -297,7 +297,7 @@ test("load accepts upper persisted numeric boundaries", async () => {
     bpm: 240,
     tracks: [{ ...basicDrumTrack(), id: "lead", kind: "synth", instrumentId: "synth.lead", volumeDb: 6, pan: 1 }],
     patterns: [{ id: "melody", name: "Melody", kind: "synth", lengthBars: 4,
-      events: [{ id: "low", midiNote: 24, startStep: 0, lengthSteps: 1 }, { id: "high", midiNote: 96, startStep: 63, lengthSteps: 1 }] }],
+      events: [{ id: "low", midiNote: 24, startStep: 0, lengthSteps: 1 }, { id: "high", midiNote: 96, startStep: 63, lengthSteps: 1 }, { id: "full", midiNote: 60, startStep: 0, lengthSteps: 64 }] }],
     arrangement: [{ id: "melody-clip", patternId: "melody", trackId: "lead", startBar: 0, repeatCount: 64 }],
   };
   await seedRawRecord(indexedDB, { project, updatedAt: 123 });
