@@ -585,6 +585,10 @@ const getProject = (
         caps: PROJECT_CAPS,
         history_cursor: state.historyCursor,
         history_count: state.history.length,
+        persistence: {
+          status: state.persistence.status,
+          ...(state.persistence.updatedAt === null ? {} : { updated_at: state.persistence.updatedAt }),
+        },
         counts: {
           tracks: project.tracks.length,
           patterns: project.patterns.length,

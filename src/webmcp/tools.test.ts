@@ -289,6 +289,7 @@ describe("inspection tools", () => {
           caps: PROJECT_CAPS,
           history_cursor: -1,
           history_count: 0,
+          persistence: { status: "unsaved" },
           counts: { tracks: 5, patterns: 6, events: 26, arrangement_clips: 8 },
         }],
       },
@@ -296,6 +297,31 @@ describe("inspection tools", () => {
     expect(JSON.stringify(response)).not.toContain('"tracks":[');
     expect(JSON.stringify(response)).not.toContain('"patterns":[');
     expect(JSON.stringify(response)).not.toContain('"arrangement":[');
+  });
+
+  test("get_project overview exposes public persistence state without internal tokens or errors", async () => {
+    const saved = createStudioStoreBase(
+      DEMO_PROJECT,
+      () => null,
+      { status: "saved", updatedAt: 1_700_000_000_000, errorMessage: null },
+    );
+    const memoryOnly = createStudioStoreBase(
+      DEMO_PROJECT,
+      () => null,
+      { status: "memory-only", updatedAt: null, errorMessage: "private storage detail" },
+    );
+
+    await expect(execute(saved, "get_project", { view: "overview" })).resolves.toMatchObject({
+      success: true,
+      result: { items: [{ persistence: { status: "saved", updated_at: 1_700_000_000_000 } }] },
+    });
+    const memoryResponse = await execute(memoryOnly, "get_project", { view: "overview" });
+    expect(memoryResponse).toMatchObject({
+      success: true,
+      result: { items: [{ persistence: { status: "memory-only" } }] },
+    });
+    expect(JSON.stringify(memoryResponse)).not.toContain("latestSaveToken");
+    expect(JSON.stringify(memoryResponse)).not.toContain("private storage detail");
   });
 
   test("get_project tracks preserves project order while filtering and paginating", async () => {
@@ -806,7 +832,7 @@ describe("WAV export", () => {
       numberOfChannels: 2,
       sampleRate: 44_100,
       getChannelData: () => new Float32Array(1),
-    } as AudioBuffer);
+    } as unknown as AudioBuffer);
 
     await expect(result).resolves.toMatchObject({ success: false, error: { code: "EXECUTION_CANCELLED" } });
     expect(click).not.toHaveBeenCalled();

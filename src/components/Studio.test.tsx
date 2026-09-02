@@ -728,7 +728,7 @@ describe("Studio", () => {
       numberOfChannels: 2,
       sampleRate: 44_100,
       getChannelData: () => new Float32Array(1),
-    } as AudioBuffer);
+    } as unknown as AudioBuffer);
     await expect(result).resolves.toMatchObject({ success: true });
   });
 

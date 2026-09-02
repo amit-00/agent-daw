@@ -21,6 +21,34 @@
     "expectedCall": { "name": "get_history", "arguments": { "view": "list", "limit": 20 } }
   },
   {
+    "id": "play-from-position",
+    "messages": [
+      { "role": "user", "content": "Play the song from bar 3, step 5." }
+    ],
+    "expectedCall": { "name": "play", "arguments": { "start_bar": 3, "start_step": 5 } }
+  },
+  {
+    "id": "pause-playback",
+    "messages": [
+      { "role": "user", "content": "Pause playback where it is." }
+    ],
+    "expectedCall": { "name": "pause", "arguments": {} }
+  },
+  {
+    "id": "seek-without-playing",
+    "messages": [
+      { "role": "user", "content": "Move the playhead to bar 7, step 9 without starting playback." }
+    ],
+    "expectedCall": { "name": "seek", "arguments": { "bar": 7, "step": 9 } }
+  },
+  {
+    "id": "export-custom-wav",
+    "messages": [
+      { "role": "user", "content": "Export the current song as a WAV named Night Drive.wav." }
+    ],
+    "expectedCall": { "name": "export_wav", "arguments": { "file_name": "Night Drive.wav" } }
+  },
+  {
     "id": "rename-bass-track",
     "messages": [
       { "role": "user", "content": "Rename the track with ID bass to Sub Orbit. Use request ID eval-rename-bass." }

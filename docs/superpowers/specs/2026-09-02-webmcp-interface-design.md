@@ -10,7 +10,7 @@
 4. Manual UI edits and WebMCP edits share canonical operations, validation rules, project state, history, undo, redo, and restore behavior.
 5. A successful WebMCP edit updates the visible studio immediately and creates one Agent-attributed activity entry.
 6. Retries are idempotent, stale batches cannot overwrite a newer revision, and failures never partially commit.
-7. Playback and export tools join the registry only when their backing services are usable.
+7. Playback and export use the same backing services as the visible Transport and are registered only while the editor session is usable.
 
 ### 1.2 Non-goals
 
@@ -117,7 +117,7 @@ WebMCPBridge feature-detects document.modelContext after the studio store exists
 
 AgentDAW uses imperative tools because project editing is client-side application logic rather than form submission. Each tool definition supplies a snake_case name, user-facing title, concise intent-based description, JSON Schema input, current annotations, and an execution callback.
 
-No exposedTo origins are configured. The browser's default same-origin and built-in-agent scope applies. Tool execution receives an AbortSignal. Synchronous mutations check it before dispatch; future asynchronous playback preparation and export pass it to their underlying work.
+No exposedTo origins are configured. The browser's default same-origin and built-in-agent scope applies. Tool execution receives an AbortSignal. Synchronous mutations check it before dispatch; asynchronous playback preparation and export pass it to their underlying work.
 
 The implementation targets the current draft API documented at:
 
@@ -227,7 +227,7 @@ Manual and WebMCP mutation paths converge before ProjectService. The service inc
 
 **Responsibility:** Connect stable tool definitions to the live store and manage their browser lifecycle.
 
-The bridge registers tools after mount and unregisters them with one AbortController. It reports unsupported, registering, ready, or failed state locally. It omits playback and export definitions until their services are usable.
+The bridge registers 41 tools after persistence bootstrap and editor mount, then unregisters them with one AbortController. It reports unsupported, registering, ready, or failed state locally. Playback and export definitions call the same store and exporter services as the visible Transport.
 
 ## 7) Interface data model
 
@@ -372,6 +372,8 @@ get_project views:
 
 Pagination defaults to 20 items and permits at most 100. Cursors are opaque and tied to the project revision; using one after the project changes returns INVALID_CURSOR.
 
+The overview persistence projection contains `status` (`unsaved`, `saving`, `saved`, `memory-only`, or `failed`) and includes the epoch-millisecond `updated_at` only when a saved timestamp exists. Internal save tokens and raw storage errors are omitted.
+
 get_history list returns entry ID, source, tool name when present, label, timestamp, current or undone state, and ChangeSummary. The entry view returns normalized operations plus before/after values only for affected entities, never complete project snapshots.
 
 ### 10.3 Project tools
@@ -513,11 +515,11 @@ Batch errors add a zero-based change_index. Revision conflicts add current_revis
 | Product limits | CAPACITY_EXCEEDED, BATCH_TOO_SMALL, BATCH_TOO_LARGE |
 | Dependencies | DEPENDENCIES_EXIST, FORWARD_REFERENCE, DUPLICATE_REFERENCE |
 | History | NOTHING_TO_UNDO, NOTHING_TO_REDO, HISTORY_ENTRY_NOT_FOUND |
-| Runtime | AUDIO_BLOCKED, EXPORT_FAILED, EXECUTION_CANCELLED, INTERNAL_ERROR |
+| Runtime | AUDIO_BLOCKED, AUDIO_UNAVAILABLE, NOTHING_TO_PLAY, EXPORT_FAILED, EXECUTION_CANCELLED, INTERNAL_ERROR |
 
-### 10.12 Future registered tools
+### 10.12 Runtime tools
 
-These contracts are reserved but remain unregistered until backing services are connected:
+These tools are active and delegate to the same runtime services as the visible Transport:
 
 | Tool | Input | Result |
 |---|---|---|
@@ -527,9 +529,9 @@ These contracts are reserved but remain unregistered until backing services are 
 | seek | bar and optional step | Moves to a one-based musical position. |
 | export_wav | optional file_name | Renders a frozen project and initiates a WAV download. |
 
-Transport and export do not create project history or increment project revision. play may return AUDIO_BLOCKED until a manual browser gesture unlocks audio. Export may require browser-mediated user interaction before download.
+Transport and export do not create project history or increment project revision. `play` may return AUDIO_BLOCKED until a manual browser gesture unlocks audio. `export_wav` renders a cloned project, sanitizes its optional filename, appends `.wav` exactly once, and returns the actual filename. Cancellation suppresses a late download; rendering already underway may still finish because OfflineAudioContext has no abort operation. WebMCP export does not set the Transport button's local busy or error state.
 
-Autosave has no direct tool. It follows successful commits automatically, and its status appears in the project overview once integrated.
+Autosave has no direct tool. It follows successful project commits automatically, and its status appears in the project overview.
 
 ### 10.13 Deferred and excluded candidates
 
@@ -598,7 +600,7 @@ Track locally:
 - Tool name, success or error code, and elapsed time.
 - Revision conflicts and rejected batch change indexes.
 - Batch size and validation failure category.
-- Future audio-blocked and export-failure outcomes.
+- Audio-blocked and export-failure outcomes.
 
 Diagnostics must not store complete tool inputs, note arrays, project snapshots, or user-authored text.
 
@@ -628,7 +630,7 @@ There is no server health endpoint. The studio exposes unsupported, registering,
 6. Add UI synchronization and registration-status integration.
 7. Add deterministic contract, equivalence, registration, and UI integration tests.
 8. Add tool-selection eval fixtures and run browser acceptance.
-9. Register playback and export only in later integrations that satisfy their contracts.
+9. Connect playback and export to their production services, then add them to discovery.
 
 ### 14.2 Compatibility
 
@@ -694,15 +696,15 @@ The bridge is an additive client component. Removing its mount disables WebMCP r
 
 ### Decision: Register only usable capabilities
 
-**Context:** Playback and export contracts are planned before their UI integrations are complete.
+**Context:** Tool discovery must not advertise runtime capabilities before their production services are connected.
 
-**Decision:** Document their stable contracts but omit them from the registry until usable.
+**Decision:** Omit a runtime capability from the registry until its production service is usable; register it once that boundary is connected.
 
 **Alternatives considered:**
 
 - Register placeholders returning unavailable — makes discovery advertise actions that cannot succeed.
 
-**Trade-offs:** Agents must rely on current discovery rather than assume every documented future tool is present.
+**Trade-offs:** Agents must rely on current discovery rather than assume every documented future tool is present. Playback and export now satisfy this criterion and are registered.
 
 ### Decision: One-based public musical positions
 
@@ -726,7 +728,7 @@ The bridge is an additive client component. Removing its mount disables WebMCP r
 - Use table-driven contract tests for every direct mutation: schema rejection, translation, successful execution, domain errors, history attribution, undo, and stable result shape.
 - Prove every direct mutation produces the same Project result as its equivalent public change through apply_project_changes.
 - Test local refs, generated-ID maps, successive-state validation, forward and duplicate refs, size bounds, revision conflicts, idempotency, and atomic rollback.
-- Test registration against a small fake modelContext, including unsupported browsers, exact names, cleanup, registration rejection, and omitted future tools.
+- Test registration against a small fake modelContext, including unsupported browsers, exact names, cleanup, registration rejection, and omitted unsupported tools.
 - Invoke a registered mutation in a UI integration test and observe the visible project and Agent activity update.
 - Run typecheck, lint, focused tests, the full test suite, and build before completion.
 
@@ -754,7 +756,7 @@ The corpus is runnable by an external probabilistic evaluator but adds no model 
 6. Make a manual edit between inspection and a guarded batch and observe REVISION_CONFLICT.
 7. Undo, redo, and restore through WebMCP and compare with manual controls.
 8. Confirm unsupported WebMCP leaves manual editing fully functional.
-9. When integrated, confirm blocked audio and export failures are actionable and non-mutating.
+9. Confirm blocked audio and export failures are actionable and non-mutating.
 
 ## 17) Implementation checklist
 
@@ -778,7 +780,7 @@ The corpus is runnable by an external probabilistic evaluator but adds no model 
 - [ ] Add minimal document.modelContext typing and registration lifecycle.
 - [ ] Mount WebMCPBridge with the existing live store.
 - [ ] Expose registration status without affecting manual editing.
-- [ ] Omit unavailable playback and export tools.
+- [x] Register playback and export through their production services.
 
 ### Verification
 
@@ -799,5 +801,5 @@ The corpus is runnable by an external probabilistic evaluator but adds no model 
 - Read tools provide compact paginated views rather than complete snapshots.
 - Public bars and steps are one-based; internal data remains zero-based.
 - Tool registration advertises only capabilities that currently work.
-- Playback and export contracts are reserved for later usable integrations.
+- Playback and export are active through the shared audio store and WAV exporter.
 - No backend, cross-origin exposure, polyfill, model SDK, or new dependency is added.
