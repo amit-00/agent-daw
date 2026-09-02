@@ -31,7 +31,10 @@ const fail = (code: ProjectValidationCode, field: string, message: string): neve
   throw new ProjectValidationError(code, field, message);
 };
 
-const hasChanges = (changes: object): boolean => Object.keys(changes).length > 0;
+const hasChanges = (changes: object): boolean => Object.values(changes).some((value) => value !== undefined);
+
+const definedChanges = <T extends object>(changes: T): Partial<T> =>
+  Object.fromEntries(Object.entries(changes).filter(([, value]) => value !== undefined)) as Partial<T>;
 
 const unique = (values: readonly string[]): boolean => new Set(values).size === values.length;
 
@@ -248,7 +251,7 @@ export function validateOperation(project: Project, operation: Operation, soundC
     case "track.update": {
       const track = findTrack(project, operation.trackId);
       if (!hasChanges(operation.changes)) fail("OUT_OF_RANGE", "changes", "At least one track field is required.");
-      const candidate: Track = { ...track, ...operation.changes };
+      const candidate: Track = { ...track, ...definedChanges(operation.changes) };
       validateName(candidate.name, "name", 40);
       validateTrackInstrument(candidate, soundCatalog);
       validateFiniteRange(candidate.volumeDb, "volume_db", -60, 6);
@@ -281,7 +284,7 @@ export function validateOperation(project: Project, operation: Operation, soundC
     case "pattern.update": {
       const pattern = findPattern(project, operation.patternId);
       if (!hasChanges(operation.changes)) fail("OUT_OF_RANGE", "changes", "At least one pattern field is required.");
-      const candidate = { ...pattern, ...operation.changes } as Pattern;
+      const candidate = { ...pattern, ...definedChanges(operation.changes) } as Pattern;
       validatePatternLengthCandidate(project, candidate, soundCatalog);
       break;
     }
@@ -296,7 +299,7 @@ export function validateOperation(project: Project, operation: Operation, soundC
     case "arrangement.update": {
       const clip = findClip(project, operation.clipId);
       if (!hasChanges(operation.changes)) fail("OUT_OF_RANGE", "changes", "At least one clip field is required.");
-      validatePlacement(project, { ...clip, ...operation.changes }, soundCatalog, clip.id);
+      validatePlacement(project, { ...clip, ...definedChanges(operation.changes) }, soundCatalog, clip.id);
       break;
     }
     case "arrangement.delete":
@@ -324,7 +327,7 @@ export function validateOperation(project: Project, operation: Operation, soundC
         if (updates.has(update.hitId)) fail("OUT_OF_RANGE", `updates[${index}].hit_id`, "Hit ids must be unique.");
         if (!hasChanges(update.changes)) fail("OUT_OF_RANGE", `updates[${index}].changes`, "Each hit update needs a change.");
         if (!pattern.events.some((hit) => hit.id === update.hitId)) fail("HIT_NOT_FOUND", `updates[${index}].hit_id`, `Hit ${update.hitId} was not found.`);
-        updates.set(update.hitId, update.changes);
+        updates.set(update.hitId, definedChanges(update.changes));
       }
       const candidate = { ...pattern, events: pattern.events.map((hit) => ({ ...hit, ...updates.get(hit.id) })) };
       validateDrumResult(project, candidate, soundCatalog);
@@ -360,7 +363,7 @@ export function validateOperation(project: Project, operation: Operation, soundC
         if (updates.has(update.noteId)) fail("OUT_OF_RANGE", `updates[${index}].note_id`, "Note ids must be unique.");
         if (!hasChanges(update.changes)) fail("OUT_OF_RANGE", `updates[${index}].changes`, "Each note update needs a change.");
         if (!pattern.events.some((note) => note.id === update.noteId)) fail("NOTE_NOT_FOUND", `updates[${index}].note_id`, `Note ${update.noteId} was not found.`);
-        updates.set(update.noteId, update.changes);
+        updates.set(update.noteId, definedChanges(update.changes));
       }
       const candidate = { ...pattern, events: pattern.events.map((note) => ({ ...note, ...updates.get(note.id) })) };
       validateSynthPattern(candidate);
