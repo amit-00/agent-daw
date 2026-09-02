@@ -1288,6 +1288,143 @@ test("a successful command ID is retried after its 100-outcome cache entry expir
   assert.equal(service.getState().project.name, "First");
 });
 
+test("project revision changes once for changed dispatches and not for no-op retries", () => {
+  const service = createTestService(blankProject());
+
+  assert.equal(service.getState().revision, 0);
+  const created = service.dispatch(createBassTrackCommand(id(700)));
+  const batch = service.dispatch({
+    id: id(701), source: "manual", label: "Rename and mix", kind: "batch",
+    operations: [
+      { type: "project.update", changes: { name: "Bass project" } },
+      { type: "project.update", changes: { masterVolumeDb: -3 } },
+    ],
+  });
+  const noOp = service.dispatch({
+    id: id(702), source: "manual", label: "Keep project", kind: "operation",
+    operation: { type: "project.update", changes: {} },
+  });
+  const retry = service.dispatch(createBassTrackCommand(id(700)));
+
+  assert.equal(created.changed, true);
+  assert.equal(batch.changed, true);
+  assert.equal(noOp.changed, false);
+  assert.equal(retry.deduplicated, true);
+  assert.equal(service.getState().revision, 2);
+});
+
+test("history controls and changed restores each increment revision once", () => {
+  const service = createTestService(blankProject());
+  const created = service.dispatch(createBassTrackCommand(id(710)));
+  if (created.historyEntry === undefined) assert.fail("expected history entry");
+
+  const undone = service.controlHistory({ id: id(711), kind: "undo" });
+  const redone = service.controlHistory({ id: id(712), kind: "redo" });
+  service.dispatch(updateProjectNameCommand(id(713), "Changed"));
+  const restored = service.restore({
+    id: id(714), source: "manual", label: "Restore bass", targetEntryId: created.historyEntry.id,
+  });
+
+  assert.equal(undone.ok, true);
+  assert.equal(redone.ok, true);
+  if (undone.ok) assert.deepEqual(undone.changes.deleted.trackIds, [id(20)]);
+  if (redone.ok) assert.deepEqual(redone.changes.created.trackIds, [id(20)]);
+  assert.equal(restored.changed, true);
+  assert.equal(service.getState().revision, 5);
+});
+
+test("unavailable controls and no-op or deduplicated restores leave revision unchanged", () => {
+  const service = createTestService(blankProject());
+  const unavailableUndo = service.controlHistory({ id: id(720), kind: "undo" });
+  const created = service.dispatch(createBassTrackCommand(id(721)));
+  if (created.historyEntry === undefined) assert.fail("expected history entry");
+  const unavailableRedo = service.controlHistory({ id: id(722), kind: "redo" });
+  const command = { id: id(723), source: "manual" as const, label: "Keep bass", targetEntryId: created.historyEntry.id };
+  const noOp = service.restore(command);
+  const retry = service.restore(command);
+
+  assert.equal(unavailableUndo.ok, false);
+  assert.equal(unavailableRedo.ok, false);
+  assert.equal(noOp.changed, false);
+  assert.equal(retry.deduplicated, true);
+  assert.equal(service.getState().revision, 1);
+});
+
+test("successful history controls deduplicate and failed control IDs remain retryable", () => {
+  const service = createTestService(blankProject());
+  const unavailable = service.controlHistory({ id: id(730), kind: "undo" });
+  service.dispatch(createBassTrackCommand(id(731)));
+  const first = service.controlHistory({ id: id(730), kind: "undo" });
+  const retry = service.controlHistory({ id: id(730), kind: "undo" });
+
+  assert.equal(unavailable.ok, false);
+  assert.equal(first.ok, true);
+  assert.equal(retry.ok, true);
+  if (retry.ok) assert.equal(retry.deduplicated, true);
+  assert.equal(service.getState().historyCursor, -1);
+  assert.equal(service.getState().revision, 2);
+});
+
+test("agent tool names are retained in serializable dispatch and restore history", () => {
+  const service = createTestService(blankProject());
+  const created = service.dispatch({ ...createBassTrackCommand(id(740)), source: "agent", toolName: "create_track" });
+  if (created.historyEntry === undefined) assert.fail("expected history entry");
+  service.dispatch(updateProjectNameCommand(id(741), "Changed"));
+  service.restore({
+    id: id(742), source: "agent", label: "Restore bass", toolName: "restore_history",
+    targetEntryId: created.historyEntry.id,
+  });
+
+  const history = service.getState().history;
+  assert.equal(history[0]?.toolName, "create_track");
+  assert.equal(history[2]?.toolName, "restore_history");
+  assert.deepEqual(history, JSON.parse(JSON.stringify(history)));
+});
+
+test("replay APIs return retained success outcomes against the current project", () => {
+  const service = createTestService(blankProject());
+  const created = service.dispatch(createBassTrackCommand(id(750)));
+  if (created.historyEntry === undefined) assert.fail("expected history entry");
+  service.dispatch(updateProjectNameCommand(id(751), "Changed"));
+  service.restore({ id: id(752), source: "manual", label: "Restore bass", targetEntryId: created.historyEntry.id });
+  service.dispatch(updateProjectNameCommand(id(753), "Current"));
+  const undo = service.controlHistory({ id: id(754), kind: "undo" });
+  const currentProject = service.getState().project;
+  const dispatchReplay = service.replayDispatch(id(750));
+  const restoreReplay = service.replayDispatch(id(752));
+  const historyReplay = service.replayHistoryControl(id(754));
+
+  assert.equal(undo.ok, true);
+  assert.equal(dispatchReplay?.deduplicated, true);
+  assert.equal(restoreReplay?.deduplicated, true);
+  assert.equal(historyReplay?.ok, true);
+  if (historyReplay?.ok) assert.equal(historyReplay.deduplicated, true);
+  assert.equal(dispatchReplay?.project, currentProject);
+  assert.equal(restoreReplay?.project, currentProject);
+  assert.equal(historyReplay?.project, currentProject);
+});
+
+test("successful dispatch and history-control replay caches are bounded", () => {
+  const service = createTestService(blankProject());
+  const firstDispatchId = id(760);
+  assert.equal(service.dispatch(updateProjectNameCommand(firstDispatchId, "Project 0")).ok, true);
+  for (let index = 1; index <= 100; index += 1) {
+    assert.equal(service.dispatch(updateProjectNameCommand(id(760 + index), `Project ${index}`)).ok, true);
+  }
+
+  service.dispatch(createBassTrackCommand(id(870)));
+  const firstControlId = id(871);
+  for (let index = 0; index <= 100; index += 1) {
+    const result = service.controlHistory({ id: id(871 + index), kind: index % 2 === 0 ? "undo" : "redo" });
+    assert.equal(result.ok, true);
+  }
+
+  assert.equal(service.replayDispatch(firstDispatchId), null);
+  assert.equal(service.replayDispatch(id(860))?.deduplicated, true);
+  assert.equal(service.replayHistoryControl(firstControlId), null);
+  assert.equal(service.replayHistoryControl(id(971))?.ok, true);
+});
+
 test("pattern.create reports IDs for its embedded events in source order", () => {
   const project = projectWithBassAndDrums();
   const drumResult = reduceOperation(project, {
