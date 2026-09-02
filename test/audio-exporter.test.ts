@@ -32,13 +32,27 @@ test("encodeWav writes a stereo 16-bit RIFF file with clamped samples", async ()
   assert.equal(String.fromCharCode(...new Uint8Array(bytes.buffer, 0, 4)), "RIFF");
   assert.equal(bytes.getUint32(4, true), 48);
   assert.equal(String.fromCharCode(...new Uint8Array(bytes.buffer, 8, 4)), "WAVE");
+  assert.equal(bytes.getUint16(20, true), 1);
   assert.equal(bytes.getUint16(22, true), 2);
   assert.equal(bytes.getUint32(24, true), 44_100);
+  assert.equal(bytes.getUint32(28, true), 176_400);
+  assert.equal(bytes.getUint16(32, true), 4);
   assert.equal(bytes.getUint16(34, true), 16);
   assert.equal(bytes.getUint32(40, true), 12);
   assert.deepEqual(
     [44, 46, 48, 50, 52, 54].map((offset) => bytes.getInt16(offset, true)),
     [-32_768, 32_767, -16_384, 16_384, 0, 0],
+  );
+});
+
+test("encodeWav rejects buffers outside the fixed stereo 44.1 kHz format", () => {
+  assert.throws(
+    () => encodeWav({ ...audioBuffer([0], [0]), numberOfChannels: 1 } as AudioBuffer),
+    RangeError,
+  );
+  assert.throws(
+    () => encodeWav({ ...audioBuffer([0], [0]), sampleRate: 48_000 } as AudioBuffer),
+    RangeError,
   );
 });
 
@@ -48,8 +62,24 @@ test("wavFileName keeps a readable safe name and has a fallback", () => {
 });
 
 test("renderProjectToWav schedules the full shared mixer graph with a release tail", async () => {
+  const project = audioProject();
   let context: FakeOfflineAudioContext | undefined;
-  const blob = await renderProjectToWav(audioProject(), {
+  const blob = await renderProjectToWav({
+    ...project,
+    masterVolumeDb: -3,
+    tracks: [
+      { ...project.tracks[0]!, pan: -0.5 },
+      { ...project.tracks[1]!, pan: 0.5, soloed: true },
+      {
+        ...project.tracks[1]!,
+        id: "00000000-0000-4000-8000-000000000011",
+        name: "Muted solo",
+        pan: 0.25,
+        muted: true,
+        soloed: true,
+      },
+    ],
+  }, {
     createContext: (channels, length, sampleRate) => {
       context = new FakeOfflineAudioContext(channels, length, sampleRate);
       return context.asOfflineAudioContext();
@@ -64,13 +94,79 @@ test("renderProjectToWav schedules the full shared mixer graph with a release ta
   ]);
   assert.deepEqual(context?.oscillators.map(({ startTimes }) => startTimes), [[4.5]]);
   assert.deepEqual(
-    context?.gains.slice(0, 3).map(({ gain }) => gain.events[0]),
+    context?.gains.slice(0, 4).map(({ gain }) => gain.events[0]),
     [
-      { method: "set", value: 1, time: 0 },
-      { method: "set", value: 1, time: 0 },
-      { method: "set", value: 10 ** (-6 / 20), time: 0 },
+      { method: "set", value: 0.7079457843841379, time: 0 },
+      { method: "set", value: 0, time: 0 },
+      { method: "set", value: 0.5011872336272722, time: 0 },
+      { method: "set", value: 0, time: 0 },
     ],
   );
+  assert.deepEqual(
+    context?.panners.map(({ pan }) => pan.events[0]),
+    [
+      { method: "set", value: -0.5, time: 0 },
+      { method: "set", value: 0.5, time: 0 },
+      { method: "set", value: 0.25, time: 0 },
+    ],
+  );
+});
+
+test("renderProjectToWav names a missing pattern when no arrangement steps can expand", async () => {
+  const project = audioProject();
+  const missingPatternId = "missing-pattern";
+
+  await assert.rejects(
+    renderProjectToWav(
+      { ...project, arrangement: [{ ...project.arrangement[0]!, patternId: missingPatternId }] },
+      {
+        createContext: () => new FakeOfflineAudioContext(2, 1, 44_100).asOfflineAudioContext(),
+        loadArrayBuffer: async () => new ArrayBuffer(8),
+      },
+    ),
+    (error: unknown) =>
+      error instanceof WavExportError &&
+      error.code === "invalid_project_reference" &&
+      error.message.includes(missingPatternId),
+  );
+});
+
+test("renderProjectToWav permits ten minutes but rejects longer projects before allocation", async () => {
+  const project = audioProject();
+  const tenMinutes = {
+    ...project,
+    bpm: 40,
+    arrangement: [{ ...project.arrangement[0]!, repeatCount: 100 }],
+  };
+  let requestedContext: readonly number[] | undefined;
+
+  await assert.rejects(
+    renderProjectToWav(tenMinutes, {
+      createContext: (channels, length, sampleRate) => {
+        requestedContext = [channels, length, sampleRate];
+        throw new Error("context created");
+      },
+      loadArrayBuffer: async () => new ArrayBuffer(8),
+    }),
+    /context created/,
+  );
+  assert.deepEqual(requestedContext, [2, 26_460_000, 44_100]);
+
+  let allocations = 0;
+  await assert.rejects(
+    renderProjectToWav(
+      { ...tenMinutes, arrangement: [{ ...tenMinutes.arrangement[0]!, repeatCount: 101 }] },
+      {
+        createContext: () => {
+          allocations += 1;
+          return new FakeOfflineAudioContext(2, 1, 44_100).asOfflineAudioContext();
+        },
+        loadArrayBuffer: async () => new ArrayBuffer(8),
+      },
+    ),
+    (error: unknown) => error instanceof WavExportError && error.code === "duration_exceeded",
+  );
+  assert.equal(allocations, 0);
 });
 
 test("renderProjectToWav rejects invalid projects before downloading partial audio", async (t) => {

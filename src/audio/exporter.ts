@@ -113,7 +113,7 @@ export async function renderProjectToWav(
   platform: WavExportPlatform,
 ): Promise<Blob> {
   const endStep = arrangementEndStep(project);
-  const expansion = expandTimeline(project, 0, endStep);
+  const expansion = expandTimeline(project, 0, Math.max(endStep, 1));
   if (project.arrangement.length === 0) {
     throw new WavExportError("empty_arrangement", "Add an arrangement clip before exporting WAV");
   }
