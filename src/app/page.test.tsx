@@ -12,9 +12,10 @@ it("renders a workstation with no fabricated history after storage bootstrap", a
   expect(await screen.findByRole("region", { name: "Song arrangement" })).toBeVisible();
   expect(screen.getByRole("complementary", { name: "Track editor" })).toBeVisible();
   expect(screen.getByRole("button", { name: "Play" })).toBeEnabled();
-  for (const name of ["Stop", "Record", "Loop playback", "Export", "Undo", "Redo"]) {
+  for (const name of ["Stop", "Record", "Loop playback", "Undo", "Redo"]) {
     expect(screen.getByRole("button", { name })).toBeDisabled();
   }
+  expect(screen.getByRole("button", { name: "Export" })).toBeEnabled();
   expect(screen.getByText(/Audio ready.*Not saved yet/i)).toBeVisible();
   expect(screen.getByRole("button", { name: "Show activity" })).toHaveAttribute("aria-pressed", "false");
   expect(screen.queryByRole("complementary", { name: "Activity" })).not.toBeInTheDocument();

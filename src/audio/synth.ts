@@ -10,7 +10,7 @@ export interface SynthVoice {
 }
 
 export interface SynthOptions {
-  readonly context: AudioContext;
+  readonly context: BaseAudioContext;
   readonly presets: Readonly<Record<SynthPresetId, SynthPreset>>;
   readonly voiceCap: number;
   readonly stopRampSeconds: number;

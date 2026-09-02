@@ -15,7 +15,7 @@ export interface DrumSource {
 }
 
 export interface SamplerOptions {
-  readonly context: AudioContext;
+  readonly context: BaseAudioContext;
   readonly kit: DrumKitDefinition;
   readonly loadArrayBuffer: LoadArrayBuffer;
 }
