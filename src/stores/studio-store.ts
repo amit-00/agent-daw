@@ -172,6 +172,13 @@ export function createStudioStore(
       }));
     }
 
+    function stopAudioForHistory(): void {
+      const engine = getAudioEngine();
+      if (engine === null) return;
+      engine.stop();
+      refreshAudio();
+    }
+
     const snapshot = service.getState();
     const firstClip = snapshot.project.arrangement[0];
     return {
@@ -189,14 +196,14 @@ export function createStudioStore(
       },
       undo(): void {
         if (get().historyCursor < 0) return;
-        getAudioEngine()?.stop();
+        stopAudioForHistory();
         service.undo();
         publish();
       },
       redo(): void {
         const { history, historyCursor } = get();
         if (historyCursor + 1 >= history.length) return;
-        getAudioEngine()?.stop();
+        stopAudioForHistory();
         service.redo();
         publish();
       },
@@ -205,7 +212,7 @@ export function createStudioStore(
           set({ errorMessage: "That history entry is no longer available. Choose a retained entry." });
           return;
         }
-        getAudioEngine()?.stop();
+        stopAudioForHistory();
         service.restore({
           id: crypto.randomUUID(), source: "manual", label: "Restore history", targetEntryId: entryId,
         });

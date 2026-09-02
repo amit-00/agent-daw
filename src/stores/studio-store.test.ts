@@ -664,19 +664,30 @@ describe("studio session", () => {
     const restoreEntryId = store.getState().history.at(-1)!.id;
     store.getState().setMasterVolume(-3);
 
-    await store.getState().playPause();
-    store.getState().undo();
-    expect(harness.engine.getSnapshot()).toMatchObject({ status: "stopped", positionStep: 0 });
+    const assertStoppedAtProjectPublish = async (historyAction: () => void): Promise<void> => {
+      await store.getState().playPause();
+      let publishedAudio: { readonly engineStatus: string; readonly audioStatus: string; readonly positionStep: number } | undefined;
+      const unsubscribe = store.subscribe((state, previousState) => {
+        if (state.project !== previousState.project) {
+          publishedAudio = {
+            engineStatus: harness.engine.getSnapshot().status,
+            audioStatus: state.audio.snapshot.status,
+            positionStep: state.audio.snapshot.positionStep,
+          };
+        }
+      });
+      historyAction();
+      unsubscribe();
+      expect(publishedAudio).toEqual({ engineStatus: "stopped", audioStatus: "stopped", positionStep: 0 });
+    };
+
+    await assertStoppedAtProjectPublish(() => store.getState().undo());
     expect(store.getState().project.masterVolumeDb).toBe(-6);
 
-    await store.getState().playPause();
-    store.getState().redo();
-    expect(harness.engine.getSnapshot()).toMatchObject({ status: "stopped", positionStep: 0 });
+    await assertStoppedAtProjectPublish(() => store.getState().redo());
     expect(store.getState().project.masterVolumeDb).toBe(-3);
 
-    await store.getState().playPause();
-    store.getState().restore(restoreEntryId);
-    expect(harness.engine.getSnapshot()).toMatchObject({ status: "stopped", positionStep: 0 });
+    await assertStoppedAtProjectPublish(() => store.getState().restore(restoreEntryId));
     expect(store.getState().project.masterVolumeDb).toBe(-6);
   });
 
