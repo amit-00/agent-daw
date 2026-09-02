@@ -1,13 +1,38 @@
 import { createStore, type StoreApi } from "zustand/vanilla";
 
+import { arrangementEndStep, type AudioControlResult, type AudioEngine, type AudioEngineSnapshot } from "@/audio";
 import { SOUND_CATALOG } from "@/audio/catalog";
 import { getTrackColor, INSTRUMENT_NAMES, TRACK_COLOR_WHEEL } from "@/data/studio-data";
+import type { FlushResult } from "@/persistence/service";
 import { PROJECT_CAPS, ProjectService, type Command, type DispatchResult, type Operation, type Pattern, type PatternLengthBars, type Project, type ProjectServiceState, type SynthNote, type SynthPattern, type TrackKind } from "@/project";
 import { getDrumKitProblem, getPatternLengthProblem, getPlacementProblem } from "@/stores/studio-edits";
 
 type EditorTab = "mixer" | "pattern";
 
+export interface StudioAudioState {
+  readonly engineReady: boolean;
+  readonly pending: boolean;
+  readonly snapshot: AudioEngineSnapshot;
+  readonly errorMessage: string | null;
+}
+
+export type StudioPersistenceStatus = "unsaved" | "saving" | "saved" | "memory-only" | "failed";
+
+export interface StudioPersistenceState {
+  readonly status: StudioPersistenceStatus;
+  readonly latestSaveToken: number;
+  readonly updatedAt: number | null;
+  readonly errorMessage: string | null;
+}
+
+export type PersistenceBaseline =
+  | { readonly status: "unsaved"; readonly updatedAt: null; readonly errorMessage: null }
+  | { readonly status: "saved"; readonly updatedAt: number; readonly errorMessage: null }
+  | { readonly status: "memory-only"; readonly updatedAt: null; readonly errorMessage: string };
+
 export interface StudioState extends ProjectServiceState {
+  readonly audio: StudioAudioState;
+  readonly persistence: StudioPersistenceState;
   readonly activityOpen: boolean;
   readonly editorTab: EditorTab;
   readonly selectedClipId: string | null;
@@ -18,6 +43,13 @@ export interface StudioState extends ProjectServiceState {
   undo(): void;
   redo(): void;
   restore(entryId: string): void;
+  playPause(): Promise<void>;
+  stopPlayback(): void;
+  seekPlayback(step: number): void;
+  refreshAudio(): void;
+  beginPersistenceSave(): number;
+  finishPersistenceSave(token: number, result: FlushResult): void;
+  failPersistenceSave(token: number, message: string): void;
   toggleActivity(): void;
   selectEditorTab(tab: EditorTab): void;
   selectClip(clipId: string): void;
@@ -67,7 +99,27 @@ function getSynthNoteProblem(pattern: SynthPattern, note: Pick<SynthNote, "midiN
   return null;
 }
 
-export function createStudioStore(initialProject: Project): StoreApi<StudioState> {
+const initialAudioState = (project: Project): StudioAudioState => ({
+  engineReady: false,
+  pending: false,
+  snapshot: {
+    status: "stopped",
+    positionStep: 0,
+    arrangementEndStep: arrangementEndStep(project),
+    unavailableSoundIds: [],
+    activeVoices: 0,
+    pendingSources: 0,
+    lateWakeups: 0,
+    trackBusCount: 0,
+  },
+  errorMessage: null,
+});
+
+export function createStudioStore(
+  initialProject: Project,
+  getAudioEngine: () => AudioEngine | null,
+  persistenceBaseline: PersistenceBaseline,
+): StoreApi<StudioState> {
   const service = new ProjectService({
     initialProject, createHistoryId: () => crypto.randomUUID(), now: Date.now,
   });
@@ -95,10 +147,37 @@ export function createStudioStore(initialProject: Project): StoreApi<StudioState
         errorMessage: null,
       });
     }
+
+    function refreshAudio(): void {
+      const engine = getAudioEngine();
+      if (engine === null) return;
+      set((state) => ({
+        audio: {
+          ...state.audio,
+          engineReady: true,
+          snapshot: engine.getSnapshot(),
+        },
+      }));
+    }
+
+    function publishAudioResult(result: AudioControlResult): void {
+      const engine = getAudioEngine();
+      set((state) => ({
+        audio: {
+          ...state.audio,
+          pending: false,
+          snapshot: engine?.getSnapshot() ?? state.audio.snapshot,
+          errorMessage: result.ok ? null : result.message,
+        },
+      }));
+    }
+
     const snapshot = service.getState();
     const firstClip = snapshot.project.arrangement[0];
     return {
       ...snapshot,
+      audio: initialAudioState(initialProject),
+      persistence: { ...persistenceBaseline, latestSaveToken: 0 },
       activityOpen: false, editorTab: "pattern", errorMessage: null,
       selectedClipId: firstClip?.id ?? null,
       selectedPatternId: firstClip?.patternId ?? snapshot.project.patterns[0]?.id ?? null,
@@ -108,17 +187,103 @@ export function createStudioStore(initialProject: Project): StoreApi<StudioState
         publish();
         return result;
       },
-      undo(): void { service.undo(); publish(); },
-      redo(): void { service.redo(); publish(); },
+      undo(): void {
+        if (get().historyCursor < 0) return;
+        getAudioEngine()?.stop();
+        service.undo();
+        publish();
+      },
+      redo(): void {
+        const { history, historyCursor } = get();
+        if (historyCursor + 1 >= history.length) return;
+        getAudioEngine()?.stop();
+        service.redo();
+        publish();
+      },
       restore(entryId): void {
         if (!get().history.some((entry) => entry.id === entryId)) {
           set({ errorMessage: "That history entry is no longer available. Choose a retained entry." });
           return;
         }
+        getAudioEngine()?.stop();
         service.restore({
           id: crypto.randomUUID(), source: "manual", label: "Restore history", targetEntryId: entryId,
         });
         publish();
+      },
+      async playPause(): Promise<void> {
+        const engine = getAudioEngine();
+        if (engine === null) return;
+        if (engine.getSnapshot().status === "playing") {
+          publishAudioResult(engine.pause());
+          refreshAudio();
+          return;
+        }
+        set((state) => ({ audio: { ...state.audio, pending: true, errorMessage: null } }));
+        const snapshot = engine.getSnapshot();
+        const startStep = snapshot.positionStep >= snapshot.arrangementEndStep ? 0 : snapshot.positionStep;
+        try {
+          publishAudioResult(await engine.play(startStep));
+        } catch {
+          set((state) => ({
+            audio: {
+              ...state.audio,
+              pending: false,
+              snapshot: engine.getSnapshot(),
+              errorMessage: "Audio playback failed. Try again or reload.",
+            },
+          }));
+        } finally {
+          refreshAudio();
+        }
+      },
+      stopPlayback(): void {
+        const engine = getAudioEngine();
+        if (engine === null) return;
+        publishAudioResult(engine.stop());
+        refreshAudio();
+      },
+      seekPlayback(step): void {
+        const engine = getAudioEngine();
+        if (engine === null) return;
+        publishAudioResult(engine.seek(step));
+        refreshAudio();
+      },
+      refreshAudio,
+      beginPersistenceSave(): number {
+        const token = get().persistence.latestSaveToken + 1;
+        set({ persistence: {
+          status: "saving", latestSaveToken: token, updatedAt: get().persistence.updatedAt,
+          errorMessage: null,
+        } });
+        return token;
+      },
+      finishPersistenceSave(token, result): void {
+        if (token !== get().persistence.latestSaveToken || result.status === "idle") return;
+        if (result.status === "saved") {
+          set({ persistence: {
+            status: "saved", latestSaveToken: token, updatedAt: result.updatedAt,
+            errorMessage: null,
+          } });
+          return;
+        }
+        if (result.status === "failed") {
+          set({ persistence: {
+            status: "failed", latestSaveToken: token, updatedAt: get().persistence.updatedAt,
+            errorMessage: result.error.message,
+          } });
+          return;
+        }
+        set({ persistence: {
+          status: "unsaved", latestSaveToken: token, updatedAt: null, errorMessage: null,
+        } });
+      },
+      failPersistenceSave(token, message): void {
+        if (token !== get().persistence.latestSaveToken) return;
+        set({ persistence: {
+          status: "failed", latestSaveToken: token, updatedAt: get().persistence.updatedAt,
+          errorMessage: message,
+        } });
       },
       toggleActivity: () => set((state) => ({ activityOpen: !state.activityOpen })),
       selectEditorTab: (editorTab) => set({ editorTab }),

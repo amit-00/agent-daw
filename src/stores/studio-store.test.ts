@@ -1,11 +1,42 @@
 import { describe, expect, it } from "vitest";
+import type { StoreApi } from "zustand/vanilla";
 
+import { AudioEngine } from "@/audio";
 import { DEMO_PROJECT, EMPTY_PROJECT } from "@/data/studio-data";
-import { createStudioStore } from "@/stores/studio-store";
+import type { Project } from "@/project";
+import { createStudioStore, type StudioState } from "@/stores/studio-store";
+import { FakeAudioContext, FakeTimers } from "../../test/audio-fakes";
+
+const createAudioHarness = (): {
+  readonly engine: AudioEngine;
+  readonly context: FakeAudioContext;
+  readonly timers: FakeTimers;
+} => {
+  const context = new FakeAudioContext();
+  const timers = new FakeTimers();
+  return {
+    context,
+    timers,
+    engine: new AudioEngine({
+      createContext: () => context.asAudioContext(),
+      loadArrayBuffer: async () => new ArrayBuffer(8),
+      setInterval: (callback, milliseconds) => timers.setInterval(callback, milliseconds),
+      clearInterval: (handle) => timers.clearInterval(handle),
+    }),
+  };
+};
+
+const createTestStore = (project: Project = EMPTY_PROJECT): StoreApi<StudioState> => {
+  const { engine } = createAudioHarness();
+  engine.replaceProject(project);
+  return createStudioStore(project, () => engine, {
+    status: "unsaved", updatedAt: null, errorMessage: null,
+  });
+};
 
 describe("studio session", () => {
   it("completes the silent composition workflow through one project history", () => {
-    const store = createStudioStore(EMPTY_PROJECT);
+    const store = createTestStore(EMPTY_PROJECT);
     const bassId = store.getState().createTrack("synth", "synth.bass")!;
     const padId = store.getState().createTrack("synth", "synth.pad")!;
     const drumsId = store.getState().createTrack("drum", "kit.basic")!;
@@ -44,7 +75,7 @@ describe("studio session", () => {
   });
 
   it("stores mixer values in the project and restores them with undo", () => {
-    const store = createStudioStore(EMPTY_PROJECT);
+    const store = createTestStore(EMPTY_PROJECT);
     const trackId = store.getState().createTrack("synth", "synth.bass")!;
     store.getState().setTrackVolume(trackId, -12);
     store.getState().setTrackPan(trackId, 0.5);
@@ -56,7 +87,7 @@ describe("studio session", () => {
   });
 
   it("rejects invalid mixer values and allows multiple soloed tracks", () => {
-    const store = createStudioStore(DEMO_PROJECT);
+    const store = createTestStore(DEMO_PROJECT);
     const before = store.getState().history.length;
     for (const value of [-61, 7, NaN, Infinity]) store.getState().setTrackVolume("bass", value);
     for (const value of [-1.01, 1.01, NaN, Infinity]) store.getState().setTrackPan("bass", value);
@@ -79,7 +110,7 @@ describe("studio session", () => {
   });
 
   it("allows chords but rejects a note extending past its pattern", () => {
-    const store = createStudioStore(EMPTY_PROJECT);
+    const store = createTestStore(EMPTY_PROJECT);
     const patternId = store.getState().createPattern("synth")!;
     store.getState().addSynthNote(patternId, 60, 0, 4);
     store.getState().addSynthNote(patternId, 64, 0, 4);
@@ -92,7 +123,7 @@ describe("studio session", () => {
   });
 
   it("accepts the synth-note boundaries and rejects invalid note values", () => {
-    const store = createStudioStore({ ...EMPTY_PROJECT, patterns: [
+    const store = createTestStore({ ...EMPTY_PROJECT, patterns: [
       { id: "melody", name: "Melody", kind: "synth", lengthBars: 1, events: [] },
       { id: "beat", name: "Beat", kind: "drum", lengthBars: 1, events: [] },
     ] });
@@ -114,7 +145,7 @@ describe("studio session", () => {
       { id: "a", midiNote: 60, startStep: 0, lengthSteps: 4 },
       { id: "b", midiNote: 64, startStep: 4, lengthSteps: 4 },
     ];
-    const store = createStudioStore({ ...EMPTY_PROJECT, patterns: [
+    const store = createTestStore({ ...EMPTY_PROJECT, patterns: [
       { id: "melody", name: "Melody", kind: "synth", lengthBars: 1, events: original },
     ] });
     store.getState().updateSynthNotes("melody", [
@@ -143,7 +174,7 @@ describe("studio session", () => {
       { id: "a", midiNote: 60, startStep: 0, lengthSteps: 4 },
       { id: "b", midiNote: 64, startStep: 4, lengthSteps: 4 },
     ];
-    const store = createStudioStore({ ...EMPTY_PROJECT, patterns: [
+    const store = createTestStore({ ...EMPTY_PROJECT, patterns: [
       { id: "melody", name: "Melody", kind: "synth", lengthBars: 1, events: notes },
     ] });
     const duplicateIds = store.getState().duplicateSynthNotes("melody", ["a", "a", "b"], 1, 2);
@@ -163,7 +194,7 @@ describe("studio session", () => {
     expect(store.getState().project.patterns[0]?.events).toEqual(notes);
     expect(store.getState().history).toHaveLength(before);
 
-    const fullStore = createStudioStore({ ...EMPTY_PROJECT, patterns: [
+    const fullStore = createTestStore({ ...EMPTY_PROJECT, patterns: [
       { id: "full", name: "Full", kind: "synth", lengthBars: 1,
         events: Array.from({ length: 512 }, (_, index) => ({ id: `note-${index}`, midiNote: 60, startStep: 0, lengthSteps: 1 })) },
     ] });
@@ -174,7 +205,7 @@ describe("studio session", () => {
   });
 
   it("deletes synth notes once and edits shared patterns without copying them", () => {
-    const store = createStudioStore(DEMO_PROJECT);
+    const store = createTestStore(DEMO_PROJECT);
     const arrangement = store.getState().project.arrangement;
     const noteId = store.getState().addSynthNote("glasshouse", 72, 31, 1)!;
     expect(store.getState().project.arrangement).toEqual(arrangement);
@@ -190,7 +221,7 @@ describe("studio session", () => {
   });
 
   it("commits a drum paint stroke once and retains edits across selection", () => {
-    const store = createStudioStore(EMPTY_PROJECT);
+    const store = createTestStore(EMPTY_PROJECT);
     const patternId = store.getState().createPattern("drum")!;
     const before = store.getState().history.length;
     store.getState().setDrumCells(patternId, [
@@ -208,7 +239,7 @@ describe("studio session", () => {
   });
 
   it("adds and erases drum cells atomically without toggling repeated cells", () => {
-    const store = createStudioStore(EMPTY_PROJECT);
+    const store = createTestStore(EMPTY_PROJECT);
     const patternId = store.getState().createPattern("drum")!;
     store.getState().setDrumCells(patternId, [
       { soundId: "kick", startStep: 0, active: true },
@@ -238,7 +269,7 @@ describe("studio session", () => {
       { id: "long-beat", name: "Long beat", kind: "drum" as const, lengthBars: 4 as const, events: [] },
       { id: "unused-synth", name: "Melody", kind: "synth" as const, lengthBars: 1 as const, events: [] },
     ] };
-    const store = createStudioStore(project);
+    const store = createTestStore(project);
     store.getState().setDrumCells("long-beat", [{ soundId: "kick", startStep: 63, active: true }]);
     const before = store.getState().history.length;
     for (const startStep of [-1, 64, 1.5, NaN, Infinity]) {
@@ -253,7 +284,7 @@ describe("studio session", () => {
   });
 
   it("checks every referencing drum kit before adding a hit", () => {
-    const store = createStudioStore({ ...DEMO_PROJECT,
+    const store = createTestStore({ ...DEMO_PROJECT,
       tracks: [...DEMO_PROJECT.tracks, { ...DEMO_PROJECT.tracks[0]!, id: "other-drums", instrumentId: "missing-kit" }],
       arrangement: [...DEMO_PROJECT.arrangement,
         { id: "other-neon", trackId: "other-drums", patternId: "neon", startBar: 8, repeatCount: 1 }],
@@ -266,7 +297,7 @@ describe("studio session", () => {
 
   it("enforces the drum-event cap while still allowing erasure", () => {
     const events = Array.from({ length: 512 }, (_, index) => ({ id: `hit-${index}`, soundId: "kick", startStep: index % 16 }));
-    const store = createStudioStore({ ...EMPTY_PROJECT, patterns: [
+    const store = createTestStore({ ...EMPTY_PROJECT, patterns: [
       { id: "full-beat", name: "Full beat", kind: "drum", lengthBars: 1, events },
     ] });
     store.getState().setDrumCells("full-beat", [{ soundId: "snare", startStep: 0, active: true }]);
@@ -278,7 +309,7 @@ describe("studio session", () => {
   });
 
   it("assigns new tracks successive wheel colors and wraps to purple", () => {
-    const store = createStudioStore(EMPTY_PROJECT);
+    const store = createTestStore(EMPTY_PROJECT);
     for (let index = 0; index < 9; index += 1) store.getState().createTrack("synth", "synth.pad");
     expect(store.getState().project.tracks.map((track) => track.color)).toEqual([
       "#9a69f5", "#d95fc8", "#ef6070", "#f18a4c", "#efbd52", "#70bd72", "#50b8b1", "#598fe3", "#9a69f5",
@@ -287,7 +318,7 @@ describe("studio session", () => {
   });
 
   it("uses the current bottom track color and preserves assignments through edits and history", () => {
-    const store = createStudioStore(DEMO_PROJECT);
+    const store = createTestStore(DEMO_PROJECT);
     const greenId = store.getState().createTrack("synth", "synth.pad")!;
     expect(store.getState().project.tracks.at(-1)?.color).toBe("#70bd72");
     store.getState().renameTrack(greenId, "Layer");
@@ -308,7 +339,7 @@ describe("studio session", () => {
   });
 
   it("makes only the chosen clip unique in one undoable entry", () => {
-    const store = createStudioStore(EMPTY_PROJECT);
+    const store = createTestStore(EMPTY_PROJECT);
     const trackId = store.getState().createTrack("drum", "kit.basic")!;
     const clipId = store.getState().createPatternAt(trackId, 0)!;
     expect(store.getState().history).toHaveLength(2);
@@ -326,7 +357,7 @@ describe("studio session", () => {
   });
 
   it("duplicates a pattern as unplaced content with fresh event IDs", () => {
-    const store = createStudioStore(DEMO_PROJECT);
+    const store = createTestStore(DEMO_PROJECT);
     for (const patternId of ["neon", "glasshouse"]) {
       const id = store.getState().duplicatePattern(patternId);
       const copy = store.getState().project.patterns.find((pattern) => pattern.id === id)!;
@@ -340,7 +371,7 @@ describe("studio session", () => {
   });
 
   it("creates standalone patterns and shares renamed content across tracks", () => {
-    const store = createStudioStore(DEMO_PROJECT);
+    const store = createTestStore(DEMO_PROJECT);
     const id = store.getState().createPattern("synth")!;
     expect(store.getState().project.patterns.at(-1)).toMatchObject({ id, kind: "synth", lengthBars: 1, events: [] });
     const first = store.getState().placePattern(id, "bass", 8)!;
@@ -362,7 +393,7 @@ describe("studio session", () => {
   });
 
   it("refuses invalid placement, shrink, names, and stale targets without creating history", () => {
-    const store = createStudioStore(DEMO_PROJECT);
+    const store = createTestStore(DEMO_PROJECT);
     const before = store.getState();
     expect(store.getState().createPatternAt("bass", 0)).toBeNull();
     expect(store.getState().duplicateClip("bass-a")).toBeNull();
@@ -390,14 +421,14 @@ describe("studio session", () => {
 
   it("enforces pattern and clip caps before atomic creation or copying", () => {
     const patterns = Array.from({ length: 128 }, (_, index) => ({ ...DEMO_PROJECT.patterns[0]!, id: `p-${index}` }));
-    const store = createStudioStore({ ...DEMO_PROJECT, patterns: [...DEMO_PROJECT.patterns, ...patterns].slice(0, 128) });
+    const store = createTestStore({ ...DEMO_PROJECT, patterns: [...DEMO_PROJECT.patterns, ...patterns].slice(0, 128) });
     expect(store.getState().createPattern("synth")).toBeNull();
     expect(store.getState().createPatternAt("bass", 8)).toBeNull();
     expect(store.getState().duplicatePattern("neon")).toBeNull();
     store.getState().makeClipUnique("drums-a");
     expect(store.getState().history).toHaveLength(0);
     expect(store.getState().project.patterns).toHaveLength(128);
-    const full = createStudioStore({ ...DEMO_PROJECT, arrangement: Array.from({ length: 512 }, (_, index) => ({
+    const full = createTestStore({ ...DEMO_PROJECT, arrangement: Array.from({ length: 512 }, (_, index) => ({
       ...DEMO_PROJECT.arrangement[0]!, id: `clip-${index}`,
     })) });
     expect(full.getState().placePattern("neon", "drums", 8)).toBeNull();
@@ -408,7 +439,7 @@ describe("studio session", () => {
   });
 
   it("creates catalog tracks with fresh IDs and undoable defaults", () => {
-    const store = createStudioStore(EMPTY_PROJECT);
+    const store = createTestStore(EMPTY_PROJECT);
     const drumId = store.getState().createTrack("drum", "kit.basic");
     const bassId = store.getState().createTrack("synth", "synth.bass");
     expect(drumId).toBeTruthy();
@@ -427,7 +458,7 @@ describe("studio session", () => {
   });
 
   it("refuses wrong-kind instruments and the seventeenth track without history", () => {
-    const store = createStudioStore(EMPTY_PROJECT);
+    const store = createTestStore(EMPTY_PROJECT);
     expect(store.getState().createTrack("drum", "synth.bass")).toBeNull();
     expect(store.getState().createTrack("synth", "missing")).toBeNull();
     expect(store.getState().history).toHaveLength(0);
@@ -439,7 +470,7 @@ describe("studio session", () => {
   });
 
   it("trims names, checks presets, and ignores unchanged track edits", () => {
-    const store = createStudioStore(DEMO_PROJECT);
+    const store = createTestStore(DEMO_PROJECT);
     store.getState().renameTrack("bass", "  Sub bass  ");
     store.getState().setTrackPreset("bass", "synth.pad");
     expect(store.getState().project.tracks[1]).toMatchObject({ name: "Sub bass", kind: "synth", instrumentId: "synth.pad" });
@@ -457,7 +488,7 @@ describe("studio session", () => {
   });
 
   it("checks every placed drum pattern when changing a kit, not unplaced patterns", () => {
-    const store = createStudioStore({ ...DEMO_PROJECT,
+    const store = createTestStore({ ...DEMO_PROJECT,
       tracks: DEMO_PROJECT.tracks.map((track) => track.id === "drums" ? { ...track, instrumentId: "kit.other" } : track),
       patterns: [...DEMO_PROJECT.patterns, { id: "other-beat", name: "Other beat", kind: "drum", lengthBars: 1,
         events: [{ id: "clap", soundId: "clap", startStep: 0 }] }],
@@ -474,7 +505,7 @@ describe("studio session", () => {
   });
 
   it("reorders once, refuses invalid targets, and deletes clips but retains patterns", () => {
-    const store = createStudioStore(DEMO_PROJECT);
+    const store = createTestStore(DEMO_PROJECT);
     store.getState().reorderTrack("drums", 4);
     expect(store.getState().project.tracks.at(-1)?.id).toBe("drums");
     store.getState().reorderTrack("drums", 4);
@@ -493,8 +524,8 @@ describe("studio session", () => {
   });
 
   it("publishes committed history without leaking between studio sessions", () => {
-    const first = createStudioStore(EMPTY_PROJECT);
-    const second = createStudioStore(EMPTY_PROJECT);
+    const first = createTestStore(EMPTY_PROJECT);
+    const second = createTestStore(EMPTY_PROJECT);
     first.getState().dispatch({
       id: "rename", source: "manual", label: "Rename project", kind: "operation",
       operation: { type: "project.update", changes: { name: "Changed" } },
@@ -509,7 +540,7 @@ describe("studio session", () => {
   });
 
   it("selects clips with their routing but library patterns without invented track context", () => {
-    const store = createStudioStore(DEMO_PROJECT);
+    const store = createTestStore(DEMO_PROJECT);
     store.getState().selectClip("chords-b");
     expect(store.getState()).toMatchObject({
       selectedClipId: "chords-b", selectedPatternId: "glasshouse", selectedTrackId: "chords",
@@ -526,7 +557,7 @@ describe("studio session", () => {
   });
 
   it("reconciles routing and removes stale selections after commits and undo", () => {
-    const store = createStudioStore(DEMO_PROJECT);
+    const store = createTestStore(DEMO_PROJECT);
     store.getState().selectClip("bass-a");
     store.getState().dispatch({
       id: "move", source: "agent", label: "Move bass phrase", kind: "operation",
@@ -550,7 +581,7 @@ describe("studio session", () => {
   });
 
   it("handles empty sessions and stale selection requests without history", () => {
-    const store = createStudioStore(EMPTY_PROJECT);
+    const store = createTestStore(EMPTY_PROJECT);
     store.getState().undo();
     store.getState().redo();
     store.getState().selectClip("gone");
@@ -564,7 +595,7 @@ describe("studio session", () => {
   });
 
   it("restores real snapshots and refuses a missing history target", () => {
-    const store = createStudioStore(DEMO_PROJECT);
+    const store = createTestStore(DEMO_PROJECT);
     store.getState().dispatch({
       id: "rename", source: "agent", label: "Agent renamed song", kind: "operation",
       operation: { type: "project.update", changes: { name: "New song" } },
@@ -588,5 +619,98 @@ describe("studio session", () => {
     expect(store.getState().project).toBe(before.project);
     expect(store.getState().history).toBe(before.history);
     expect(store.getState().errorMessage).toMatch(/no longer available/i);
+  });
+
+  it("plays, pauses, seeks, and stops through the audio authority", async () => {
+    const harness = createAudioHarness();
+    harness.engine.replaceProject(DEMO_PROJECT);
+    const store = createStudioStore(DEMO_PROJECT, () => harness.engine, {
+      status: "unsaved", updatedAt: null, errorMessage: null,
+    });
+
+    await store.getState().playPause();
+    expect(store.getState().audio.snapshot.status).toBe("playing");
+    await store.getState().playPause();
+    expect(store.getState().audio.snapshot.status).toBe("paused");
+    store.getState().seekPlayback(16);
+    expect(store.getState().audio.snapshot.positionStep).toBe(16);
+    store.getState().stopPlayback();
+    expect(store.getState().audio.snapshot).toMatchObject({ status: "stopped", positionStep: 0 });
+  });
+
+  it("does not stop audio for unavailable history controls", async () => {
+    const harness = createAudioHarness();
+    harness.engine.replaceProject(DEMO_PROJECT);
+    const store = createStudioStore(DEMO_PROJECT, () => harness.engine, {
+      status: "unsaved", updatedAt: null, errorMessage: null,
+    });
+    await store.getState().playPause();
+    const project = store.getState().project;
+
+    store.getState().undo();
+    store.getState().restore("missing-entry");
+
+    expect(harness.engine.getSnapshot().status).toBe("playing");
+    expect(store.getState().project).toBe(project);
+  });
+
+  it("stops audio before undo, redo, and restore publish snapshots", async () => {
+    const harness = createAudioHarness();
+    harness.engine.replaceProject(DEMO_PROJECT);
+    const store = createStudioStore(DEMO_PROJECT, () => harness.engine, {
+      status: "unsaved", updatedAt: null, errorMessage: null,
+    });
+    store.getState().setMasterVolume(-6);
+    const restoreEntryId = store.getState().history.at(-1)!.id;
+    store.getState().setMasterVolume(-3);
+
+    await store.getState().playPause();
+    store.getState().undo();
+    expect(harness.engine.getSnapshot()).toMatchObject({ status: "stopped", positionStep: 0 });
+    expect(store.getState().project.masterVolumeDb).toBe(-6);
+
+    await store.getState().playPause();
+    store.getState().redo();
+    expect(harness.engine.getSnapshot()).toMatchObject({ status: "stopped", positionStep: 0 });
+    expect(store.getState().project.masterVolumeDb).toBe(-3);
+
+    await store.getState().playPause();
+    store.getState().restore(restoreEntryId);
+    expect(harness.engine.getSnapshot()).toMatchObject({ status: "stopped", positionStep: 0 });
+    expect(store.getState().project.masterVolumeDb).toBe(-6);
+  });
+
+  it("lets only the latest save token publish durability", () => {
+    const store = createTestStore();
+    const earlier = store.getState().beginPersistenceSave();
+    const latest = store.getState().beginPersistenceSave();
+
+    store.getState().failPersistenceSave(earlier, "stale failure");
+    expect(store.getState().persistence.status).toBe("saving");
+    store.getState().finishPersistenceSave(earlier, { status: "saved", updatedAt: 10 });
+    expect(store.getState().persistence.status).toBe("saving");
+    store.getState().finishPersistenceSave(latest, { status: "saved", updatedAt: 20 });
+
+    expect(store.getState().persistence).toMatchObject({
+      status: "saved", updatedAt: 20, errorMessage: null,
+    });
+  });
+
+  it("keeps an actionable failure until a later save succeeds", () => {
+    const store = createTestStore();
+    const failed = store.getState().beginPersistenceSave();
+    store.getState().finishPersistenceSave(failed, {
+      status: "failed",
+      error: { code: "quota_exceeded", message: "Browser storage is full" },
+    });
+    expect(store.getState().persistence).toMatchObject({
+      status: "failed", errorMessage: "Browser storage is full",
+    });
+
+    const retried = store.getState().beginPersistenceSave();
+    store.getState().finishPersistenceSave(retried, { status: "saved", updatedAt: 30 });
+    expect(store.getState().persistence).toMatchObject({
+      status: "saved", updatedAt: 30, errorMessage: null,
+    });
   });
 });

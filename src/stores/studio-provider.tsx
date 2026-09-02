@@ -12,7 +12,9 @@ const StudioContext = createContext<StoreApi<StudioState> | null>(null);
 export function StudioProvider({ initialProject, children }: Readonly<{
   initialProject: Project; children: ReactNode;
 }>): ReactElement {
-  const [store] = useState(() => createStudioStore(initialProject));
+  const [store] = useState(() => createStudioStore(initialProject, () => null, {
+    status: "unsaved", updatedAt: null, errorMessage: null,
+  }));
   return <StudioContext.Provider value={store}>{children}</StudioContext.Provider>;
 }
 
