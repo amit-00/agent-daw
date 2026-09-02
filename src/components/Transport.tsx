@@ -13,7 +13,7 @@ const formatPosition = (step: number, bpm: number): string => {
 };
 
 export function Transport(): ReactElement {
-  const { project, audio, persistence, playPause, stopPlayback, history, historyCursor, undo, redo, activityOpen, toggleActivity } = useStudioStore((state) => state);
+  const { project, audio, persistence, playPause, stopPlayback, history, historyCursor, undo, redo, activityOpen, toggleActivity, webMCPStatus } = useStudioStore((state) => state);
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
 
@@ -50,6 +50,7 @@ export function Transport(): ReactElement {
         <div className="min-w-0">
           <span className="block truncate">{project.name}</span>
           <small className="mt-0.5 block text-[9px] text-zinc-500">{audioSubtitle} · {persistenceSubtitle}</small>
+          <span aria-label="WebMCP status" className="mt-0.5 block text-[9px] text-zinc-500">WebMCP: {webMCPStatus[0]!.toUpperCase() + webMCPStatus.slice(1)}</span>
         </div>
       </div>
 

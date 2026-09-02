@@ -10,6 +10,7 @@ import { TrackEditor } from "@/components/editor/TrackEditor";
 import { ProjectPersistenceService, type LoadResult } from "@/persistence/service";
 import type { Project } from "@/project";
 import { StudioProvider, useStudioStore, type StudioPersistenceSession } from "@/stores/studio-provider";
+import { WebMCPBridge } from "@/webmcp/WebMCPBridge";
 
 type StartupState =
   | { readonly kind: "loading" }
@@ -95,6 +96,8 @@ export function StudioSession(): ReactElement {
   }
 
   return (
+    <>
+    <WebMCPBridge />
     <main className="relative h-dvh min-w-[1180px] overflow-hidden bg-black text-zinc-100" onKeyDown={handleKeyboard}>
       <section className="flex h-dvh min-w-0 flex-col overflow-hidden" id="studio">
         <Transport />
@@ -108,6 +111,7 @@ export function StudioSession(): ReactElement {
       </section>
       <ActivityPanel />
     </main>
+    </>
   );
 }
 

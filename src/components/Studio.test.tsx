@@ -13,6 +13,8 @@ import { DEMO_PROJECT, EMPTY_PROJECT } from "@/data/studio-data";
 import { ProjectPersistenceService } from "@/persistence/service";
 import { StudioProvider, useStudioStore, useStudioStoreApi, type StudioPersistenceSession } from "@/stores/studio-provider";
 import type { StudioState } from "@/stores/studio-store";
+import type { WebMCPTool } from "@/webmcp/contracts";
+import type { ModelContext } from "@/webmcp/register";
 import { audioProject } from "../../test/audio-fixtures";
 import { FakeAudioContext, FakeOfflineAudioContext } from "../../test/audio-fakes";
 
@@ -101,6 +103,23 @@ function renderSession(project: typeof DEMO_PROJECT): void {
   render(<StudioProvider initialProject={project} persistenceSession={TEST_PERSISTENCE_SESSION}><StudioSession /><StoreApiProbe onStore={(value) => { sessionStore = value; }} /></StudioProvider>);
 }
 
+function installModelContext(
+  register: (tool: WebMCPTool, options: { readonly signal: AbortSignal }) => Promise<void> = async () => undefined,
+): { readonly tools: Map<string, WebMCPTool>; readonly signals: AbortSignal[] } {
+  const tools = new Map<string, WebMCPTool>();
+  const signals: AbortSignal[] = [];
+  const context: ModelContext = {
+    registerTool: async (tool, options) => {
+      tools.set(tool.name, tool);
+      signals.push(options.signal);
+      options.signal.addEventListener("abort", () => tools.delete(tool.name), { once: true });
+      await register(tool, options);
+    },
+  };
+  Object.defineProperty(document, "modelContext", { configurable: true, value: context });
+  return { tools, signals };
+}
+
 beforeEach(() => {
   HTMLDivElement.prototype.setPointerCapture = vi.fn();
   HTMLDivElement.prototype.hasPointerCapture = () => false;
@@ -108,7 +127,11 @@ beforeEach(() => {
   HTMLDialogElement.prototype.showModal = function (): void { this.setAttribute("open", ""); };
   HTMLDialogElement.prototype.close = function (): void { this.removeAttribute("open"); };
 });
-afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+afterEach(() => {
+  Reflect.deleteProperty(document, "modelContext");
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
 
 describe("Studio persistence bootstrap", () => {
   it("keeps server and browser initial renders loading until bootstrap resolves", async () => {
@@ -716,6 +739,133 @@ describe("Studio", () => {
     expect(contexts[0]!.state).toBe("closed");
   });
 
+  it("shows registering until all browser tools are ready", async () => {
+    let finishRegistration!: () => void;
+    const pending = new Promise<void>((resolve) => { finishRegistration = resolve; });
+    installModelContext(async () => pending);
+
+    render(<Studio initialProject={DEMO_PROJECT} />);
+    expect(await screen.findByLabelText("WebMCP status")).toHaveTextContent("WebMCP: Registering");
+    finishRegistration();
+
+    await waitFor(() => expect(screen.getByLabelText("WebMCP status")).toHaveTextContent("WebMCP: Ready"));
+  });
+
+  it("shows unsupported when the browser has no model context", async () => {
+    render(<Studio initialProject={DEMO_PROJECT} />);
+
+    expect(await screen.findByLabelText("WebMCP status")).toHaveTextContent("WebMCP: Unsupported");
+  });
+
+  it("shows registration failure without disabling manual editing", async () => {
+    installModelContext(async () => { throw new Error("registration failed"); });
+    const user = userEvent.setup();
+    render(<Studio initialProject={DEMO_PROJECT} />);
+
+    await waitFor(() => expect(screen.getByLabelText("WebMCP status")).toHaveTextContent("WebMCP: Failed"));
+    await user.click(within(screen.getByRole("group", { name: "Low Orbit track" }))
+      .getByRole("button", { name: "Mute Low Orbit" }));
+    expect(screen.getByRole("button", { name: "Unmute Low Orbit" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("aborts browser tool registrations when the studio unmounts", async () => {
+    const registration = installModelContext();
+    const view = render(<Studio initialProject={DEMO_PROJECT} />);
+    await waitFor(() => expect(screen.getByLabelText("WebMCP status")).toHaveTextContent("WebMCP: Ready"));
+
+    view.unmount();
+
+    expect(registration.signals).toHaveLength(36);
+    expect(registration.signals.every((signal) => signal.aborted)).toBe(true);
+    expect(registration.tools).toHaveLength(0);
+  });
+
+  it("publishes a captured agent track rename to arrangement, mixer, and activity", async () => {
+    const registration = installModelContext();
+    const user = userEvent.setup();
+    render(<Studio initialProject={DEMO_PROJECT} />);
+    await waitFor(() => expect(screen.getByLabelText("WebMCP status")).toHaveTextContent("WebMCP: Ready"));
+
+    await act(async () => {
+      await registration.tools.get("rename_track")!.execute(
+        { request_id: "rename-bass", track_id: "bass", name: "Bridge bass" },
+        { signal: new AbortController().signal },
+      );
+    });
+
+    expect(screen.getByRole("group", { name: "Bridge bass track" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Mixer" }));
+    expect(screen.getByRole("group", { name: "Bridge bass channel" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Show activity" }));
+    const activity = screen.getByRole("complementary", { name: "Activity" });
+    expect(within(activity).getAllByRole("listitem")).toHaveLength(1);
+    expect(within(activity).getByText("Rename track").closest("li")).toHaveTextContent("Agent");
+  });
+
+  it("publishes a captured atomic pattern and clip creation", async () => {
+    const registration = installModelContext();
+    render(<Studio initialProject={DEMO_PROJECT} />);
+    await waitFor(() => expect(screen.getByLabelText("WebMCP status")).toHaveTextContent("WebMCP: Ready"));
+
+    await act(async () => {
+      await registration.tools.get("apply_project_changes")!.execute({
+        request_id: "create-bridge-pattern",
+        base_revision: 0,
+        label: "Create bridge pattern",
+        changes: [
+          {
+            type: "create_pattern",
+            ref: "bridge_pattern",
+            kind: "synth",
+            name: "Bridge pattern",
+            length_bars: 1,
+            placement: {
+              clip_ref: "bridge_clip",
+              track_id: { id: "bass" },
+              start_bar: 9,
+            },
+          },
+          { type: "set_track_solo", track_id: { id: "pad" }, soloed: false },
+        ],
+      }, { signal: new AbortController().signal });
+    });
+
+    expect(screen.getByRole("button", { name: "Select pattern Bridge pattern" })).toHaveTextContent("1 placement");
+    expect(within(screen.getByRole("region", { name: "Low Orbit lane" }))
+      .getByRole("button", { name: "Select Bridge pattern" })).toBeVisible();
+  });
+
+  it("preserves selection across agent edits until the selected entity is deleted", async () => {
+    const registration = installModelContext();
+    render(<Studio initialProject={DEMO_PROJECT} />);
+    await waitFor(() => expect(screen.getByLabelText("WebMCP status")).toHaveTextContent("WebMCP: Ready"));
+    const selectedClip = within(screen.getByRole("region", { name: "Neon Kit lane" }))
+      .getAllByRole("button", { name: "Select Neon beat" })[0]!;
+    expect(selectedClip).toHaveAttribute("aria-pressed", "true");
+
+    await act(async () => {
+      await registration.tools.get("rename_track")!.execute(
+        { request_id: "selection-rename", track_id: "bass", name: "Still selected" },
+        { signal: new AbortController().signal },
+      );
+      await registration.tools.get("create_pattern")!.execute(
+        { request_id: "selection-create", kind: "synth", name: "Unselected", length_bars: 1 },
+        { signal: new AbortController().signal },
+      );
+    });
+    expect(selectedClip).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Select pattern Unselected" })).toHaveAttribute("aria-pressed", "false");
+
+    await act(async () => {
+      await registration.tools.get("delete_clip")!.execute(
+        { request_id: "selection-delete", clip_id: "drums-a" },
+        { signal: new AbortController().signal },
+      );
+    });
+    expect(selectedClip).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Select pattern Neon beat" })).toHaveAttribute("aria-pressed", "true");
+  });
+
   it("uses a track's assigned color for its clips and pattern notes", async () => {
     const user = userEvent.setup();
     renderSession({ ...DEMO_PROJECT,
@@ -764,7 +914,7 @@ describe("Studio", () => {
       arrangement: [],
     }} />);
 
-    await user.click(screen.getByRole("button", { name: "Edit pattern Unused idea" }));
+    await user.click(await screen.findByRole("button", { name: "Edit pattern Unused idea" }));
 
     expect(screen.getByRole("option", { name: invalidName })).toBeInTheDocument();
     expect(screen.queryByRole("option", { name: "Neon Kit" })).not.toBeInTheDocument();
