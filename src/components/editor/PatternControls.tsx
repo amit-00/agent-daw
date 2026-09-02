@@ -30,12 +30,10 @@ export function AddPattern({ onClose }: Readonly<{ onClose: () => void }>): Reac
 }
 
 function isCompatible(project: Project, pattern: Pattern, track: Track): boolean {
-  if (track.kind !== pattern.kind) return false;
   try {
-    validateOperation({
-      ...project,
-      arrangement: [{ id: "compatibility-preview", patternId: pattern.id, trackId: track.id, startBar: 0, repeatCount: 1 }],
-    }, { type: "track.update", trackId: track.id, changes: { instrumentId: track.instrumentId } }, SOUND_CATALOG);
+    validateOperation({ ...project, arrangement: [] }, { type: "arrangement.place", clip: {
+      id: "compatibility-preview", patternId: pattern.id, trackId: track.id, startBar: 0, repeatCount: 1,
+    } }, SOUND_CATALOG);
     return true;
   } catch (error) {
     if (error instanceof ProjectValidationError) return false;

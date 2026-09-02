@@ -753,6 +753,23 @@ describe("Studio", () => {
     expect(screen.getByRole("button", { name: "Select pattern New phrase" })).toHaveTextContent("Unplaced");
   });
 
+  it("offers compatible destinations despite unrelated invalid track metadata", async () => {
+    const user = userEvent.setup();
+    const invalidName = "x".repeat(41);
+    render(<Studio initialProject={{
+      ...DEMO_PROJECT,
+      tracks: DEMO_PROJECT.tracks.map((track) => track.id === "bass"
+        ? { ...track, name: invalidName, volumeDb: 7 }
+        : track),
+      arrangement: [],
+    }} />);
+
+    await user.click(screen.getByRole("button", { name: "Edit pattern Unused idea" }));
+
+    expect(screen.getByRole("option", { name: invalidName })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "Neon Kit" })).not.toBeInTheDocument();
+  });
+
   it("creates and places from an empty lane in one edit and offers numeric creation", async () => {
     const user = userEvent.setup();
     renderSession({ ...DEMO_PROJECT, arrangement: [] });
