@@ -11,9 +11,11 @@ export type ProjectOperation = {
   };
 };
 
+type ProjectReducerOperation = ProjectOperation | { readonly type: never };
+
 export function reduceProjectOperation(
   project: Project,
-  operation: ProjectOperation,
+  operation: ProjectReducerOperation,
 ): Reduction {
   switch (operation.type) {
     case "project.update": {
@@ -33,6 +35,9 @@ export function reduceProjectOperation(
         changes: withChanges({ updated: { projectIds: [project.id] } }),
       };
     }
+    default: {
+      const unreachable: never = operation;
+      return unsupportedOperation(unreachable);
+    }
   }
-  return unsupportedOperation(operation as never);
 }

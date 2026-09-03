@@ -328,7 +328,7 @@ Move all remaining tests to `project-service.test.ts`: trusted inputs, callback 
 - [ ] **Step 4: Verify test inventory and behavior**
 
 ```bash
-rg '^test\(' test/project*.test.ts test/*-operation.test.ts | wc -l
+rg '^test\(' test/project-operation.test.ts test/track-operation.test.ts test/pattern-operation.test.ts test/arrangement-operation.test.ts test/drum-hit-operation.test.ts test/synth-note-operation.test.ts test/project-reducer.test.ts test/project-service.test.ts | wc -l
 pnpm test:project
 pnpm typecheck
 ```
