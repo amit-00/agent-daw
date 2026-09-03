@@ -164,7 +164,6 @@ export function Arrangement({ previewEndBar = null }: Readonly<{ previewEndBar?:
         </div>
         {project.tracks.map((track) => <TrackHeader key={track.id} row={tracks.findIndex((item) => item.id === track.id) + 2} track={track} onEdit={() => setEditingId(track.id)} onReorderStart={(event) => startDrag(event, track.id)} />)}
         {project.tracks.map((track) => <TrackLane key={track.id + "-lane"} row={tracks.findIndex((item) => item.id === track.id) + 2} track={track} bars={bars} onEditClip={setEditingClipId} />)}
-        {project.tracks.length === 0 && <p className="col-span-2 p-6 text-xs text-zinc-500">Add a track to start arranging.</p>}
         <span aria-hidden="true" className="pointer-events-none absolute inset-y-0 z-[2] w-px bg-white/90" style={{ left: playheadLeft }} />
         <div role="slider" aria-label="Playhead" aria-valuemin={0} aria-valuemax={transportEndStep} aria-valuenow={displayedStep}
           aria-valuetext={playheadLabel(Math.floor(displayedStep))} tabIndex={0} style={{ left: playheadLeft }}

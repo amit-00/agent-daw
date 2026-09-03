@@ -1308,7 +1308,7 @@ describe("Studio", () => {
 
   it("renders empty sessions without assuming a track or pattern", () => {
     renderSession(EMPTY_PROJECT);
-    expect(screen.getByText("Add a track to start arranging.")).toBeVisible();
+    expect(screen.queryByText("Add a track to start arranging.")).not.toBeInTheDocument();
     expect(screen.getByText("Select a pattern to view its notes or hits.")).toBeVisible();
   });
 
