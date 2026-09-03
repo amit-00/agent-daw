@@ -374,6 +374,82 @@ test("track deletion preserves shared patterns and other-track clips", () => {
   assert.deepEqual(project, before);
 });
 
+test("deleting the last clip finalizes its pattern in the same history entry", () => {
+  const service = createTestService(projectWithBasicDrums());
+
+  const result = service.dispatch({
+    id: "delete-last", source: "manual", label: "Delete clip", kind: "operation",
+    operation: { type: "arrangement.delete", clipId: id(12) },
+  });
+
+  assert.deepEqual(result.project.patterns, []);
+  assert.deepEqual(result.project.arrangement, []);
+  assert.deepEqual(result.changes.deleted.patternIds, [id(11)]);
+  assert.deepEqual(result.changes.deleted.drumHitIds, [id(13)]);
+  assert.deepEqual(result.changes.deleted.arrangementClipIds, [id(12)]);
+  assert.deepEqual(result.historyEntry?.after, result.project);
+});
+
+test("deleting one of many shared-pattern clips preserves the pattern", () => {
+  const initial = projectWithBasicDrums();
+  const service = createTestService({
+    ...initial,
+    arrangement: [
+      ...initial.arrangement,
+      { id: id(31), patternId: id(11), trackId: id(10), startBar: 1, repeatCount: 1 },
+    ],
+  });
+
+  const result = service.dispatch({
+    id: "delete-one", source: "manual", label: "Delete clip", kind: "operation",
+    operation: { type: "arrangement.delete", clipId: id(12) },
+  });
+
+  assert.deepEqual(result.project.patterns.map((pattern) => pattern.id), [id(11)]);
+  assert.deepEqual(result.project.arrangement.map((clip) => clip.id), [id(31)]);
+  assert.deepEqual(result.changes.deleted.patternIds, []);
+  assert.deepEqual(result.changes.deleted.arrangementClipIds, [id(12)]);
+});
+
+test("track deletion finalizes patterns that lose their last placement", () => {
+  const service = createTestService(projectWithBasicDrums());
+
+  const result = service.dispatch({
+    id: "delete-track", source: "manual", label: "Delete Drums", kind: "operation",
+    operation: { type: "track.delete", trackId: id(10) },
+  });
+
+  assert.deepEqual(result.project.tracks, []);
+  assert.deepEqual(result.project.patterns, []);
+  assert.deepEqual(result.project.arrangement, []);
+  assert.deepEqual(result.changes.deleted, {
+    projectIds: [], trackIds: [id(10)], patternIds: [id(11)], drumHitIds: [id(13)],
+    synthNoteIds: [], arrangementClipIds: [id(12)],
+  });
+});
+
+test("clip pattern reassignment finalizes the previously placed pattern", () => {
+  const initial = projectWithBasicDrums();
+  const service = createTestService({
+    ...initial,
+    patterns: [
+      ...initial.patterns,
+      { id: id(30), name: "Fill", kind: "drum", lengthBars: 1, events: [] },
+    ],
+  });
+
+  const result = service.dispatch({
+    id: "replace-pattern", source: "manual", label: "Replace clip pattern", kind: "operation",
+    operation: { type: "arrangement.update", clipId: id(12), changes: { patternId: id(30) } },
+  });
+
+  assert.deepEqual(result.project.patterns.map((pattern) => pattern.id), [id(30)]);
+  assert.deepEqual(result.project.arrangement[0]?.patternId, id(30));
+  assert.deepEqual(result.changes.deleted.patternIds, [id(11)]);
+  assert.deepEqual(result.changes.deleted.drumHitIds, [id(13)]);
+  assert.deepEqual(result.changes.updated.arrangementClipIds, [id(12)]);
+});
+
 test("pattern.create adds an unplaced pattern without tracks", () => {
   const result = reduceOperation(
     blankProject(),
@@ -1175,8 +1251,8 @@ test("restore reports the complete snapshot diff", () => {
   assert.equal(restored.ok, true);
   if (!restored.ok) return;
   assert.deepEqual(restored.changes.created.trackIds, [id(20)]);
-  assert.deepEqual(restored.changes.created.patternIds, []);
-  assert.deepEqual(restored.changes.created.synthNoteIds, []);
+  assert.deepEqual(restored.changes.created.patternIds, [id(21)]);
+  assert.deepEqual(restored.changes.created.synthNoteIds, [id(22)]);
   assert.deepEqual(restored.changes.created.arrangementClipIds, [id(23)]);
 });
 

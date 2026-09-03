@@ -254,6 +254,24 @@ test("validateOperations validates each operation against the preceding result",
   expectError(operations[1]!, "PATTERN_NOT_FOUND", "pattern_id", input);
 });
 
+test("validateOperations enforces the placement invariant after a transaction", () => {
+  const input = project({ tracks: [drumTrack()] });
+  const create: Operation = { type: "pattern.create", pattern: drumPattern() };
+
+  assert.throws(
+    () => validateOperations(input, [create], catalog),
+    (error: unknown) => error instanceof ProjectValidationError
+      && error.code === "OUT_OF_RANGE" && error.field === "placement",
+  );
+  const result = validateOperations(input, [
+    create,
+    { type: "arrangement.place", clip: {
+      id: "clip", patternId: "beat", trackId: "drums", startBar: 0, repeatCount: 1,
+    } },
+  ], catalog);
+  assert.equal(result.project.patterns.at(-1)?.id, "beat");
+});
+
 test("arrangement validation preserves the manual placement boundaries", () => {
   const input = project({
     tracks: [
