@@ -85,7 +85,7 @@ function resizeNotes(notes: readonly SynthNote[], delta: number, side: "left" | 
 }
 
 export function PianoRoll({ pattern }: Readonly<{ pattern: SynthPattern }>): ReactElement {
-  const { project, addSynthNote, updateSynthNotes, duplicateSynthNotes, deleteSynthNotes } = useStudioStore((state) => state);
+  const { project, addSynthNote, updateSynthNotes, duplicateSynthNotes, deleteSynthNotes, auditionSynthNote } = useStudioStore((state) => state);
   const cells = useRef<HTMLDivElement>(null);
   const gestureRef = useRef<NoteGesture | null>(null);
   const [preview, setPreview] = useState<NotePreview | null>(null);
@@ -206,11 +206,15 @@ export function PianoRoll({ pattern }: Readonly<{ pattern: SynthPattern }>): Rea
     clearGesture();
     if (current.duplicateStarted) {
       const ids = duplicateSynthNotes(pattern.id, current.originals.map((note) => note.id), current.stepDelta, current.pitchDelta);
-      if (ids.length > 0) setSelectedIds(ids);
+      if (ids.length > 0) {
+        setSelectedIds(ids);
+        void auditionSynthNote(pattern.id, current.preview[0]!.midiNote);
+      }
     } else if (current.stepDelta !== 0 || current.pitchDelta !== 0) {
-      updateSynthNotes(pattern.id, current.preview.map((note) => ({ noteId: note.id, changes: {
+      const updated = updateSynthNotes(pattern.id, current.preview.map((note) => ({ noteId: note.id, changes: {
         midiNote: note.midiNote, startStep: note.startStep, lengthSteps: note.lengthSteps,
       } })));
+      if (updated && current.kind === "move") void auditionSynthNote(pattern.id, current.preview[0]!.midiNote);
     }
   }
 
@@ -228,11 +232,14 @@ export function PianoRoll({ pattern }: Readonly<{ pattern: SynthPattern }>): Rea
     const pitchIndex = Math.floor((event.clientY - rect.top) / (rect.height / PITCHES.length));
     if (startStep < 0 || startStep >= steps || pitchIndex < 0 || pitchIndex >= PITCHES.length) return;
     const id = addSynthNote(pattern.id, PITCHES[pitchIndex]!, startStep, 1);
-    if (id) setSelectedIds([id]);
+    if (id) {
+      setSelectedIds([id]);
+      void auditionSynthNote(pattern.id, PITCHES[pitchIndex]!);
+    }
   }
 
-  function updateSelection(notes: readonly SynthNote[]): void {
-    updateSynthNotes(pattern.id, notes.map((note) => ({ noteId: note.id, changes: {
+  function updateSelection(notes: readonly SynthNote[]): boolean {
+    return updateSynthNotes(pattern.id, notes.map((note) => ({ noteId: note.id, changes: {
       midiNote: note.midiNote, startStep: note.startStep, lengthSteps: note.lengthSteps,
     } })));
   }
@@ -256,7 +263,10 @@ export function PianoRoll({ pattern }: Readonly<{ pattern: SynthPattern }>): Rea
       const start = Math.min(...selected.map((note) => note.startStep));
       const end = Math.max(...selected.map((note) => note.startStep + note.lengthSteps));
       const ids = duplicateSynthNotes(pattern.id, currentSelectedIds, end - start, 0);
-      if (ids.length > 0) setSelectedIds(ids);
+      if (ids.length > 0) {
+        setSelectedIds(ids);
+        void auditionSynthNote(pattern.id, selected[0]!.midiNote);
+      }
       return;
     }
     const movement: Readonly<Record<string, readonly [number, number]>> = {
@@ -265,7 +275,9 @@ export function PianoRoll({ pattern }: Readonly<{ pattern: SynthPattern }>): Rea
     const delta = movement[event.key];
     if (delta) {
       event.preventDefault();
-      updateSelection(moveNotes(selected, delta[0], delta[1], steps).notes);
+      const moved = moveNotes(selected, delta[0], delta[1], steps);
+      const updated = updateSelection(moved.notes);
+      if (updated && (moved.stepDelta !== 0 || moved.pitchDelta !== 0)) void auditionSynthNote(pattern.id, moved.notes[0]!.midiNote);
     }
   }
 
