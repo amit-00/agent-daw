@@ -68,7 +68,7 @@ export function TrackEditor(): ReactElement {
 
   if (!open) return <div className="relative z-[3] h-0 overflow-visible">
     <button type="button" aria-label="Open track editor" onClick={() => setOpen(true)}
-      className="absolute right-3 bottom-3 flex items-center gap-2 rounded-md border border-white/15 bg-zinc-950/95 px-3 py-2 text-[10px] text-zinc-400 shadow-lg hover:bg-zinc-900 hover:text-zinc-200 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-300">
+      className="absolute right-3 bottom-3 flex items-center gap-2 rounded-md border border-white/15 bg-zinc-950/95 px-3 py-2 text-xs text-zinc-400 shadow-lg hover:bg-zinc-900 hover:text-zinc-200 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-300">
       <span aria-hidden="true">⌃</span> Track editor
     </button>
   </div>;
@@ -86,8 +86,8 @@ export function TrackEditor(): ReactElement {
       <div className="relative z-[1] grid h-[42px] grid-cols-[1fr_auto_1fr] items-center border-b border-white/10 pr-[11px] pl-[15px]">
         <span className="flex items-center gap-2 text-xs font-medium text-zinc-300"><Icon name={editorTab === "pattern" ? "draw" : "mixer"} /> Track editor</span>
         <div className="flex rounded-md border border-white/10 bg-black/20 p-[3px]" aria-label="Editor tabs">
-          <button className={`rounded border-0 px-[9px] py-1 text-[10px] ${editorTab === "pattern" ? "bg-white/[0.08] text-zinc-300" : "bg-transparent text-zinc-600"}`} type="button" aria-pressed={editorTab === "pattern"} onClick={() => selectEditorTab("pattern")}>Pattern</button>
-          <button className={`rounded border-0 px-[9px] py-1 text-[10px] ${editorTab === "mixer" ? "bg-white/[0.08] text-zinc-300" : "bg-transparent text-zinc-600"}`} type="button" aria-pressed={editorTab === "mixer"} onClick={() => selectEditorTab("mixer")}>Mixer</button>
+          <button className={`rounded border-0 px-[9px] py-1 text-xs ${editorTab === "pattern" ? "bg-white/[0.08] text-zinc-300" : "bg-transparent text-zinc-600"}`} type="button" aria-pressed={editorTab === "pattern"} onClick={() => selectEditorTab("pattern")}>Pattern</button>
+          <button className={`rounded border-0 px-[9px] py-1 text-xs ${editorTab === "mixer" ? "bg-white/[0.08] text-zinc-300" : "bg-transparent text-zinc-600"}`} type="button" aria-pressed={editorTab === "mixer"} onClick={() => selectEditorTab("mixer")}>Mixer</button>
         </div>
         <button type="button" aria-label="Close track editor" onClick={() => setOpen(false)}
           className="h-6 w-6 justify-self-end rounded-md border-0 bg-transparent text-[17px] leading-none text-zinc-500 hover:bg-white/[0.06] hover:text-zinc-200 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-300">×</button>

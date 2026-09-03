@@ -46,6 +46,31 @@ test("prepare resumes context, loads samples, and creates project mixer buses", 
   assert.equal(context.panners.length, 2);
 });
 
+test("snapshot reports post-fader levels for every track and the master", async () => {
+  const context = new FakeAudioContext();
+  const timers = new FakeTimers();
+  const engine = new AudioEngine({
+    createContext: () => context.asAudioContext(),
+    loadArrayBuffer: async () => new ArrayBuffer(8),
+    setInterval: (callback, milliseconds) => timers.setInterval(callback, milliseconds),
+    clearInterval: (handle) => timers.clearInterval(handle),
+  });
+  engine.replaceProject(audioProject());
+  await engine.prepare();
+  await engine.play(0);
+  context.analysers[0]!.sample = 1;
+  context.analysers[1]!.sample = 0.1;
+  context.analysers[2]!.sample = 0.0005;
+
+  const snapshot = engine.getSnapshot();
+
+  assert.equal(snapshot.masterLevel, 1);
+  assert.ok(
+    Math.abs(snapshot.trackLevels["00000000-0000-4000-8000-000000000002"]! - 2 / 3) < 0.000_001,
+  );
+  assert.equal(snapshot.trackLevels["00000000-0000-4000-8000-000000000003"], 0);
+});
+
 test("disposing one engine leaves another engine's runtime independent", async () => {
   const timers = new FakeTimers();
   const instances = [0, 1].map(() => {

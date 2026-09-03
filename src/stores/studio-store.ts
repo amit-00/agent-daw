@@ -109,6 +109,8 @@ export interface StudioState extends ProjectServiceState {
   setTrackPan(trackId: string, pan: number): void;
   toggleMute(trackId: string): void;
   toggleSolo(trackId: string): void;
+  renameProject(name: string): void;
+  setTempo(bpm: number): void;
   setMasterVolume(volumeDb: number): void;
 }
 
@@ -138,6 +140,8 @@ const initialAudioState = (project: Project): StudioAudioState => ({
     pendingSources: 0,
     lateWakeups: 0,
     trackBusCount: 0,
+    trackLevels: {},
+    masterLevel: 0,
   },
   errorMessage: null,
 });
@@ -569,10 +573,6 @@ export function createStudioStore(
         const { project } = get();
         const clip = project.arrangement.find((item) => item.id === clipId);
         if (!clip) { set({ errorMessage: "That clip no longer exists. Select another clip." }); return; }
-        if (project.patterns.length >= PROJECT_CAPS.maxPatterns) {
-          set({ errorMessage: `Making a clip unique needs a free pattern slot (${PROJECT_CAPS.maxPatterns} maximum). Delete an unused pattern first.` });
-          return;
-        }
         const pattern = project.patterns.find((item) => item.id === clip.patternId)!;
         commit(`Delete ${pattern.name} clip`, { type: "arrangement.delete", clipId });
       },
@@ -580,6 +580,10 @@ export function createStudioStore(
         const { project } = get();
         const clip = project.arrangement.find((item) => item.id === clipId);
         if (!clip) { set({ errorMessage: "That clip no longer exists. Select another clip." }); return; }
+        if (project.patterns.length >= PROJECT_CAPS.maxPatterns) {
+          set({ errorMessage: `Making a clip unique needs a free pattern slot (${PROJECT_CAPS.maxPatterns} maximum). Delete an unused pattern first.` });
+          return;
+        }
         const pattern = project.patterns.find((item) => item.id === clip.patternId)!;
         const id = crypto.randomUUID();
         commitBatch(`Make ${pattern.name} unique`, [duplicatePatternOperation(pattern, id),
@@ -743,6 +747,21 @@ export function createStudioStore(
         const track = get().project.tracks.find((item) => item.id === trackId);
         if (!track) { set({ errorMessage: "That track no longer exists. Select another track." }); return; }
         commit(`${track.soloed ? "Unsolo" : "Solo"} ${track.name}`, { type: "track.update", trackId, changes: { soloed: !track.soloed } });
+      },
+      renameProject(name): void {
+        const trimmed = name.trim();
+        if (trimmed.length < 1 || trimmed.length > 80) {
+          set({ errorMessage: "Project names must contain 1–80 characters after trimming spaces." });
+          return;
+        }
+        commit("Rename project", { type: "project.update", changes: { name: trimmed } });
+      },
+      setTempo(bpm): void {
+        if (!Number.isFinite(bpm) || bpm < 40 || bpm > 240) {
+          set({ errorMessage: "Choose a tempo from 40 to 240 BPM." });
+          return;
+        }
+        commit("Set tempo", { type: "project.update", changes: { bpm } });
       },
       setMasterVolume(volumeDb): void {
         if (!Number.isFinite(volumeDb) || volumeDb < -60 || volumeDb > 0) {

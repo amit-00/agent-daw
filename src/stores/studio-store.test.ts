@@ -440,6 +440,22 @@ describe("studio session", () => {
     expect(full.getState().history).toHaveLength(0);
   });
 
+  it("deletes a clip when the project is at the pattern cap", () => {
+    const patterns = [
+      ...DEMO_PROJECT.patterns,
+      ...Array.from({ length: 128 }, (_, index) => ({
+        ...DEMO_PROJECT.patterns[0]!, id: `p-${index}`,
+      })),
+    ].slice(0, 128);
+    const store = createTestStore({ ...DEMO_PROJECT, patterns });
+
+    store.getState().deleteClip("drums-a");
+
+    expect(store.getState().project.arrangement.some((clip) => clip.id === "drums-a")).toBe(false);
+    expect(store.getState().history).toHaveLength(1);
+    expect(store.getState().errorMessage).toBeNull();
+  });
+
   it("creates catalog tracks with fresh IDs and undoable defaults", () => {
     const store = createTestStore(EMPTY_PROJECT);
     const drumId = store.getState().createTrack("drum", "kit.basic");

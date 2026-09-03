@@ -98,12 +98,12 @@ export function DrumGrid({ pattern }: Readonly<{ pattern: DrumPattern }>): React
     <div className="col-start-2 grid border-b border-white/10 bg-white/[0.025]"
       style={{ gridTemplateColumns: `repeat(${steps},minmax(${MIN_STEP_WIDTH}px,1fr))` }}>
       {Array.from({ length: steps }, (_, index) => <span key={index}
-        className="grid place-items-center border-l border-white/[0.04] font-mono text-[9px] text-zinc-600">{index + 1}</span>)}
+        className="grid place-items-center border-l border-white/[0.04] font-mono text-[11px] text-zinc-600">{index + 1}</span>)}
     </div>
     <div className="sticky left-0 z-[1] row-start-2 grid border-r border-white/10 bg-zinc-950"
       style={{ gridTemplateRows: `repeat(${BASIC_DRUM_KIT.sounds.length},1fr)` }}>
       {BASIC_DRUM_KIT.sounds.map((sound) => <span key={sound.id}
-        className="grid place-items-center border-b border-white/[0.045] font-mono text-[9px] text-zinc-500">{soundName(sound.id)}</span>)}
+        className="grid place-items-center border-b border-white/[0.045] font-mono text-[11px] text-zinc-500">{soundName(sound.id)}</span>)}
     </div>
     <div ref={cells} data-drum-cells className="col-start-2 row-start-2 grid"
       style={{ gridTemplateColumns: `repeat(${steps},minmax(${MIN_STEP_WIDTH}px,1fr))`, gridTemplateRows: `repeat(${BASIC_DRUM_KIT.sounds.length},1fr)` }}>

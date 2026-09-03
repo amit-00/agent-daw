@@ -37,6 +37,8 @@ export interface AudioEngineSnapshot {
   readonly pendingSources: number;
   readonly lateWakeups: number;
   readonly trackBusCount: number;
+  readonly trackLevels: Readonly<Record<string, number>>;
+  readonly masterLevel: number;
   readonly lastIssue?: AudioIssue;
 }
 
@@ -66,6 +68,7 @@ export interface AudioEnginePlatform {
 interface TrackBus {
   readonly gain: GainNode;
   readonly panner: StereoPannerNode;
+  readonly analyser: AnalyserNode;
 }
 
 interface RetainedSource {
@@ -89,6 +92,7 @@ const MIXER_RAMP_SECONDS = 0.005;
 const PLAYBACK_START_LEAD_SECONDS = 0.05;
 const SCHEDULER_LOOKAHEAD_SECONDS = 0.1;
 const SCHEDULER_TICK_MILLISECONDS = 25;
+const METER_FLOOR_DB = -60;
 const dbToGain = (decibels: number): number => 10 ** (decibels / 20);
 const isAutoplayPolicyError = (error: unknown): boolean =>
   error instanceof DOMException && error.name === "NotAllowedError";
@@ -122,6 +126,7 @@ export class AudioEngine {
   private sampler: Sampler | undefined;
   private synth: Synth | undefined;
   private master: GainNode | undefined;
+  private masterAnalyser: AnalyserNode | undefined;
   private project: Project | undefined;
   private projectFingerprint: string = "";
   private projectArrangementEndStep: number = 0;
@@ -142,6 +147,7 @@ export class AudioEngine {
   private readonly pendingSources = new Map<string, RetainedSource>();
   private readonly eventTombstones = new Map<string, EventTombstone>();
   private readonly mixerRamps = new WeakMap<AudioParam, MixerRamp>();
+  private readonly meterSamples = new Float32Array(32);
 
   constructor(platform: AudioEnginePlatform) {
     this.platform = platform;
@@ -207,9 +213,11 @@ export class AudioEngine {
     for (const bus of this.trackBuses.values()) {
       bus.gain.disconnect();
       bus.panner.disconnect();
+      bus.analyser.disconnect();
     }
     this.trackBuses.clear();
     this.master?.disconnect();
+    this.masterAnalyser?.disconnect();
     this.disposal = closeContext && this.context !== undefined && this.context.state !== "closed"
       ? this.context.close()
       : Promise.resolve();
@@ -267,6 +275,7 @@ export class AudioEngine {
       this.stopTrackSources(trackId, this.context.currentTime);
       bus.gain.disconnect();
       bus.panner.disconnect();
+      bus.analyser.disconnect();
       this.trackBuses.delete(trackId);
     }
 
@@ -277,9 +286,12 @@ export class AudioEngine {
       if (bus === undefined) {
         const gain = this.context.createGain();
         const panner = this.context.createStereoPanner();
+        const analyser = this.context.createAnalyser();
+        analyser.fftSize = this.meterSamples.length;
         gain.connect(panner);
-        panner.connect(this.master);
-        bus = { gain, panner };
+        panner.connect(analyser);
+        analyser.connect(this.master);
+        bus = { gain, panner, analyser };
         this.trackBuses.set(track.id, bus);
       }
       this.ramp(bus.gain.gain, targetGain(track, hasSolo));
@@ -293,7 +305,10 @@ export class AudioEngine {
     }
     this.context = this.platform.createContext();
     this.master = this.context.createGain();
-    this.master.connect(this.context.destination);
+    this.masterAnalyser = this.context.createAnalyser();
+    this.masterAnalyser.fftSize = this.meterSamples.length;
+    this.master.connect(this.masterAnalyser);
+    this.masterAnalyser.connect(this.context.destination);
     this.sampler = new Sampler({
       context: this.context,
       kit: BASIC_DRUM_KIT,
@@ -726,6 +741,8 @@ export class AudioEngine {
 
   getSnapshot(): AudioEngineSnapshot {
     const issue = this.lastIssue === undefined ? undefined : { ...this.lastIssue };
+    const trackLevels: Record<string, number> = {};
+    for (const [trackId, bus] of this.trackBuses) trackLevels[trackId] = this.readMeter(bus.analyser);
     return {
       status: this.status,
       positionStep: this.currentPositionStep(),
@@ -735,8 +752,19 @@ export class AudioEngine {
       pendingSources: this.pendingSources.size,
       lateWakeups: this.lateWakeups,
       trackBusCount: this.trackBuses.size,
+      trackLevels,
+      masterLevel: this.masterAnalyser === undefined ? 0 : this.readMeter(this.masterAnalyser),
       ...(issue === undefined ? {} : { lastIssue: issue }),
     };
+  }
+
+  private readMeter(analyser: AnalyserNode): number {
+    if (this.status !== "playing") return 0;
+    analyser.getFloatTimeDomainData(this.meterSamples);
+    let peak = 0;
+    for (const sample of this.meterSamples) peak = Math.max(peak, Math.abs(sample));
+    if (peak <= 10 ** (METER_FLOOR_DB / 20)) return 0;
+    return Math.min(1, (20 * Math.log10(peak) - METER_FLOOR_DB) / -METER_FLOOR_DB);
   }
 
   dispose(): Promise<void> {

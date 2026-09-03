@@ -77,6 +77,15 @@ export class FakeStereoPannerNode extends FakeAudioNode {
   readonly pan = new FakeAudioParam();
 }
 
+export class FakeAnalyserNode extends FakeAudioNode {
+  fftSize = 32;
+  sample = 0;
+
+  getFloatTimeDomainData(array: Float32Array<ArrayBuffer>): void {
+    array.fill(this.sample);
+  }
+}
+
 export class FakeOscillatorNode extends FakeAudioNode {
   type: OscillatorType = "sine";
   readonly frequency = new FakeAudioParam();
@@ -110,6 +119,7 @@ export class FakeAudioContext {
   readonly bufferSources: FakeBufferSource[] = [];
   readonly gains: FakeGainNode[] = [];
   readonly panners: FakeStereoPannerNode[] = [];
+  readonly analysers: FakeAnalyserNode[] = [];
   readonly oscillators: FakeOscillatorNode[] = [];
   readonly filters: FakeBiquadFilterNode[] = [];
   decodeFailures = 0;
@@ -146,6 +156,12 @@ export class FakeAudioContext {
     const value = new FakeStereoPannerNode();
     this.panners.push(value);
     return value as unknown as StereoPannerNode;
+  }
+
+  createAnalyser(): AnalyserNode {
+    const value = new FakeAnalyserNode();
+    this.analysers.push(value);
+    return value as unknown as AnalyserNode;
   }
 
   createOscillator(): OscillatorNode {

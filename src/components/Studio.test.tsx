@@ -120,9 +120,6 @@ function installModelContext(
   return { tools, signals };
 }
 
-const webMCPStatus = (value: "Unsupported" | "Registering" | "Ready" | "Failed") =>
-  screen.getByRole("status", { name: `WebMCP status: ${value}` });
-
 beforeEach(() => {
   HTMLDivElement.prototype.setPointerCapture = vi.fn();
   HTMLDivElement.prototype.hasPointerCapture = () => false;
@@ -194,6 +191,34 @@ describe("Studio persistence bootstrap", () => {
 
     expect(await screen.findByText(DEMO_PROJECT.name)).toBeVisible();
     expect(screen.getByText(/Not saved yet/)).toBeVisible();
+  });
+
+  it("starts a blank project after explicit confirmation", async () => {
+    const indexedDB = await indexedDBWithProject({ ...DEMO_PROJECT, name: "Saved project" });
+    vi.stubGlobal("indexedDB", indexedDB);
+    const user = userEvent.setup();
+    render(<Studio initialProject={DEMO_PROJECT} />);
+    await screen.findByText("Saved project");
+
+    await user.click(screen.getByRole("button", { name: "New project" }));
+    await user.click(screen.getByRole("button", { name: "Start blank project" }));
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "Rename project" })).toHaveTextContent("Untitled"));
+    expect(screen.queryByRole("group", { name: /track$/ })).not.toBeInTheDocument();
+    expect((await new ProjectPersistenceService({ indexedDB, debounceMs: 0 }).load()).status).toBe("empty");
+  });
+
+  it("reloads the bundled demo after explicit confirmation", async () => {
+    vi.stubGlobal("indexedDB", await indexedDBWithProject({ ...DEMO_PROJECT, name: "Saved project" }));
+    const user = userEvent.setup();
+    render(<Studio initialProject={DEMO_PROJECT} />);
+    await screen.findByText("Saved project");
+
+    await user.click(screen.getByRole("button", { name: "New project" }));
+    await user.click(screen.getByRole("button", { name: "Reload demo project" }));
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "Rename project" })).toHaveTextContent(DEMO_PROJECT.name));
+    expect(screen.getByRole("group", { name: "Neon Kit track" })).toBeVisible();
   });
 
   it("blocks a present undefined record until explicit clear", async () => {
@@ -278,7 +303,7 @@ describe("Studio persistence autosave", () => {
         <StoreApiProbe onStore={(value) => { store = value; }} />
       </StudioProvider>,
     );
-    await waitFor(() => expect(webMCPStatus("Ready")).toBeVisible());
+    await waitFor(() => expect(registration.tools).toHaveLength(41));
     expect(store!.getState().audio.snapshot.arrangementEndStep).toBeGreaterThan(0);
 
     const deleteClip = registration.tools.get("delete_clip")!;
@@ -401,6 +426,58 @@ describe("Studio persistence autosave", () => {
 });
 
 describe("Studio", () => {
+  it("edits the project name by clicking the displayed value", async () => {
+    const user = userEvent.setup();
+    renderSession(DEMO_PROJECT);
+
+    await user.click(screen.getByRole("button", { name: "Rename project" }));
+    const input = screen.getByRole("textbox", { name: "Project name" });
+    await user.clear(input);
+    await user.type(input, "Night Drive{Enter}");
+
+    expect(screen.getByRole("button", { name: "Rename project" })).toHaveTextContent("Night Drive");
+    expect(sessionStore!.getState().history.at(-1)?.label).toBe("Rename project");
+  });
+
+  it("edits the tempo by clicking the displayed value", async () => {
+    const user = userEvent.setup();
+    renderSession(DEMO_PROJECT);
+
+    await user.click(screen.getByRole("button", { name: "Edit tempo" }));
+    const input = screen.getByRole("spinbutton", { name: "Project tempo" });
+    await user.clear(input);
+    await user.type(input, "126{Enter}");
+
+    expect(screen.getByRole("button", { name: "Edit tempo" })).toHaveTextContent("126");
+    expect(sessionStore!.getState().history.at(-1)?.label).toBe("Set tempo");
+  });
+
+  it("hides unfinished transport controls and WebMCP status text", () => {
+    renderSession(DEMO_PROJECT);
+
+    expect(screen.queryByRole("button", { name: "Record" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Loop playback" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/WebMCP:/)).not.toBeInTheDocument();
+  });
+
+  it("renders current per-track and master levels in the mixer", async () => {
+    const user = userEvent.setup();
+    renderSession(DEMO_PROJECT);
+    act(() => sessionStore!.setState((state) => ({ audio: {
+      ...state.audio,
+      snapshot: {
+        ...state.audio.snapshot,
+        trackLevels: { drums: 0.35, bass: 0, chords: 0, melody: 0, pad: 0 },
+        masterLevel: 0.9,
+      },
+    } })));
+
+    await user.click(screen.getByRole("button", { name: "Mixer" }));
+
+    expect(screen.getByRole("meter", { name: "Neon Kit level" })).toHaveAttribute("aria-valuenow", "35");
+    expect(screen.getByRole("meter", { name: "Master level" })).toHaveAttribute("aria-valuenow", "90");
+  });
+
   it("plays, pauses, and stops from the transport", async () => {
     const user = userEvent.setup();
     const contexts: FakeAudioContext[] = [];
@@ -429,7 +506,7 @@ describe("Studio", () => {
     vi.stubGlobal("AudioContext", FakeAudioContext);
     vi.stubGlobal("fetch", vi.fn(async () => new Response(new ArrayBuffer(8))));
     renderSession(DEMO_PROJECT);
-    await waitFor(() => expect(webMCPStatus("Ready")).toBeVisible());
+    await waitFor(() => expect(registration.tools).toHaveLength(41));
 
     await act(async () => {
       await registration.tools.get("seek")!.execute(
@@ -875,22 +952,24 @@ describe("Studio", () => {
     expect(contexts[0]!.state).toBe("closed");
   });
 
-  it("shows registering until all browser tools are ready", async () => {
+  it("keeps WebMCP registration status out of the visible header", async () => {
     let finishRegistration!: () => void;
     const pending = new Promise<void>((resolve) => { finishRegistration = resolve; });
-    installModelContext(async () => pending);
+    const registration = installModelContext(async () => pending);
 
     render(<Studio initialProject={DEMO_PROJECT} />);
-    expect(await screen.findByRole("status", { name: "WebMCP status: Registering" })).toHaveTextContent("WebMCP: Registering");
+    await screen.findByRole("region", { name: "Song arrangement" });
+    expect(screen.queryByText(/WebMCP:/)).not.toBeInTheDocument();
     finishRegistration();
 
-    await waitFor(() => expect(webMCPStatus("Ready")).toHaveTextContent("WebMCP: Ready"));
+    await waitFor(() => expect(registration.tools).toHaveLength(41));
   });
 
-  it("shows unsupported when the browser has no model context", async () => {
+  it("keeps unsupported WebMCP status out of the visible header", async () => {
     render(<Studio initialProject={DEMO_PROJECT} />);
 
-    expect(await screen.findByRole("status", { name: "WebMCP status: Unsupported" })).toHaveTextContent("WebMCP: Unsupported");
+    await screen.findByRole("region", { name: "Song arrangement" });
+    expect(screen.queryByText(/WebMCP:/)).not.toBeInTheDocument();
   });
 
   it("shows registration failure without disabling manual editing", async () => {
@@ -898,7 +977,7 @@ describe("Studio", () => {
     const user = userEvent.setup();
     render(<Studio initialProject={DEMO_PROJECT} />);
 
-    await waitFor(() => expect(webMCPStatus("Failed")).toHaveTextContent("WebMCP: Failed"));
+    await screen.findByRole("region", { name: "Song arrangement" });
     await user.click(within(screen.getByRole("group", { name: "Low Orbit track" }))
       .getByRole("button", { name: "Mute Low Orbit" }));
     expect(screen.getByRole("button", { name: "Unmute Low Orbit" })).toHaveAttribute("aria-pressed", "true");
@@ -912,7 +991,7 @@ describe("Studio", () => {
     const user = userEvent.setup();
     render(<Studio initialProject={DEMO_PROJECT} />);
 
-    await waitFor(() => expect(webMCPStatus("Failed")).toHaveTextContent("WebMCP: Failed"));
+    await screen.findByRole("region", { name: "Song arrangement" });
     await user.click(within(screen.getByRole("group", { name: "Low Orbit track" }))
       .getByRole("button", { name: "Mute Low Orbit" }));
     expect(screen.getByRole("button", { name: "Unmute Low Orbit" })).toHaveAttribute("aria-pressed", "true");
@@ -921,7 +1000,7 @@ describe("Studio", () => {
   it("aborts browser tool registrations when the studio unmounts", async () => {
     const registration = installModelContext();
     const view = render(<Studio initialProject={DEMO_PROJECT} />);
-    await waitFor(() => expect(webMCPStatus("Ready")).toHaveTextContent("WebMCP: Ready"));
+    await waitFor(() => expect(registration.tools).toHaveLength(41));
 
     view.unmount();
 
@@ -934,7 +1013,7 @@ describe("Studio", () => {
     const registration = installModelContext();
     const user = userEvent.setup();
     render(<Studio initialProject={DEMO_PROJECT} />);
-    await waitFor(() => expect(webMCPStatus("Ready")).toHaveTextContent("WebMCP: Ready"));
+    await waitFor(() => expect(registration.tools).toHaveLength(41));
 
     await act(async () => {
       await registration.tools.get("rename_track")!.execute(
@@ -955,7 +1034,7 @@ describe("Studio", () => {
   it("publishes a captured atomic pattern and clip creation", async () => {
     const registration = installModelContext();
     render(<Studio initialProject={DEMO_PROJECT} />);
-    await waitFor(() => expect(webMCPStatus("Ready")).toHaveTextContent("WebMCP: Ready"));
+    await waitFor(() => expect(registration.tools).toHaveLength(41));
 
     await act(async () => {
       await registration.tools.get("apply_project_changes")!.execute({
@@ -988,7 +1067,7 @@ describe("Studio", () => {
   it("preserves selection across agent edits until the selected entity is deleted", async () => {
     const registration = installModelContext();
     render(<Studio initialProject={DEMO_PROJECT} />);
-    await waitFor(() => expect(webMCPStatus("Ready")).toHaveTextContent("WebMCP: Ready"));
+    await waitFor(() => expect(registration.tools).toHaveLength(41));
     const selectedClip = within(screen.getByRole("region", { name: "Neon Kit lane" }))
       .getAllByRole("button", { name: "Select Neon beat" })[0]!;
     expect(selectedClip).toHaveAttribute("aria-pressed", "true");
@@ -1230,7 +1309,7 @@ describe("Studio", () => {
     expect(screen.getByText("Select a pattern to view its notes or hits.")).toBeVisible();
   });
 
-  it("renders exact project mixer values in project track order without simulated meters", async () => {
+  it("renders exact project mixer values in project track order with compact control labels", async () => {
     const user = userEvent.setup();
     renderSession({ ...DEMO_PROJECT, name: "Test song", bpm: 96,
       tracks: [...DEMO_PROJECT.tracks].reverse() });
@@ -1242,6 +1321,10 @@ describe("Studio", () => {
       .toEqual(["Night Air channel", "Afterglow channel", "Glasshouse channel", "Low Orbit channel", "Neon Kit channel", "Master channel"]);
     expect(screen.getByRole("slider", { name: "Neon Kit volume" })).toHaveValue("-6");
     expect(screen.getByRole("slider", { name: "Neon Kit pan" })).toHaveValue("0");
+    const bassChannel = screen.getByRole("group", { name: "Low Orbit channel" });
+    expect(within(bassChannel).getByText("Volume")).toBeVisible();
+    expect(within(bassChannel).getByText("Pan")).toBeVisible();
+    expect(within(bassChannel).queryByText("Low Orbit volume")).not.toBeInTheDocument();
     expect(screen.queryByRole("slider", { name: "Master pan" })).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Master output level")).not.toBeInTheDocument();
   });
