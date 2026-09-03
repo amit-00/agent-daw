@@ -282,4 +282,13 @@ describe("PianoRoll", () => {
     expect(screen.getByRole("region", { name: "Piano roll for Melody" })).toBeVisible();
     expect(screen.queryByTitle("Piano-roll editing is not connected yet")).not.toBeInTheDocument();
   });
+
+  it("shows selected-pattern details in one compact header row", () => {
+    render(<StudioProvider initialProject={{ ...EMPTY_PROJECT, patterns: [melody] }} persistenceSession={TEST_PERSISTENCE_SESSION}><PatternEditor /></StudioProvider>);
+
+    const header = screen.getByLabelText("Fixed grid settings").parentElement!;
+    expect(header).toHaveClass("h-8");
+    expect(header).not.toHaveClass("min-h-11");
+    expect(header).toHaveTextContent("SELECTED PATTERN · Melody · 1 bar · 2 notes · Unplaced");
+  });
 });

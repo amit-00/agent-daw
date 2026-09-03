@@ -1470,6 +1470,38 @@ describe("Studio", () => {
     expect(editor).toHaveStyle({ height: "410px" });
   });
 
+  it("floats track-editor controls above its content", () => {
+    renderSession(DEMO_PROJECT);
+
+    const editor = screen.getByRole("complementary", { name: "Track editor" });
+    expect(editor).toHaveClass("overflow-visible");
+    expect(screen.getByRole("separator", { name: "Resize track editor" })).toHaveClass("bg-[#0d0d10]");
+    expect(screen.queryByText("Track editor")).not.toBeInTheDocument();
+    const tabs = screen.getByLabelText("Editor tabs");
+    const close = screen.getByRole("button", { name: "Close track editor" });
+    expect(tabs).toHaveClass("absolute", "-top-8", "right-0", "gap-1");
+    expect(close).toHaveClass("h-8", "w-10", "border-0");
+    expect(close).toHaveTextContent("⌄");
+    expect(close.querySelector("span")).toHaveClass("-translate-y-0.5");
+  });
+
+  it("layers the inactive editor tab behind the active pane tab", async () => {
+    const user = userEvent.setup();
+    renderSession(DEMO_PROJECT);
+
+    const pattern = screen.getByRole("button", { name: "Pattern" });
+    const mixer = screen.getByRole("button", { name: "Mixer" });
+    expect(pattern).toHaveClass("z-[2]", "h-8", "border-0", "bg-[#0d0d10]");
+    expect(pattern).not.toHaveClass("-mb-px");
+    expect(mixer).toHaveClass("z-[1]", "border-0");
+    expect(mixer).not.toHaveClass("translate-y-1");
+    expect(screen.getByRole("button", { name: "Close track editor" })).toHaveClass("rounded-t-md", "border-0");
+
+    await user.click(mixer);
+    expect(mixer).toHaveClass("z-[2]", "border-0", "bg-[#0d0d10]");
+    expect(pattern).toHaveClass("z-[1]", "border-0");
+  });
+
   it("publishes history and undo/redo to the transport", async () => {
     let state: StudioState | undefined;
     function Probe(): null {
