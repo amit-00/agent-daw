@@ -50,15 +50,15 @@ pnpm build
 
 ## Deployment
 
-Cloudflare Pages deploys this static application through its GitHub integration. Create a Pages project for `amit-00/agent-daw` with:
+Cloudflare Workers deploys this static application through its GitHub integration. Create a Workers project for `amit-00/agent-daw` with:
 
 - Production branch: `main`
 - Build command: `pnpm build`
-- Build output directory: `out`
+- Deploy command: `npx wrangler deploy`
 - Environment variable: `NODE_VERSION=24`
 - Environment variable: `PNPM_VERSION=10.17.0`
 
-Cloudflare creates preview deployments for other branches and production deployments for `main`. GitHub Actions runs tests, type checking, linting, and a production build before merge; no Cloudflare API token is stored in GitHub.
+`wrangler.jsonc` deploys the generated `out` directory as Workers Static Assets. Cloudflare builds non-production branches when enabled and deploys `main` to production. GitHub Actions runs tests, type checking, linting, and a production build before merge; no Cloudflare API token is stored in GitHub.
 
 ## Documentation
 
