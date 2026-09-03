@@ -279,7 +279,7 @@ export function PianoRoll({ pattern }: Readonly<{ pattern: SynthPattern }>): Rea
   return <section aria-label={`Piano roll for ${pattern.name}`}
     className="flex h-full min-h-0 flex-col touch-none"
     onKeyDown={handleKeyboard}>
-    <div data-note-inspector className="z-20 flex h-9 min-w-max shrink-0 items-center border-b border-white/10 bg-zinc-950 px-2 text-[9px] text-zinc-500">
+    <div data-note-inspector className="z-20 flex h-9 min-w-max shrink-0 items-center border-b border-white/10 bg-zinc-950 px-2 text-[11px] text-zinc-500">
       {inspected.length > 0 && <div role="status" aria-label="Selected note inspector" className="flex items-center gap-2">
         <strong className="min-w-24 text-zinc-300">{inspected.length} {inspected.length === 1 ? "note" : "notes"} selected</strong>
         <span className="rounded border border-white/10 bg-white/[0.03] px-2 py-1"><b className="mr-1 font-medium text-zinc-600">Pitch</b>{" "}{pitches.size === 1 ? pitchName(inspected[0]!.midiNote) : "Mixed"}</span>
@@ -293,12 +293,12 @@ export function PianoRoll({ pattern }: Readonly<{ pattern: SynthPattern }>): Rea
         <div className="col-start-2 grid border-b border-white/10 bg-white/[0.025]"
           style={{ gridTemplateColumns: `repeat(${steps},minmax(${MIN_STEP_WIDTH}px,1fr))` }}>
           {Array.from({ length: steps }, (_, index) => <span key={index}
-            className="grid place-items-center border-l border-white/[0.04] font-mono text-[9px] text-zinc-600">{index + 1}</span>)}
+            className="grid place-items-center border-l border-white/[0.04] font-mono text-[11px] text-zinc-600">{index + 1}</span>)}
         </div>
         <div className="sticky left-0 z-10 row-start-2 grid border-r border-white/10 bg-zinc-950"
           style={{ gridTemplateRows: `repeat(${PITCHES.length},${PITCH_HEIGHT}px)` }}>
           {PITCHES.map((pitch) => <span key={pitch}
-            className="grid place-items-center border-b border-white/[0.045] font-mono text-[9px] text-zinc-500">{pitchName(pitch)}</span>)}
+            className="grid place-items-center border-b border-white/[0.045] font-mono text-[11px] text-zinc-500">{pitchName(pitch)}</span>)}
         </div>
         <div ref={cells} data-piano-cells role="group" tabIndex={0} aria-label={`Note grid, ${steps} steps`}
           onPointerDown={begin} onPointerMove={move} onPointerUp={finish}

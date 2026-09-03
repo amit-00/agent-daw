@@ -29,7 +29,7 @@ export function Clip({ clip, pattern, bars, onEdit }: Readonly<{
       style={{ left: `${clip.startBar / bars * 100}%`, width: `calc(${pattern.lengthBars * clip.repeatCount / bars * 100}% - 2px)`,
         background: `color-mix(in srgb, color-mix(in srgb, ${color} 88%, white) 80%, transparent)`,
         borderColor: selected ? "rgba(255, 255, 255, 0.85)" : `color-mix(in srgb, ${color}, #fff 8%)` }}>
-      <span className="absolute top-[7px] right-7 left-2 z-[1] block overflow-hidden text-[9px] font-bold tracking-[0.055em] text-ellipsis whitespace-nowrap uppercase">{pattern.name} · ×{clip.repeatCount}</span>
+      <span className="absolute top-[7px] right-7 left-2 z-[1] block overflow-hidden text-[11px] font-bold tracking-[0.055em] text-ellipsis whitespace-nowrap uppercase">{pattern.name} · ×{clip.repeatCount}</span>
       <svg className="absolute inset-x-2 bottom-2 h-16 w-[calc(100%-16px)] opacity-50" aria-hidden="true" viewBox={`0 0 ${steps * clip.repeatCount} ${previewHeight}`} preserveAspectRatio="none">
         <defs>
           <pattern id={marksId} width={steps} height={previewHeight} patternUnits="userSpaceOnUse">
@@ -44,7 +44,7 @@ export function Clip({ clip, pattern, bars, onEdit }: Readonly<{
       </svg>
     </button>
     <button type="button" aria-label={`Edit clip ${pattern.name} at bar ${clip.startBar + 1}`} onClick={() => { selectClip(clip.id); onEdit(); }}
-      className="absolute top-1 z-[2] rounded px-1 py-0.5 text-[9px] text-black/60 hover:bg-white/20 focus-visible:outline-2 focus-visible:outline-violet-300"
+      className="absolute top-1 z-[2] rounded px-1 py-0.5 text-[11px] text-black/60 hover:bg-white/20 focus-visible:outline-2 focus-visible:outline-violet-300"
       style={{ right: `calc(${100 - (clip.startBar + pattern.lengthBars * clip.repeatCount) / bars * 100}% + 5px)` }}>•••</button>
     <button type="button" data-resize-clip-id={clip.id} aria-label={`Resize repeats for ${pattern.name} at bar ${clip.startBar + 1}`}
       title="Drag to repeat the pattern. Activate to edit the repeat count."

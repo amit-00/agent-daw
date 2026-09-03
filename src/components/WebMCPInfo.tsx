@@ -91,14 +91,14 @@ function WebMCPDialog({ status, onClose }: Readonly<{
           {TOOL_GROUPS.map((group) => (
             <section key={group.label} className="rounded-[9px] border border-white/10 bg-black/15 p-3">
               <h3 className="text-[11px] font-semibold text-zinc-300">{group.label}</h3>
-              <code className="mt-1.5 block text-[10px] leading-4 text-violet-300">{group.tools}</code>
-              <p className="mt-1.5 text-[10px] leading-4 text-zinc-400">{group.description}</p>
+              <code className="mt-1.5 block text-[11px] leading-4 text-violet-300">{group.tools}</code>
+              <p className="mt-1.5 text-[11px] leading-4 text-zinc-400">{group.description}</p>
             </section>
           ))}
         </div>
 
         <section className="border-t border-white/10 pt-5" aria-labelledby="webmcp-prompts">
-          <h3 id="webmcp-prompts" className="text-[10px] font-medium text-zinc-400">Try asking</h3>
+          <h3 id="webmcp-prompts" className="text-[11px] font-medium text-zinc-400">Try asking</h3>
           <ul className="mt-2 grid gap-2 text-[11px] text-zinc-400">
             <li className="rounded-lg bg-white/[0.04] px-3 py-2">“Summarize this project and suggest one arrangement improvement.”</li>
             <li className="rounded-lg bg-white/[0.04] px-3 py-2">“Create a two-bar drum pattern and place it at bar 9.”</li>
@@ -106,7 +106,7 @@ function WebMCPDialog({ status, onClose }: Readonly<{
           </ul>
         </section>
 
-        <p className="border-t border-white/10 pt-5 text-[10px] leading-4 text-zinc-400">AgentDAW tools operate on this browser’s local project while the page is open. They do not add cloud sync, analytics, or a server-side copy.</p>
+        <p className="border-t border-white/10 pt-5 text-[11px] leading-4 text-zinc-400">AgentDAW tools operate on this browser’s local project while the page is open. They do not add cloud sync, analytics, or a server-side copy.</p>
       </div>
     </dialog>
   );

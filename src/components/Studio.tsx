@@ -3,10 +3,11 @@
 import { useEffect, useState, type KeyboardEvent, type ReactElement } from "react";
 
 import { ActivityPanel } from "@/components/ActivityPanel";
-import { Transport } from "@/components/Transport";
+import { Transport, type ProjectChoice } from "@/components/Transport";
 import { Arrangement } from "@/components/arrangement/Arrangement";
 import { ArrangementGestures } from "@/components/arrangement/ArrangementGestures";
 import { TrackEditor } from "@/components/editor/TrackEditor";
+import { EMPTY_PROJECT } from "@/data/studio-data";
 import { ProjectPersistenceService, type LoadResult } from "@/persistence/service";
 import type { Project } from "@/project";
 import { StudioProvider, useStudioStore, type StudioPersistenceSession } from "@/stores/studio-provider";
@@ -16,6 +17,7 @@ type StartupState =
   | { readonly kind: "loading" }
   | {
       readonly kind: "ready";
+      readonly sessionKey: string;
       readonly project: Project;
       readonly persistenceSession: StudioPersistenceSession;
     }
@@ -34,6 +36,7 @@ const startupFor = (
   if (result.status === "loaded") {
     return {
       kind: "ready",
+      sessionKey: crypto.randomUUID(),
       project: result.project,
       persistenceSession: {
         service,
@@ -44,6 +47,7 @@ const startupFor = (
   if (result.status === "empty") {
     return {
       kind: "ready",
+      sessionKey: crypto.randomUUID(),
       project: fallback,
       persistenceSession: {
         service,
@@ -56,6 +60,7 @@ const startupFor = (
   }
   return {
     kind: "ready",
+    sessionKey: crypto.randomUUID(),
     project: fallback,
     persistenceSession: {
       service,
@@ -64,7 +69,9 @@ const startupFor = (
   };
 };
 
-export function StudioSession(): ReactElement {
+export function StudioSession({ onStartProject }: Readonly<{
+  onStartProject?: (choice: ProjectChoice) => Promise<string | null>;
+}>): ReactElement {
   const errorMessage = useStudioStore((state) => state.errorMessage);
   const audio = useStudioStore((state) => state.audio);
   const persistence = useStudioStore((state) => state.persistence);
@@ -100,7 +107,7 @@ export function StudioSession(): ReactElement {
     <WebMCPBridge />
     <main className="relative h-dvh min-w-[1180px] overflow-hidden bg-black text-zinc-100" onKeyDown={handleKeyboard}>
       <section className="flex h-dvh min-w-0 flex-col overflow-hidden" id="studio">
-        <Transport />
+        <Transport onStartProject={onStartProject} />
         {errorMessage && <p role="alert" className="border-b border-rose-400/20 bg-rose-950/60 px-4 py-2 text-xs text-rose-200">{errorMessage}</p>}
         {audioMessage && <p role="alert" className="border-b border-amber-400/20 bg-amber-950/60 px-4 py-2 text-xs text-amber-100">Audio: {audioMessage}</p>}
         {persistence.errorMessage && <p role="alert" className="border-b border-rose-400/20 bg-rose-950/60 px-4 py-2 text-xs text-rose-200">Storage: {persistence.errorMessage}</p>}
@@ -125,6 +132,7 @@ export function Studio({ initialProject }: Readonly<{ initialProject: Project }>
         if (active) {
           setStartup({
             kind: "ready",
+            sessionKey: crypto.randomUUID(),
             project: initialProject,
             persistenceSession: {
               service: null,
@@ -159,6 +167,7 @@ export function Studio({ initialProject }: Readonly<{ initialProject: Project }>
       }
       setStartup({
         kind: "ready",
+        sessionKey: crypto.randomUUID(),
         project: initialProject,
         persistenceSession: {
           service: startup.service,
@@ -175,9 +184,32 @@ export function Studio({ initialProject }: Readonly<{ initialProject: Project }>
       </main>
     );
   }
+  const ready = startup;
+  const startProject = async (choice: ProjectChoice): Promise<string | null> => {
+    const service = ready.persistenceSession.service;
+    if (service !== null) {
+      const result = await service.clear();
+      if (result.status === "failed") return result.error.message;
+    }
+    const project = choice === "blank"
+      ? { ...EMPTY_PROJECT, id: crypto.randomUUID() }
+      : structuredClone(initialProject);
+    setStartup({
+      kind: "ready",
+      sessionKey: crypto.randomUUID(),
+      project,
+      persistenceSession: {
+        service,
+        baseline: service === null
+          ? ready.persistenceSession.baseline
+          : { status: "unsaved", updatedAt: null, errorMessage: null },
+      },
+    });
+    return null;
+  };
   return (
-    <StudioProvider initialProject={startup.project} persistenceSession={startup.persistenceSession}>
-      <StudioSession />
+    <StudioProvider key={ready.sessionKey} initialProject={ready.project} persistenceSession={ready.persistenceSession}>
+      <StudioSession onStartProject={startProject} />
     </StudioProvider>
   );
 }

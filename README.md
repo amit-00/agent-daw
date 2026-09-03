@@ -1,91 +1,58 @@
 # AgentDAW
 
-AgentDAW is a browser-based pattern sequencer. The current milestone is a silent,
-in-memory editor: manual UI actions edit one project, mixer, and visible history.
+AgentDAW is a desktop-first pattern workstation that runs entirely in the browser. Build drum and synth patterns, arrange them into a song, mix the result, and export a WAV without a backend.
 
-## Product
+## Features
 
-The current editor supports:
+- Create, rename, reorder, configure, mute, solo, and delete tracks.
+- Program drums in a step grid and notes or chords in a piano roll.
+- Create reusable patterns, place and repeat clips, move them between compatible tracks, or make one placement unique.
+- Play the arrangement through native Web Audio with per-track and master level meters.
+- Mix track volume and pan plus master volume, with undo, redo, and history restore.
+- Save the current project automatically in IndexedDB and start over from a blank project or the bundled demo.
+- Export the arrangement as a WAV file.
+- Expose the same project, editing, playback, history, and export operations through WebMCP when the browser supports it.
 
-- Creating, renaming, reordering, configuring, and deleting tracks.
-- Creating reusable drum or synth patterns and arranging shared clips.
-- Moving clips across compatible tracks, repeating them, and making copies unique.
-- Programming drums on a step grid and notes or chords in a piano roll.
-- Editing track/master mixer values with undo, redo, and confirmed history restore.
-
-Playback, recording, export, autosave, and the WebMCP adapter are not connected
-to this editor yet. Refreshing starts a new demo session and loses edits.
-
-## Challenge scope
-
-The September 3 MVP is desktop-only and uses bundled drum sounds plus curated
-Web Audio synth presets. Microphone recording, audio-clip editing, sound design,
-effects, automation, cloud storage, and an embedded chatbot are deferred until
-the complete compose-to-WAV workflow is stable.
+Project history belongs to the current browser session; the project itself persists locally. Microphone recording, audio clips, effects, automation, cloud sync, and an embedded chat UI are outside the current scope.
 
 ## Architecture
 
 ```text
-Manual UI ─→ Zustand bridge ─→ command service ─→ project state
-                                      │                 │
-                                      └─→ history       └─→ silent editor
-
-Web Audio, IndexedDB, export, and WebMCP foundations/integrations remain separate.
+Manual UI ─┐
+           ├─→ Studio store ─→ ProjectService ─→ project + session history
+WebMCP ────┘        │
+                    ├─→ AudioEngine (Web Audio playback + meters)
+                    ├─→ ProjectPersistenceService (IndexedDB)
+                    └─→ offline WAV renderer
 ```
 
-The planned stack is strict TypeScript, React, Next.js, native Web Audio, and
-IndexedDB with no application backend.
+The app uses strict TypeScript, React, Next.js, Zustand, native Web Audio, and IndexedDB. UI and WebMCP inputs are validated before they reach the shared project operations so both entry points produce the same state and history behavior.
 
 ## Development
 
-Use Node.js 23.6 or newer and pnpm 10.17.0 (pinned in `package.json`).
+Requirements: Node.js 23.6 or newer and pnpm 10.17.0.
 
 ```sh
 pnpm install --frozen-lockfile
 pnpm dev
 ```
 
-Run checks with `pnpm test`, `pnpm typecheck`, `pnpm lint`, and `pnpm build`.
-Commit `pnpm-lock.yaml` when dependencies change; do not generate npm or Yarn
-lockfiles. Each Git worktree needs its own `pnpm install --frozen-lockfile`.
-Dependency build scripts are allowed only for `esbuild` and `unrs-resolver`.
+Open [http://localhost:3000](http://localhost:3000). The editor targets desktop layouts with a minimum width of 1180px.
+
+Run the complete verification suite with:
+
+```sh
+pnpm test
+pnpm typecheck
+pnpm lint
+pnpm build
+```
 
 ## Documentation
 
-- [Project design](docs/design.md) — approved scope, workflows, architecture,
-  data model, WebMCP tools, history, failures, testing, and delivery schedule.
-- [Silent editor design](docs/superpowers/specs/2026-08-31-silent-editor-design.md)
-  — agreed UI interactions, independent patterns, clip-to-track routing, and
-  silent-only scope; supersedes the earlier pattern ownership model.
-- [Silent editor implementation plan](docs/superpowers/plans/2026-08-31-silent-editor.md)
-  — test-first delivery slices, acceptance checks, and the separate persistence
-  integration gate. The silent UI slices are implemented on the feature branch.
-
-## Status
-
-Project-domain and audio-engine foundations are implemented. The editor UI is
-connected to the project command/history service but deliberately does not
-construct the audio runtime or persist sessions.
-
-The audio runtime exports `AudioEngine`, `Sampler`, and `Synth` classes from
-`src/audio/index.ts`. Construct them with `new AudioEngine(platform)`,
-`new Sampler(options)`, or `new Synth(options)`; these replace the previous
-`createAudioEngine`, `createSampler`, and `createSynth` factories with the same
-arguments and public methods. Wrap instance methods when passing callbacks,
-for example `() => engine.stop()`.
-
-## Internal input contract
-
-The project package trusts its typed callers. It does not validate shapes, IDs,
-ranges, references, catalog membership, overlap, or input caps. UI, WebMCP, and
-persistence boundaries must supply valid, JSON-serializable data; only the UI
-boundary is implemented in this milestone. `PROJECT_CAPS` describes product limits
-for those callers; only history and command-cache retention are enforced internally.
-
-`reduceOperation(project, operation)` and `ProjectService` need no sound catalog.
-Dispatch and restore return successful results; execution errors propagate rather
-than becoming structured validation failures. Batches commit only after all
-operations finish. Snapshot detachment, no-op detection, and history controls remain.
+- [Project design](docs/design.md) — product scope, workflows, architecture, data model, WebMCP contract, failure handling, and delivery plan.
+- [Silent editor design](docs/superpowers/specs/2026-08-31-silent-editor-design.md) — the interaction model that established independent patterns and clip routing.
+- [Silent editor implementation plan](docs/superpowers/plans/2026-08-31-silent-editor.md) — the test-first delivery slices used for the editor foundation.
 
 ## License
 

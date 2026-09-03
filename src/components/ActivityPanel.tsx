@@ -18,15 +18,15 @@ export function ActivityPanel(): ReactElement | null {
         <button type="button" aria-label="Close activity" onClick={toggleActivity} className="h-6 w-6 rounded-md border-0 bg-transparent text-[17px] leading-none text-zinc-500 hover:bg-white/[0.06] hover:text-zinc-200 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-300">×</button>
       </div>
       <div className="h-[calc(100%-48px)] overflow-y-auto px-[17px] py-6 [scrollbar-color:#29292e_transparent] [scrollbar-width:thin]">
-        <span className="block text-[9px] font-semibold tracking-[0.15em] text-zinc-600">LATEST CHANGES</span>
+        <span className="block text-[11px] font-semibold tracking-[0.15em] text-zinc-600">LATEST CHANGES</span>
         {history.length === 0 && <p className="mt-4 text-xs text-zinc-500">No changes yet</p>}
         <ol>
           {history.map((entry, index) => (
             <li className={`border-b border-white/5 py-[15px] ${index > historyCursor ? "opacity-40" : ""}`} key={entry.id} aria-current={index === historyCursor ? "step" : undefined}>
               <strong className="block text-[11px] font-medium text-zinc-300">{entry.label}</strong>
-              <small className="mt-[5px] block text-[10px] text-zinc-600">{entry.source === "manual" ? "You" : "Agent"} · {new Date(entry.createdAt).toLocaleTimeString()} {index > historyCursor ? "· Undone" : index === historyCursor ? "· Current" : ""}</small>
+              <small className="mt-[5px] block text-xs text-zinc-600">{entry.source === "manual" ? "You" : "Agent"} · {new Date(entry.createdAt).toLocaleTimeString()} {index > historyCursor ? "· Undone" : index === historyCursor ? "· Current" : ""}</small>
               <button type="button" aria-label={`Restore ${entry.label}`} onClick={() => setRestoreId(entry.id)}
-                className="mt-2 text-[9px] text-zinc-500 hover:text-zinc-200 focus-visible:outline-2 focus-visible:outline-violet-300">Restore</button>
+                className="mt-2 text-[11px] text-zinc-500 hover:text-zinc-200 focus-visible:outline-2 focus-visible:outline-violet-300">Restore</button>
             </li>
           )).reverse()}
         </ol>
