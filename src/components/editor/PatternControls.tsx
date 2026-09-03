@@ -2,9 +2,9 @@
 
 import { useState, type ReactElement } from "react";
 
+import { SOUND_CATALOG } from "@/audio/catalog";
 import { EditorDialog } from "@/components/editor/EditorDialog";
-import type { ArrangementClip, Pattern, PatternLengthBars, TrackKind } from "@/project";
-import { getDrumKitProblem } from "@/stores/studio-edits";
+import { ProjectValidationError, validateOperation, type ArrangementClip, type Pattern, type PatternLengthBars, type Project, type Track, type TrackKind } from "@/project";
 import { useStudioStore } from "@/stores/studio-provider";
 
 export function AddPattern({ onClose }: Readonly<{ onClose: () => void }>): ReactElement {
@@ -29,12 +29,23 @@ export function AddPattern({ onClose }: Readonly<{ onClose: () => void }>): Reac
   </EditorDialog>;
 }
 
+function isCompatible(project: Project, pattern: Pattern, track: Track): boolean {
+  try {
+    validateOperation({ ...project, arrangement: [] }, { type: "arrangement.place", clip: {
+      id: "compatibility-preview", patternId: pattern.id, trackId: track.id, startBar: 0, repeatCount: 1,
+    } }, SOUND_CATALOG);
+    return true;
+  } catch (error) {
+    if (error instanceof ProjectValidationError) return false;
+    throw error;
+  }
+}
+
 function DestinationTrack({ pattern, trackId, onChange }: Readonly<{
   pattern: Pattern; trackId: string; onChange: (trackId: string) => void;
 }>): ReactElement {
-  const tracks = useStudioStore((state) => state.project.tracks);
-  const compatible = tracks.filter((track) => track.kind === pattern.kind &&
-    (pattern.kind !== "drum" || getDrumKitProblem(track, pattern.events.map((hit) => hit.soundId)) === null));
+  const project = useStudioStore((state) => state.project);
+  const compatible = project.tracks.filter((track) => isCompatible(project, pattern, track));
   return <label className="block text-xs text-zinc-400">Destination track
     <select required value={trackId} onChange={(event) => onChange(event.target.value)}>
       <option value="">Choose a compatible track</option>

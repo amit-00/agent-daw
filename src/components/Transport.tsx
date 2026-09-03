@@ -13,7 +13,7 @@ const formatPosition = (step: number, bpm: number): string => {
 };
 
 export function Transport(): ReactElement {
-  const { project, audio, persistence, playPause, stopPlayback, history, historyCursor, undo, redo, activityOpen, toggleActivity } = useStudioStore((state) => state);
+  const { project, audio, persistence, playPause, stopPlayback, history, historyCursor, undo, redo, activityOpen, toggleActivity, webMCPStatus } = useStudioStore((state) => state);
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
 
@@ -22,7 +22,7 @@ export function Transport(): ReactElement {
     setExporting(true);
     setExportError(null);
     try {
-      await downloadProjectWav(structuredClone(project));
+      await downloadProjectWav(structuredClone(project), {});
     } catch (error) {
       setExportError(error instanceof WavExportError
         ? error.message
@@ -43,6 +43,7 @@ export function Transport(): ReactElement {
         : audio.snapshot.lastIssue?.message ?? "Audio ready";
   const persistenceSubtitle = persistence.status === "saving" ? "Saving" : persistence.status === "saved" ? "Saved locally; Activity/history is session-only"
     : persistence.status === "memory-only" ? "In memory" : persistence.status === "failed" ? "Storage unavailable" : "Not saved yet";
+  const webMCPStatusLabel = webMCPStatus[0]!.toUpperCase() + webMCPStatus.slice(1);
   return (
     <header className="relative z-[4] grid min-h-[58px] grid-cols-[1fr_auto_1fr] items-center gap-4 border-b border-white/10 bg-zinc-950/95 px-3.5 backdrop-blur-[18px]" role="banner">
       <div className="flex min-w-0 items-center gap-2 rounded-[7px] px-2 py-[7px] text-xs text-zinc-300">
@@ -50,6 +51,7 @@ export function Transport(): ReactElement {
         <div className="min-w-0">
           <span className="block truncate">{project.name}</span>
           <small className="mt-0.5 block text-[9px] text-zinc-500">{audioSubtitle} · {persistenceSubtitle}</small>
+          <span role="status" aria-label={`WebMCP status: ${webMCPStatusLabel}`} className="mt-0.5 block text-[9px] text-zinc-500">WebMCP: {webMCPStatusLabel}</span>
         </div>
       </div>
 

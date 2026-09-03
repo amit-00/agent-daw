@@ -3,11 +3,26 @@
 import { useRef, useState, type PointerEvent, type ReactElement, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
+import { SOUND_CATALOG } from "@/audio/catalog";
 import { ARRANGEMENT_BUFFER_BARS } from "@/components/arrangement/Arrangement";
 import { getTrackColor } from "@/data/studio-data";
-import { PROJECT_CAPS, type ArrangementClip } from "@/project";
-import { getPlacementProblem } from "@/stores/studio-edits";
+import { PROJECT_CAPS, ProjectValidationError, validateOperation, type ArrangementClip, type Operation, type Project } from "@/project";
 import { useStudioStore } from "@/stores/studio-provider";
+
+function getPlacementProblem(project: Project, clip: ArrangementClip): string | null {
+  const operation: Operation = project.arrangement.some((item) => item.id === clip.id)
+    ? { type: "arrangement.update", clipId: clip.id, changes: {
+        patternId: clip.patternId, trackId: clip.trackId, startBar: clip.startBar, repeatCount: clip.repeatCount,
+      } }
+    : { type: "arrangement.place", clip };
+  try {
+    validateOperation(project, operation, SOUND_CATALOG);
+    return null;
+  } catch (error) {
+    if (error instanceof ProjectValidationError) return error.message;
+    throw error;
+  }
+}
 
 interface PlacementPreview {
   readonly clip: ArrangementClip;

@@ -94,6 +94,7 @@ interface CommandMetadata {
   readonly id: string;
   readonly source: CommandSource;
   readonly label: string;
+  readonly toolName?: string;
 }
 
 export type Command = CommandMetadata & (
@@ -111,6 +112,7 @@ export interface HistoryEntry {
   readonly commandId: string;
   readonly source: CommandSource;
   readonly label: string;
+  readonly toolName?: string;
   readonly createdAt: number;
   readonly action: HistoryAction;
   readonly before: Project;
@@ -127,9 +129,17 @@ export interface DispatchResult {
   readonly changes: ChangeSummary;
 }
 
+export interface HistoryControlCommand {
+  readonly id: string;
+  readonly kind: "undo" | "redo";
+}
+
 export interface HistoryControlSuccess {
   readonly ok: true;
+  readonly changed: true;
+  readonly deduplicated: boolean;
   readonly project: Project;
+  readonly changes: ChangeSummary;
 }
 
 export interface HistoryControlUnavailable {
@@ -146,6 +156,7 @@ export interface RestoreCommand {
   readonly id: string;
   readonly source: CommandSource;
   readonly label: string;
+  readonly toolName?: string;
   readonly targetEntryId: string;
 }
 

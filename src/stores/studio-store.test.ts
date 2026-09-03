@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { StoreApi } from "zustand/vanilla";
 
 import { AudioEngine } from "@/audio";
@@ -33,6 +33,8 @@ const createTestStore = (project: Project = EMPTY_PROJECT): StoreApi<StudioState
     status: "unsaved", updatedAt: null, errorMessage: null,
   });
 };
+
+afterEach(() => vi.restoreAllMocks());
 
 describe("studio session", () => {
   it("completes the silent composition workflow through one project history", () => {
@@ -291,7 +293,7 @@ describe("studio session", () => {
     });
     store.getState().setDrumCells("neon", [{ soundId: "kick", startStep: 1, active: true }]);
     expect(store.getState().history).toHaveLength(0);
-    expect(store.getState().errorMessage).toMatch(/unavailable/i);
+    expect(store.getState().errorMessage).toBe("The drum kit on Neon Kit is unavailable. Choose an available kit.");
     expect(DEMO_PROJECT.patterns[0]?.events).toHaveLength(10);
   });
 
@@ -495,7 +497,7 @@ describe("studio session", () => {
       arrangement: [...DEMO_PROJECT.arrangement, { id: "other-clip", trackId: "drums", patternId: "other-beat", startBar: 8, repeatCount: 1 }],
     });
     store.getState().setTrackPreset("drums", "kit.basic");
-    expect(store.getState().errorMessage).toMatch(/clap/);
+    expect(store.getState().errorMessage).toBe("Neon Kit's kit lacks clap. Choose a compatible kit or remove that sound.");
     expect(store.getState().history).toHaveLength(0);
     store.getState().dispatch({ id: "remove-clip", label: "Remove clip", source: "manual", kind: "operation",
       operation: { type: "arrangement.delete", clipId: "other-clip" } });
@@ -691,6 +693,35 @@ describe("studio session", () => {
     expect(store.getState().project.masterVolumeDb).toBe(-6);
   });
 
+  it("does not stop playback when history controls or restores are replayed", async () => {
+    const harness = createAudioHarness();
+    harness.engine.replaceProject(DEMO_PROJECT);
+    const store = createStudioStore(DEMO_PROJECT, () => harness.engine, {
+      status: "unsaved", updatedAt: null, errorMessage: null,
+    });
+    store.getState().setMasterVolume(-6);
+    const restoreEntryId = store.getState().history.at(-1)!.id;
+    store.getState().setMasterVolume(-3);
+
+    store.getState().executeHistoryControl({ id: "agent-undo", kind: "undo" });
+    await store.getState().playPause();
+    expect(store.getState().executeHistoryControl({ id: "agent-undo", kind: "undo" }))
+      .toMatchObject({ ok: true, deduplicated: true });
+    expect(harness.engine.getSnapshot().status).toBe("playing");
+
+    store.getState().stopPlayback();
+    store.getState().executeRestore({
+      id: "agent-restore", source: "agent", label: "Restore project",
+      toolName: "restore_history", targetEntryId: restoreEntryId,
+    });
+    await store.getState().playPause();
+    expect(store.getState().executeRestore({
+      id: "agent-restore", source: "agent", label: "Restore project",
+      toolName: "restore_history", targetEntryId: restoreEntryId,
+    }).deduplicated).toBe(true);
+    expect(harness.engine.getSnapshot().status).toBe("playing");
+  });
+
   it("lets only the latest save token publish durability", () => {
     const store = createTestStore();
     const earlier = store.getState().beginPersistenceSave();
@@ -723,5 +754,118 @@ describe("studio session", () => {
     expect(store.getState().persistence).toMatchObject({
       status: "saved", updatedAt: 30, errorMessage: null,
     });
+  });
+
+  it("preserves friendly manual preflight errors before shared validation", () => {
+    const store = createTestStore(DEMO_PROJECT);
+    store.getState().selectClip("bass-a");
+    const before = store.getState();
+
+    store.getState().setTrackVolume("bass", 7);
+    expect(store.getState().errorMessage).toBe("Choose a track volume from -60 to 6 dB.");
+    store.getState().setPatternLength("glasshouse", 1);
+    expect(store.getState().errorMessage).toBe("Shorten or remove events beyond step 16 before reducing this pattern's length.");
+    store.getState().updateClip("bass-a", { startBar: 1 });
+    expect(store.getState().errorMessage).toBe("This would overlap Low Orbit phrase on Low Orbit. Choose a free bar.");
+    store.getState().setDrumCells("neon", [{ soundId: "clap", startStep: 0, active: true }]);
+    expect(store.getState().errorMessage).toBe("clap is unavailable. Choose a sound from the drum catalog.");
+    expect(store.getState().addSynthNote("glasshouse", 97, 0, 1)).toBeNull();
+    expect(store.getState().errorMessage).toBe("Choose a whole MIDI pitch from 24 to 96.");
+    expect(store.getState().createTrack("drum", "synth.bass")).toBeNull();
+    expect(store.getState().errorMessage).toBe("Choose an available drum instrument.");
+
+    expect(store.getState()).toMatchObject({
+      project: before.project,
+      history: before.history,
+      revision: before.revision,
+      selectedClipId: "bass-a",
+      selectedPatternId: "orbit",
+      selectedTrackId: "bass",
+    });
+  });
+
+  it("publishes a valid manual batch as one revision and one history entry", () => {
+    const store = createTestStore({ ...EMPTY_PROJECT, tracks: [DEMO_PROJECT.tracks[0]!] });
+
+    const clipId = store.getState().createPatternAt("drums", 0);
+
+    expect(clipId).toBeTruthy();
+    expect(store.getState()).toMatchObject({ revision: 1, historyCursor: 0, selectedClipId: clipId });
+    expect(store.getState().history).toHaveLength(1);
+    expect(store.getState().history[0]?.action.kind).toBe("batch");
+    expect(store.getState().project.patterns).toHaveLength(1);
+    expect(store.getState().project.arrangement).toHaveLength(1);
+  });
+
+  it("uses fresh command IDs for the no-argument undo and redo wrappers", () => {
+    vi.spyOn(crypto, "randomUUID")
+      .mockReturnValueOnce("history-entry-id")
+      .mockReturnValueOnce("manual-undo-id")
+      .mockReturnValueOnce("manual-redo-id");
+    const store = createTestStore(EMPTY_PROJECT);
+    store.getState().dispatch({
+      id: "rename", source: "manual", label: "Rename project", kind: "operation",
+      operation: { type: "project.update", changes: { name: "Changed" } },
+    });
+
+    store.getState().undo();
+    expect(store.getState().project.name).toBe("Untitled");
+    expect(store.getState().replayHistoryControl("manual-undo-id")).toMatchObject({ ok: true, deduplicated: true });
+    store.getState().redo();
+    expect(store.getState().project.name).toBe("Changed");
+    expect(store.getState().replayHistoryControl("manual-redo-id")).toMatchObject({ ok: true, deduplicated: true });
+  });
+
+  it("deduplicates explicit history controls with a stable command ID", () => {
+    const store = createTestStore(EMPTY_PROJECT);
+    store.getState().dispatch({
+      id: "rename", source: "manual", label: "Rename project", kind: "operation",
+      operation: { type: "project.update", changes: { name: "Changed" } },
+    });
+
+    const first = store.getState().executeHistoryControl({ id: "stable-undo", kind: "undo" });
+    const revision = store.getState().revision;
+    const replay = store.getState().executeHistoryControl({ id: "stable-undo", kind: "undo" });
+
+    expect(first).toMatchObject({ ok: true, deduplicated: false });
+    expect(replay).toMatchObject({ ok: true, deduplicated: true });
+    expect(store.getState()).toMatchObject({ revision, historyCursor: -1 });
+  });
+
+  it("executes attributed restores and exposes revision and replay state", () => {
+    const store = createTestStore(EMPTY_PROJECT);
+    store.getState().dispatch({
+      id: "first", source: "manual", label: "First rename", kind: "operation",
+      operation: { type: "project.update", changes: { name: "First" } },
+    });
+    const targetEntryId = store.getState().history[0]!.id;
+    store.getState().dispatch({
+      id: "second", source: "manual", label: "Second rename", kind: "operation",
+      operation: { type: "project.update", changes: { name: "Second" } },
+    });
+
+    const result = store.getState().executeRestore({
+      id: "agent-restore", source: "agent", label: "Restore first version",
+      toolName: "restore_project", targetEntryId,
+    });
+
+    expect(result).toMatchObject({ changed: true, deduplicated: false });
+    expect(store.getState()).toMatchObject({ revision: 3, project: { name: "First" } });
+    expect(store.getState().history.at(-1)).toMatchObject({
+      commandId: "agent-restore", source: "agent", label: "Restore first version", toolName: "restore_project",
+    });
+    expect(store.getState().replayDispatch("agent-restore")?.deduplicated).toBe(true);
+  });
+
+  it("tracks WebMCP registration status outside project state", () => {
+    const store = createTestStore(DEMO_PROJECT);
+    const before = store.getState();
+
+    expect(before.webMCPStatus).toBe("unsupported");
+    store.getState().setWebMCPStatus("registering");
+
+    expect(store.getState()).toMatchObject({ webMCPStatus: "registering", revision: before.revision });
+    expect(store.getState().project).toBe(before.project);
+    expect(store.getState().history).toBe(before.history);
   });
 });
