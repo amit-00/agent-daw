@@ -140,6 +140,15 @@ const projectWithLead = (): Project => ({
   arrangement: [],
 });
 
+test("reduceOperation rejects an unsupported operation type", () => {
+  const operation = { type: "unsupported" } as unknown as Operation;
+
+  assert.throws(
+    () => reduceOperation(blankProject(), operation),
+    new Error("Unsupported project operation: unsupported"),
+  );
+});
+
 test("trusted initial project data is preserved without domain validation", () => {
   const initialProject: Project = { ...blankProject(), id: "project", bpm: 300, name: "" };
   const service = createTestService(initialProject);

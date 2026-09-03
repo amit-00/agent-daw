@@ -301,4 +301,7 @@ export function reduceOperation(project: Project, operation: Operation): Reducti
       return { project: candidate, changes: withChanges({ deleted: { synthNoteIds: operation.noteIds } }) };
     }
   }
+  const unreachable: never = operation;
+  const type = (unreachable as { readonly type?: unknown }).type;
+  throw new Error(`Unsupported project operation: ${String(type)}`);
 }
