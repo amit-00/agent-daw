@@ -5,6 +5,7 @@ import { useState, type KeyboardEvent, type ReactElement } from "react";
 import { downloadProjectWav, WavExportError } from "@/audio";
 import { EditorDialog } from "@/components/editor/EditorDialog";
 import { Icon, TransportIcon } from "@/components/icons";
+import { WebMCPInfo } from "@/components/WebMCPInfo";
 import { useStudioStore } from "@/stores/studio-provider";
 
 export type ProjectChoice = "blank" | "demo";
@@ -151,6 +152,7 @@ export function Transport({ onStartProject }: Readonly<{
         {exporting && <span className="sr-only" role="status">Exporting WAV</span>}
         {exportError && <p className="absolute right-3 top-full mt-2 rounded-md border border-rose-400/20 bg-rose-950/95 px-3 py-2 text-xs text-rose-200" role="alert">{exportError}</p>}
         <button type="button" aria-label={activityOpen ? "Hide activity" : "Show activity"} aria-pressed={activityOpen} onClick={toggleActivity} className={`flex items-center gap-[7px] rounded-[7px] border border-white/15 px-3 py-2 text-xs hover:border-white/20 hover:bg-white/[0.09] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-300 ${activityOpen ? "bg-white/[0.08] text-zinc-200" : "bg-transparent text-zinc-500"}`}><Icon name="activity" /> Activity</button>
+        <WebMCPInfo />
       </div>
       {newProjectOpen && <EditorDialog label="Start a new project" onClose={() => setNewProjectOpen(false)}>
         <p className="text-sm text-zinc-400">This replaces the current project and clears its session history.</p>

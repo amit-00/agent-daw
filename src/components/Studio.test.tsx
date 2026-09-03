@@ -452,12 +452,13 @@ describe("Studio", () => {
     expect(sessionStore!.getState().history.at(-1)?.label).toBe("Set tempo");
   });
 
-  it("hides unfinished transport controls and WebMCP status text", () => {
+  it("hides unfinished transport controls and keeps WebMCP status visually quiet", () => {
     renderSession(DEMO_PROJECT);
 
     expect(screen.queryByRole("button", { name: "Record" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Loop playback" })).not.toBeInTheDocument();
-    expect(screen.queryByText(/WebMCP:/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "WebMCP" })).toBeVisible();
+    expect(screen.getByRole("status", { name: "WebMCP status: Unsupported" })).toHaveClass("sr-only");
   });
 
   it("renders current per-track and master levels in the mixer", async () => {
@@ -959,7 +960,8 @@ describe("Studio", () => {
 
     render(<Studio initialProject={DEMO_PROJECT} />);
     await screen.findByRole("region", { name: "Song arrangement" });
-    expect(screen.queryByText(/WebMCP:/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "WebMCP" })).toBeVisible();
+    expect(screen.getByRole("status", { name: "WebMCP status: Registering" })).toHaveClass("sr-only");
     finishRegistration();
 
     await waitFor(() => expect(registration.tools).toHaveLength(41));
@@ -969,7 +971,8 @@ describe("Studio", () => {
     render(<Studio initialProject={DEMO_PROJECT} />);
 
     await screen.findByRole("region", { name: "Song arrangement" });
-    expect(screen.queryByText(/WebMCP:/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "WebMCP" })).toBeVisible();
+    expect(screen.getByRole("status", { name: "WebMCP status: Unsupported" })).toHaveClass("sr-only");
   });
 
   it("shows registration failure without disabling manual editing", async () => {
@@ -1393,6 +1396,39 @@ describe("Studio", () => {
     expect(screen.getByRole("region", { name: "Mixer channels" })).toBeVisible();
     expect(context).not.toHaveBeenCalled();
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("opens WebMCP details from the badge after Activity", async () => {
+    const user = userEvent.setup();
+    renderSession(DEMO_PROJECT);
+    const banner = screen.getByRole("banner");
+    const activity = within(banner).getByRole("button", { name: "Show activity" });
+    const webMCP = within(banner).getByRole("button", { name: "WebMCP" });
+
+    expect(activity.nextElementSibling).toBe(webMCP);
+    expect(screen.queryByRole("dialog", { name: "WebMCP" })).not.toBeInTheDocument();
+
+    await user.click(webMCP);
+
+    const dialog = screen.getByRole("dialog", { name: "WebMCP" });
+    expect(within(dialog).getByRole("heading", { name: "What is WebMCP?" })).toBeVisible();
+    expect(within(dialog).getByRole("status", { name: "WebMCP status: Unsupported" })).toBeVisible();
+    expect(within(dialog).getByRole("heading", { name: "Example tools" })).toBeVisible();
+    expect(within(dialog).getByText("Try asking")).toBeVisible();
+
+    await user.click(within(dialog).getByRole("button", { name: "Close WebMCP details" }));
+    expect(screen.queryByRole("dialog", { name: "WebMCP" })).not.toBeInTheDocument();
+  });
+
+  it("dismisses WebMCP details with Escape", async () => {
+    const user = userEvent.setup();
+    renderSession(DEMO_PROJECT);
+    await user.click(screen.getByRole("button", { name: "WebMCP" }));
+
+    const dialog = screen.getByRole("dialog", { name: "WebMCP" });
+    fireEvent(dialog, new Event("cancel", { cancelable: true }));
+
+    expect(screen.queryByRole("dialog", { name: "WebMCP" })).not.toBeInTheDocument();
   });
 
   it("resizes, closes, and restores the track editor", async () => {
