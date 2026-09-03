@@ -48,6 +48,18 @@ pnpm lint
 pnpm build
 ```
 
+## Deployment
+
+Cloudflare Pages deploys this static application through its GitHub integration. Create a Pages project for `amit-00/agent-daw` with:
+
+- Production branch: `main`
+- Build command: `pnpm build`
+- Build output directory: `out`
+- Environment variable: `NODE_VERSION=24`
+- Environment variable: `PNPM_VERSION=10.17.0`
+
+Cloudflare creates preview deployments for other branches and production deployments for `main`. GitHub Actions runs tests, type checking, linting, and a production build before merge; no Cloudflare API token is stored in GitHub.
+
 ## Documentation
 
 - [Project design](docs/design.md) — product scope, workflows, architecture, data model, WebMCP contract, failure handling, and delivery plan.
