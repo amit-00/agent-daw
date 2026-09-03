@@ -429,18 +429,14 @@ test("track deletion finalizes patterns that lose their last placement", () => {
 });
 
 test("clip pattern reassignment finalizes the previously placed pattern", () => {
-  const initial = projectWithBasicDrums();
-  const service = createTestService({
-    ...initial,
-    patterns: [
-      ...initial.patterns,
-      { id: id(30), name: "Fill", kind: "drum", lengthBars: 1, events: [] },
-    ],
-  });
+  const service = createTestService(projectWithBasicDrums());
 
   const result = service.dispatch({
-    id: "replace-pattern", source: "manual", label: "Replace clip pattern", kind: "operation",
-    operation: { type: "arrangement.update", clipId: id(12), changes: { patternId: id(30) } },
+    id: "replace-pattern", source: "manual", label: "Replace clip pattern", kind: "batch",
+    operations: [
+      { type: "pattern.create", pattern: { id: id(30), name: "Fill", kind: "drum", lengthBars: 1, events: [] } },
+      { type: "arrangement.update", clipId: id(12), changes: { patternId: id(30) } },
+    ],
   });
 
   assert.deepEqual(result.project.patterns.map((pattern) => pattern.id), [id(30)]);

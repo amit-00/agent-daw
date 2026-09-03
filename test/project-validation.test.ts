@@ -270,6 +270,18 @@ test("validateOperations enforces the placement invariant after a transaction", 
     } },
   ], catalog);
   assert.equal(result.project.patterns.at(-1)?.id, "beat");
+
+  assert.throws(
+    () => validateOperations(project({
+      tracks: [drumTrack()],
+      patterns: [drumPattern()],
+      arrangement: [{ id: "original", patternId: "beat", trackId: "drums", startBar: 0, repeatCount: 1 }],
+    }), [{
+      type: "pattern.duplicate", patternId: "beat", duplicatePatternId: "copy", duplicateName: "Copy", duplicateEventIds: ["copy-kick"],
+    }], catalog),
+    (error: unknown) => error instanceof ProjectValidationError
+      && error.code === "OUT_OF_RANGE" && error.field === "placement",
+  );
 });
 
 test("arrangement validation preserves the manual placement boundaries", () => {
