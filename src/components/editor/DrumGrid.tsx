@@ -88,7 +88,7 @@ export function DrumGrid({ pattern }: Readonly<{ pattern: DrumPattern }>): React
   }
 
   return <section ref={grid} aria-label={`Drum grid for ${pattern.name}`}
-    className="grid h-full min-h-[160px] grid-cols-[38px_1fr] grid-rows-[20px_1fr] touch-none"
+    className="grid h-[164px] grid-cols-[38px_1fr] grid-rows-[20px_1fr] touch-none"
     style={{ minWidth: 38 + steps * MIN_STEP_WIDTH }}
     onPointerMove={(event) => { if (event.pointerId === strokeRef.current?.pointerId) visit(cellAt(event.clientX, event.clientY)); }}
     onPointerUp={finish}
