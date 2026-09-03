@@ -4,6 +4,7 @@ import { useState, type ReactElement } from "react";
 
 import { downloadProjectWav, WavExportError } from "@/audio";
 import { Icon, TransportIcon } from "@/components/icons";
+import { WebMCPInfo } from "@/components/WebMCPInfo";
 import { useStudioStore } from "@/stores/studio-provider";
 
 const formatPosition = (step: number, bpm: number): string => {
@@ -13,7 +14,7 @@ const formatPosition = (step: number, bpm: number): string => {
 };
 
 export function Transport(): ReactElement {
-  const { project, audio, persistence, playPause, stopPlayback, history, historyCursor, undo, redo, activityOpen, toggleActivity, webMCPStatus } = useStudioStore((state) => state);
+  const { project, audio, persistence, playPause, stopPlayback, history, historyCursor, undo, redo, activityOpen, toggleActivity } = useStudioStore((state) => state);
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
 
@@ -43,7 +44,6 @@ export function Transport(): ReactElement {
         : audio.snapshot.lastIssue?.message ?? "Audio ready";
   const persistenceSubtitle = persistence.status === "saving" ? "Saving" : persistence.status === "saved" ? "Saved locally; Activity/history is session-only"
     : persistence.status === "memory-only" ? "In memory" : persistence.status === "failed" ? "Storage unavailable" : "Not saved yet";
-  const webMCPStatusLabel = webMCPStatus[0]!.toUpperCase() + webMCPStatus.slice(1);
   return (
     <header className="relative z-[4] grid min-h-[58px] grid-cols-[1fr_auto_1fr] items-center gap-4 border-b border-white/10 bg-zinc-950/95 px-3.5 backdrop-blur-[18px]" role="banner">
       <div className="flex min-w-0 items-center gap-2 rounded-[7px] px-2 py-[7px] text-xs text-zinc-300">
@@ -51,7 +51,6 @@ export function Transport(): ReactElement {
         <div className="min-w-0">
           <span className="block truncate">{project.name}</span>
           <small className="mt-0.5 block text-[9px] text-zinc-500">{audioSubtitle} · {persistenceSubtitle}</small>
-          <span role="status" aria-label={`WebMCP status: ${webMCPStatusLabel}`} className="mt-0.5 block text-[9px] text-zinc-500">WebMCP: {webMCPStatusLabel}</span>
         </div>
       </div>
 
@@ -92,6 +91,7 @@ export function Transport(): ReactElement {
         {exporting && <span className="sr-only" role="status">Exporting WAV</span>}
         {exportError && <p className="absolute right-3 top-full mt-2 rounded-md border border-rose-400/20 bg-rose-950/95 px-3 py-2 text-xs text-rose-200" role="alert">{exportError}</p>}
         <button type="button" aria-label={activityOpen ? "Hide activity" : "Show activity"} aria-pressed={activityOpen} onClick={toggleActivity} className={`flex items-center gap-[7px] rounded-[7px] border border-white/15 px-3 py-2 text-xs hover:border-white/20 hover:bg-white/[0.09] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-300 ${activityOpen ? "bg-white/[0.08] text-zinc-200" : "bg-transparent text-zinc-500"}`}><Icon name="activity" /> Activity</button>
+        <WebMCPInfo />
       </div>
     </header>
   );
