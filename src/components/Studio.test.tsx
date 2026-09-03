@@ -201,6 +201,9 @@ describe("Studio persistence bootstrap", () => {
     await screen.findByText("Saved project");
 
     await user.click(screen.getByRole("button", { name: "New project" }));
+    expect(screen.getByRole("dialog", { name: "Start a new project" })).toHaveClass(
+      "bg-zinc-950/75", "backdrop-blur-2xl", "shadow-[0_24px_80px_rgba(0,0,0,0.5)]",
+    );
     await user.click(screen.getByRole("button", { name: "Start blank project" }));
 
     await waitFor(() => expect(screen.getByRole("button", { name: "Rename project" })).toHaveTextContent("Untitled"));
@@ -578,12 +581,12 @@ describe("Studio", () => {
     expect(screen.getByLabelText(message)).toBeVisible();
   });
 
-  it("states that saved project history remains session-only", async () => {
+  it("reports a saved local project", async () => {
     vi.stubGlobal("indexedDB", await indexedDBWithProject(DEMO_PROJECT));
 
     render(<Studio initialProject={EMPTY_PROJECT} />);
 
-    expect(await screen.findByText(/Saved locally; Activity\/history is session-only/)).toBeVisible();
+    expect(await screen.findByText(/Saved locally$/)).toBeVisible();
   });
 
   it("carries rounded playback seconds into the next minute", () => {
@@ -1242,6 +1245,9 @@ describe("Studio", () => {
     renderSession(EMPTY_PROJECT);
     await user.click(screen.getByRole("button", { name: "Add track" }));
     const selector = screen.getByRole("combobox", { name: "Instrument" });
+    expect(screen.getByRole("dialog", { name: "Add track" })).toHaveClass(
+      "[&_select]:appearance-none", "[&_select]:bg-[right_0.5rem_center]", "[&_select]:pr-8",
+    );
     await user.selectOptions(selector, "synth.pad");
     await user.selectOptions(selector, instrumentId);
     expect(screen.queryByRole("group", { name: "Track type" })).not.toBeInTheDocument();

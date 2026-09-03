@@ -57,10 +57,16 @@ it("starts with sixteen fixed-width bars", () => {
 it("renders a draggable playhead in timeline content coordinates", () => {
   const arrangement = screen.getByRole("region", { name: "Song arrangement" });
   const playhead = screen.getByRole("slider", { name: "Playhead" });
+  const ruler = screen.getByText("01").parentElement!;
   expect(arrangement).toContainElement(playhead);
+  expect(arrangement.firstElementChild).toHaveClass("sticky", "top-0");
+  expect(ruler).toHaveClass("sticky", "top-0", "z-[6]");
+  expect(ruler).toContainElement(playhead);
+  expect(Array.from(ruler.children).find((element) => element.classList.contains("bg-white/90")))
+    .toHaveClass("pointer-events-none", "w-px");
   expect(playhead).toHaveAttribute("aria-valuenow", "0");
   expect(playhead).toHaveClass("cursor-col-resize");
-  expect(playhead).toHaveStyle({ left: "154px" });
+  expect(playhead).toHaveStyle({ left: "0px" });
 });
 
 it("renders the engine position and clamps seeking to arrangement content", () => {
@@ -166,14 +172,14 @@ it("snaps a dragged playhead without moving it when the arrangement scrolls", ()
   fireEvent.pointerMove(playhead, { pointerId: 2, clientX: 407 });
   fireEvent.pointerUp(playhead, { pointerId: 2, clientX: 407 });
   expect(playhead).toHaveAttribute("aria-valuenow", "40");
-  expect(playhead).toHaveStyle({ left: "404px" });
+  expect(playhead).toHaveStyle({ left: "250px" });
   expect(store.getState().audio.snapshot.positionStep).toBe(40);
   expect(state.history).toHaveLength(0);
 
   scroller.scrollLeft = 300;
   fireEvent.scroll(scroller);
   expect(playhead).toHaveAttribute("aria-valuenow", "40");
-  expect(playhead).toHaveStyle({ left: "404px" });
+  expect(playhead).toHaveStyle({ left: "250px" });
   expect(store.getState().audio.snapshot.positionStep).toBe(40);
 });
 
@@ -181,7 +187,7 @@ it("moves the playhead one step with the arrow keys", () => {
   const playhead = screen.getByRole("slider", { name: "Playhead" });
   fireEvent.keyDown(playhead, { key: "ArrowRight" });
   expect(playhead).toHaveAttribute("aria-valuenow", "1");
-  expect(playhead).toHaveStyle({ left: "160.25px" });
+  expect(playhead).toHaveStyle({ left: "6.25px" });
   expect(store.getState().audio.snapshot.positionStep).toBe(1);
   fireEvent.keyDown(playhead, { key: "ArrowLeft" });
   fireEvent.keyDown(playhead, { key: "ArrowLeft" });
