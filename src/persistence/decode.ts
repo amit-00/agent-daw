@@ -1,4 +1,5 @@
 import {
+  finalizeProject,
   migrateProject,
   PROJECT_CAPS,
   type ArrangementClip,
@@ -274,7 +275,7 @@ export function decodeProject(value: unknown, catalog: SoundCatalog): DecodeProj
       ? migrateProject(readProjectV1(source, catalog))
       : readProjectV2(source, catalog);
     validateRelationships(project, catalog);
-    return { ok: true, project };
+    return { ok: true, project: finalizeProject(project) };
   } catch (error: unknown) {
     if (!(error instanceof ProjectDecodeError)) throw error;
     return { ok: false, code: "corrupt_record", message: error.message, cause: error };
