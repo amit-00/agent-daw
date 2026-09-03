@@ -65,4 +65,3 @@ After this branch reaches GitHub, the repository owner must authorize Cloudflare
 ## Non-goals
 
 Workers, vinext, OpenNext, server-side rendering, custom domains, Cloudflare Access, analytics, backend storage, and environment-specific application configuration are excluded. Add them only when the application gains a concrete server-side or operational requirement.
-
