@@ -1312,6 +1312,39 @@ describe("Studio", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  it("opens WebMCP details from the badge after Activity", async () => {
+    const user = userEvent.setup();
+    renderSession(DEMO_PROJECT);
+    const banner = screen.getByRole("banner");
+    const activity = within(banner).getByRole("button", { name: "Show activity" });
+    const webMCP = within(banner).getByRole("button", { name: "WebMCP" });
+
+    expect(activity.nextElementSibling).toBe(webMCP);
+    expect(screen.queryByRole("dialog", { name: "WebMCP" })).not.toBeInTheDocument();
+
+    await user.click(webMCP);
+
+    const dialog = screen.getByRole("dialog", { name: "WebMCP" });
+    expect(within(dialog).getByRole("heading", { name: "What is WebMCP?" })).toBeVisible();
+    expect(within(dialog).getByRole("status", { name: "WebMCP status: Unsupported" })).toBeVisible();
+    expect(within(dialog).getByRole("heading", { name: "Example tools" })).toBeVisible();
+    expect(within(dialog).getByText("Try asking")).toBeVisible();
+
+    await user.click(within(dialog).getByRole("button", { name: "Close WebMCP details" }));
+    expect(screen.queryByRole("dialog", { name: "WebMCP" })).not.toBeInTheDocument();
+  });
+
+  it("dismisses WebMCP details with Escape", async () => {
+    const user = userEvent.setup();
+    renderSession(DEMO_PROJECT);
+    await user.click(screen.getByRole("button", { name: "WebMCP" }));
+
+    const dialog = screen.getByRole("dialog", { name: "WebMCP" });
+    fireEvent(dialog, new Event("cancel", { cancelable: true }));
+
+    expect(screen.queryByRole("dialog", { name: "WebMCP" })).not.toBeInTheDocument();
+  });
+
   it("resizes, closes, and restores the track editor", async () => {
     const user = userEvent.setup();
     renderSession(DEMO_PROJECT);
