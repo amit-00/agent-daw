@@ -92,7 +92,8 @@ export function Arrangement({ previewEndBar = null }: Readonly<{ previewEndBar?:
     Math.max(ARRANGEMENT_MIN_BARS, furthestClipEnd + ARRANGEMENT_BUFFER_BARS, (previewEndBar ?? 0) + ARRANGEMENT_BUFFER_BARS));
   const transportEndStep = audio.snapshot.arrangementEndStep;
   const displayedStep = Math.min(seekPreviewStep ?? audio.snapshot.positionStep, transportEndStep);
-  const playheadLeft = TRACK_COLUMN_WIDTH + displayedStep / 16 * ARRANGEMENT_BAR_WIDTH;
+  const playheadTimelineLeft = displayedStep / 16 * ARRANGEMENT_BAR_WIDTH;
+  const playheadLeft = TRACK_COLUMN_WIDTH + playheadTimelineLeft;
 
   function playheadStepAt(clientX: number, grabOffset: number): number {
     const left = arrangement.current!.getBoundingClientRect().left + TRACK_COLUMN_WIDTH + grabOffset;
@@ -155,23 +156,24 @@ export function Arrangement({ previewEndBar = null }: Readonly<{ previewEndBar?:
           gridTemplateColumns: `${TRACK_COLUMN_WIDTH}px ${bars * ARRANGEMENT_BAR_WIDTH}px`,
           gridTemplateRows: `39px repeat(${project.tracks.length},112px)`,
           backgroundSize: `${ARRANGEMENT_BAR_WIDTH * 4}px 100%, ${ARRANGEMENT_BAR_WIDTH / 2}px 100%` }}>
-        <div data-track-column className="sticky left-0 z-[3] flex items-center justify-between border-r border-b border-white/10 bg-black px-[11px] text-xs tracking-[0.12em] text-zinc-600">
+        <div data-track-column className="sticky top-0 left-0 z-[5] flex items-center justify-between border-r border-b border-white/10 bg-black px-[11px] text-xs tracking-[0.12em] text-zinc-600">
           <span>TRACKS</span>
           <button ref={addButton} type="button" aria-label="Add track" onClick={() => setAdding(true)} className="border-0 bg-transparent text-[15px] text-zinc-500 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-300">＋</button>
         </div>
-        <div className="col-start-2 grid border-b border-white/10 bg-zinc-950/90 font-mono text-xs text-zinc-600" style={{ gridTemplateColumns: `repeat(${bars},${ARRANGEMENT_BAR_WIDTH}px)` }}>
+        <div className="relative sticky top-0 z-[6] col-start-2 grid border-b border-white/10 bg-zinc-950/90 font-mono text-xs text-zinc-600" style={{ gridTemplateColumns: `repeat(${bars},${ARRANGEMENT_BAR_WIDTH}px)` }}>
           {Array.from({ length: bars }, (_, index) => <span className="border-l border-white/[0.045] px-[7px] py-[13px]" key={index}>{String(index + 1).padStart(2, "0")}</span>)}
+          <span aria-hidden="true" className="pointer-events-none absolute inset-y-0 z-[1] w-px bg-white/90" style={{ left: playheadTimelineLeft }} />
+          <div role="slider" aria-label="Playhead" aria-valuemin={0} aria-valuemax={transportEndStep} aria-valuenow={displayedStep}
+            aria-valuetext={playheadLabel(Math.floor(displayedStep))} tabIndex={0} style={{ left: playheadTimelineLeft }}
+            onPointerDown={startPlayheadDrag} onPointerMove={movePlayhead} onPointerUp={finishPlayheadDrag}
+            onPointerCancel={cancelPlayheadDrag} onLostPointerCapture={cancelPlayheadDrag} onKeyDown={movePlayheadWithKeyboard}
+            className="absolute top-[29px] z-[2] grid h-5 w-4 -translate-x-1/2 touch-none cursor-col-resize place-items-center focus-visible:outline-2 focus-visible:outline-violet-300">
+            <span aria-hidden="true" className="h-[7px] w-[7px] rounded-b-full rounded-t-sm bg-white" />
+          </div>
         </div>
         {project.tracks.map((track) => <TrackHeader key={track.id} row={tracks.findIndex((item) => item.id === track.id) + 2} track={track} onEdit={() => setEditingId(track.id)} onReorderStart={(event) => startDrag(event, track.id)} />)}
         {project.tracks.map((track) => <TrackLane key={track.id + "-lane"} row={tracks.findIndex((item) => item.id === track.id) + 2} track={track} bars={bars} onEditClip={setEditingClipId} />)}
         <span aria-hidden="true" className="pointer-events-none absolute inset-y-0 z-[2] w-px bg-white/90" style={{ left: playheadLeft }} />
-        <div role="slider" aria-label="Playhead" aria-valuemin={0} aria-valuemax={transportEndStep} aria-valuenow={displayedStep}
-          aria-valuetext={playheadLabel(Math.floor(displayedStep))} tabIndex={0} style={{ left: playheadLeft }}
-          onPointerDown={startPlayheadDrag} onPointerMove={movePlayhead} onPointerUp={finishPlayheadDrag}
-          onPointerCancel={cancelPlayheadDrag} onLostPointerCapture={cancelPlayheadDrag} onKeyDown={movePlayheadWithKeyboard}
-          className="absolute top-[29px] z-[2] grid h-5 w-4 -translate-x-1/2 touch-none cursor-col-resize place-items-center focus-visible:outline-2 focus-visible:outline-violet-300">
-          <span aria-hidden="true" className="h-[7px] w-[7px] rounded-b-full rounded-t-sm bg-white" />
-        </div>
       </section>
       {adding && <AddTrack onClose={() => setAdding(false)} />}
       {editingClip && editingPattern && <ClipSettings key={editingPattern.id} clip={editingClip} pattern={editingPattern}

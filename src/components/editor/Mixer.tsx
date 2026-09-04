@@ -9,7 +9,7 @@ export function Mixer(): ReactElement {
   const { project, setMasterVolume } = useStudioStore((state) => state);
   const masterLevel = useStudioStore((state) => state.audio.snapshot.masterLevel);
   return (
-    <section className="relative z-[1] grid h-[calc(100%-42px)] overflow-x-auto" aria-label="Mixer channels"
+    <section className="relative z-[1] grid h-full overflow-x-auto" aria-label="Mixer channels"
       style={{ gridTemplateColumns: `repeat(${project.tracks.length + 1},210px)`, justifyContent: "safe center" }}>
       {project.tracks.map((track) => <ChannelStrip key={track.id} track={track} />)}
       <div role="group" aria-label="Master channel" className="grid w-[210px] grid-rows-[25px_1fr_30px_30px_20px] bg-white/[0.022] px-5 pt-[11px] pb-[9px]">

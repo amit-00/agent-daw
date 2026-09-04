@@ -13,21 +13,21 @@ export function PatternEditor(): ReactElement {
   const track = project.tracks.find((item) => item.id === clip?.trackId);
   const uses = project.arrangement.filter((item) => item.patternId === pattern?.id).length;
   return (
-    <div className="h-[calc(100%-42px)]">
+    <div className="h-full">
       {pattern && track ? (
         <section className="flex h-full min-h-0 min-w-0 flex-col px-4 pt-3.5 pb-4" aria-label={`Pattern editor for ${pattern.name}`}>
-          <div className="flex min-h-11 items-start justify-between gap-3">
-            <div>
-              <small className="block text-[11px] font-semibold tracking-[0.12em] text-zinc-600">SELECTED TRACK</small>
-              <strong className="mt-1 block text-[11px] font-semibold text-zinc-300">{track.name}</strong>
-              <em className="mt-[3px] block text-xs not-italic text-zinc-600">{pattern.name} · {pattern.lengthBars} bars · {pattern.events.length} {pattern.kind === "drum" ? "hits" : "notes"} · {uses} {uses === 1 ? "placement" : "placements"}</em>
+          <div className="flex h-8 items-center justify-between gap-3">
+            <div className="min-w-0 truncate whitespace-nowrap text-xs text-zinc-600">
+              <small className="font-semibold tracking-[0.12em]">SELECTED TRACK</small>
+              <span> · </span><strong className="font-semibold text-zinc-300">{track.name}</strong>
+              <span> · {pattern.name} · {pattern.lengthBars} bar{pattern.lengthBars === 1 ? "" : "s"} · {pattern.events.length} {pattern.kind === "drum" ? "hits" : "notes"} · {uses} {uses === 1 ? "placement" : "placements"}</span>
             </div>
             <div className="flex gap-[5px]" aria-label="Fixed grid settings">
               <span className="grid h-[27px] place-items-center rounded-md border border-white/10 bg-white/[0.03] px-2.5 text-xs text-zinc-500">1 / 16</span>
               <span className="grid h-[27px] place-items-center rounded-md border border-white/10 bg-white/[0.03] px-2.5 text-xs text-zinc-500">100%</span>
             </div>
           </div>
-          <div className={`mt-3 min-h-0 flex-1 rounded-[7px] border border-white/10 bg-black/50 ${pattern.kind === "synth" ? "overflow-hidden" : "overflow-auto"}`}>
+          <div className={`mt-2 min-h-0 flex-1 rounded-[7px] border border-white/10 bg-black/50 ${pattern.kind === "synth" ? "overflow-hidden" : "overflow-auto"}`}>
             {pattern.kind === "drum" ? <DrumGrid pattern={pattern} /> : <PianoRoll key={pattern.id} pattern={pattern} />}
           </div>
         </section>

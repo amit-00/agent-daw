@@ -85,7 +85,7 @@ export function Transport({ onStartProject }: Readonly<{
     : audio.snapshot.status === "blocked" ? "Audio blocked"
       : audio.snapshot.unavailableSoundIds.length > 0 ? "Degraded audio"
         : audio.snapshot.lastIssue?.message ?? "Audio ready";
-  const persistenceSubtitle = persistence.status === "saving" ? "Saving" : persistence.status === "saved" ? "Saved locally; Activity/history is session-only"
+  const persistenceSubtitle = persistence.status === "saving" ? "Saving" : persistence.status === "saved" ? "Saved locally"
     : persistence.status === "memory-only" ? "In memory" : persistence.status === "failed" ? "Storage unavailable" : "Not saved yet";
   return (
     <header className="relative z-[4] grid min-h-[58px] grid-cols-[1fr_auto_1fr] items-center gap-4 border-b border-white/10 bg-zinc-950/95 px-3.5 backdrop-blur-[18px]" role="banner">

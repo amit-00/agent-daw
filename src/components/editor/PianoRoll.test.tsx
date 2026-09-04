@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useEffect, type ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -8,6 +8,7 @@ import { EMPTY_PROJECT } from "@/data/studio-data";
 import type { Project, SynthPattern } from "@/project";
 import { StudioProvider, useStudioStore, type StudioPersistenceSession } from "@/stores/studio-provider";
 import type { StudioState } from "@/stores/studio-store";
+import { FakeAudioContext } from "../../../test/audio-fakes";
 
 const TEST_PERSISTENCE_SESSION: StudioPersistenceSession = {
   service: null,
@@ -44,6 +45,12 @@ function mount(pattern: SynthPattern = melody): { roll: HTMLElement; cells: HTML
     tracks: [{ id: "track", name: "Track", kind: "synth", instrumentId: "synth.bass", volumeDb: 0, pan: 0, muted: false, soloed: false }],
     patterns: [pattern], arrangement: [{ id: "clip", patternId: pattern.id, trackId: "track", startBar: 0, repeatCount: 1 }],
   };
+  const mounted = mountProject(project, pattern);
+  act(() => state.selectTrack("track"));
+  return mounted;
+}
+
+function mountProject(project: Project, pattern: SynthPattern): { roll: HTMLElement; cells: HTMLElement } {
   render(<StudioProvider initialProject={project} persistenceSession={TEST_PERSISTENCE_SESSION}><Harness patternId={pattern.id} /><Probe /></StudioProvider>);
   const roll = screen.getByRole("region", { name: `Piano roll for ${pattern.name}` });
   const cells = roll.querySelector<HTMLElement>("[data-piano-cells]")!;
@@ -54,6 +61,28 @@ function mount(pattern: SynthPattern = melody): { roll: HTMLElement; cells: HTML
   });
   vi.spyOn(cells, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, pattern.lengthBars * 384, 73 * 18));
   return { roll, cells };
+}
+
+function mountAudible(pattern: SynthPattern): {
+  readonly roll: HTMLElement; readonly cells: HTMLElement; readonly context: FakeAudioContext;
+} {
+  const context = installAudioContext();
+  const project: Project = {
+    ...EMPTY_PROJECT,
+    tracks: [{ id: "track", name: "Lead", kind: "synth", instrumentId: "synth.lead",
+      volumeDb: 0, pan: 0, muted: false, soloed: false }],
+    patterns: [pattern],
+    arrangement: [{ id: "clip", patternId: pattern.id, trackId: "track", startBar: 0, repeatCount: 1 }],
+  };
+  return { ...mountProject(project, pattern), context };
+}
+
+function installAudioContext(): FakeAudioContext {
+  const context = new FakeAudioContext();
+  vi.stubGlobal("AudioContext", function AudioContext(): globalThis.AudioContext {
+    return context.asAudioContext();
+  });
+  return context;
 }
 
 function selectNote(cells: HTMLElement, name: string, pointerId: number, shiftKey = false): HTMLElement {
@@ -173,6 +202,80 @@ describe("PianoRoll", () => {
     expect(state.history).toHaveLength(2);
   });
 
+  it("auditions a newly created note with its track instrument", async () => {
+    const pattern = { ...melody, events: [] };
+    const { cells, context } = mountAudible(pattern);
+
+    fireEvent.doubleClick(cells, { clientX: 60, clientY: 621 });
+
+    await waitFor(() => expect(context.oscillators).toHaveLength(1));
+    expect(context.oscillators[0]?.type).toBe("square");
+    expect(context.oscillators[0]?.frequency.value).toBeCloseTo(293.664_767_917_407_6);
+  });
+
+  it("auditions a moved note only after the pointer is released", async () => {
+    const { cells, context } = mountAudible(melody);
+    const note = selectNote(cells, "Select C4 at step 1 for 4 steps", 1);
+    fireEvent.pointerDown(note, { pointerId: 2, button: 0, clientX: 12, clientY: 657 });
+    fireEvent.pointerMove(cells, { pointerId: 2, clientX: 36, clientY: 639 });
+    expect(context.oscillators).toHaveLength(0);
+
+    fireEvent.pointerUp(cells, { pointerId: 2, clientX: 36, clientY: 639 });
+
+    await waitFor(() => expect(context.oscillators).toHaveLength(1));
+    expect(context.oscillators[0]?.frequency.value).toBeCloseTo(277.182_630_976_872_1);
+  });
+
+  it("auditions through the selected clip track when a pattern is shared", async () => {
+    const context = installAudioContext();
+    const project: Project = {
+      ...EMPTY_PROJECT,
+      tracks: [
+        { id: "bass", name: "Bass", kind: "synth", instrumentId: "synth.bass",
+          volumeDb: 0, pan: 0, muted: false, soloed: false },
+        { id: "lead", name: "Lead", kind: "synth", instrumentId: "synth.lead",
+          volumeDb: 0, pan: 0, muted: false, soloed: false },
+      ],
+      patterns: [melody],
+      arrangement: [
+        { id: "bass-clip", patternId: melody.id, trackId: "bass", startBar: 0, repeatCount: 1 },
+        { id: "lead-clip", patternId: melody.id, trackId: "lead", startBar: 1, repeatCount: 1 },
+      ],
+    };
+    const { cells } = mountProject(project, melody);
+    act(() => state.selectClip("lead-clip"));
+
+    fireEvent.doubleClick(cells, { clientX: 60, clientY: 621 });
+
+    await waitFor(() => expect(context.oscillators).toHaveLength(1));
+    expect(context.oscillators[0]?.type).toBe("square");
+  });
+
+  it("keeps a rejected stale move silent", async () => {
+    const { cells, context } = mountAudible(melody);
+    const note = selectNote(cells, "Select C4 at step 1 for 4 steps", 1);
+    fireEvent.pointerDown(note, { pointerId: 2, button: 0, clientX: 12, clientY: 657 });
+    fireEvent.pointerMove(cells, { pointerId: 2, clientX: 36, clientY: 639 });
+    act(() => state.deleteSynthNotes("melody", ["a"]));
+
+    await act(async () => {
+      fireEvent.pointerUp(cells, { pointerId: 2, clientX: 36, clientY: 639 });
+      await Promise.resolve();
+    });
+
+    expect(context.oscillators).toHaveLength(0);
+  });
+
+  it("auditions notes created by keyboard duplication", async () => {
+    const { roll, cells, context } = mountAudible(melody);
+    selectNote(cells, "Select C4 at step 1 for 4 steps", 1);
+
+    fireEvent.keyDown(roll, { key: "d", metaKey: true });
+
+    await waitFor(() => expect(context.oscillators).toHaveLength(1));
+    expect(context.oscillators[0]?.frequency.value).toBe(261.625_565_300_598_6);
+  });
+
   it("duplicates only after an Option-drag crosses its threshold, then moves and selects the copies", () => {
     const { cells } = mount();
     selectNote(cells, "Select C4 at step 1 for 4 steps", 1);
@@ -281,8 +384,33 @@ describe("PianoRoll", () => {
   });
 
   it("renders an empty prompt until a clip selects a pattern", () => {
-    render(<StudioProvider initialProject={{ ...EMPTY_PROJECT, patterns: [melody] }} persistenceSession={TEST_PERSISTENCE_SESSION}><PatternEditor /></StudioProvider>);
+    const project: Project = {
+      ...EMPTY_PROJECT,
+      tracks: [{ id: "track", name: "Lead", kind: "synth", instrumentId: "synth.lead",
+        volumeDb: 0, pan: 0, muted: false, soloed: false }],
+      patterns: [melody],
+      arrangement: [{ id: "clip", patternId: melody.id, trackId: "track", startBar: 0, repeatCount: 1 }],
+    };
+    render(<StudioProvider initialProject={project} persistenceSession={TEST_PERSISTENCE_SESSION}><PatternEditor /><Probe /></StudioProvider>);
+    act(() => state.selectTrack("track"));
     expect(screen.getByText("Select or create a clip to edit its pattern.")).toBeVisible();
     expect(screen.queryByRole("region", { name: "Piano roll for Melody" })).not.toBeInTheDocument();
+  });
+
+  it("shows selected-clip details in one compact header row", () => {
+    const project: Project = {
+      ...EMPTY_PROJECT,
+      tracks: [{ id: "track", name: "Lead", kind: "synth", instrumentId: "synth.lead",
+        volumeDb: 0, pan: 0, muted: false, soloed: false }],
+      patterns: [melody],
+      arrangement: [{ id: "clip", patternId: melody.id, trackId: "track", startBar: 0, repeatCount: 1 }],
+    };
+    render(<StudioProvider initialProject={project} persistenceSession={TEST_PERSISTENCE_SESSION}><PatternEditor /><Probe /></StudioProvider>);
+    act(() => state.selectClip("clip"));
+
+    const header = screen.getByLabelText("Fixed grid settings").parentElement!;
+    expect(header).toHaveClass("h-8");
+    expect(header).not.toHaveClass("min-h-11");
+    expect(header).toHaveTextContent("SELECTED TRACK · Lead · Melody · 1 bar · 2 notes · 1 placement");
   });
 });

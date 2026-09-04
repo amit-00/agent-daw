@@ -4,7 +4,6 @@ import { useRef, useState, type KeyboardEvent, type PointerEvent, type ReactElem
 
 import { Mixer } from "@/components/editor/Mixer";
 import { PatternEditor } from "@/components/editor/PatternEditor";
-import { Icon } from "@/components/icons";
 import { useStudioStore } from "@/stores/studio-provider";
 
 const DEFAULT_HEIGHT = 410;
@@ -74,7 +73,7 @@ export function TrackEditor(): ReactElement {
   </div>;
 
   return (
-    <aside ref={pane} style={{ height }} className="relative z-[3] min-h-0 overflow-hidden border-t border-white/15 bg-[#0d0d10]" aria-label="Track editor">
+    <aside ref={pane} style={{ height }} className="relative z-[3] min-h-0 overflow-visible bg-[#0d0d10]" aria-label="Track editor">
       <div role="separator" aria-label="Resize track editor" aria-orientation="horizontal" aria-valuemin={MIN_EDITOR_HEIGHT}
         aria-valuemax={maxHeight} aria-valuenow={height} aria-valuetext={`${height} pixels`} tabIndex={0}
         onFocus={() => setMaxHeight(maximumHeight())}
@@ -82,15 +81,12 @@ export function TrackEditor(): ReactElement {
         onPointerCancel={finishResize} onLostPointerCapture={(event) => {
           if (event.pointerId === resizeGesture.current?.pointerId) resizeGesture.current = null;
         }} onKeyDown={resizeWithKeyboard}
-        className="absolute inset-x-0 top-0 z-[4] h-[8px] touch-none cursor-row-resize hover:bg-violet-300/20 focus-visible:bg-violet-300/20 focus-visible:outline-none" />
-      <div className="relative z-[1] grid h-[42px] grid-cols-[1fr_auto_1fr] items-center border-b border-white/10 pr-[11px] pl-[15px]">
-        <span className="flex items-center gap-2 text-xs font-medium text-zinc-300"><Icon name={editorTab === "pattern" ? "draw" : "mixer"} /> Track editor</span>
-        <div className="flex rounded-md border border-white/10 bg-black/20 p-[3px]" aria-label="Editor tabs">
-          <button className={`rounded border-0 px-[9px] py-1 text-xs ${editorTab === "pattern" ? "bg-white/[0.08] text-zinc-300" : "bg-transparent text-zinc-600"}`} type="button" aria-pressed={editorTab === "pattern"} onClick={() => selectEditorTab("pattern")}>Pattern</button>
-          <button className={`rounded border-0 px-[9px] py-1 text-xs ${editorTab === "mixer" ? "bg-white/[0.08] text-zinc-300" : "bg-transparent text-zinc-600"}`} type="button" aria-pressed={editorTab === "mixer"} onClick={() => selectEditorTab("mixer")}>Mixer</button>
-        </div>
+        className="absolute inset-x-0 top-0 z-[4] h-[8px] touch-none cursor-row-resize bg-[#0d0d10] hover:bg-violet-300/20 focus-visible:bg-violet-300/20 focus-visible:outline-none" />
+      <div className="absolute -top-8 right-0 z-[5] flex items-end gap-1" aria-label="Editor tabs">
+        <button className={`relative h-8 rounded-t-md border-0 px-[9px] text-xs ${editorTab === "pattern" ? "z-[2] bg-[#0d0d10] text-zinc-300" : "z-[1] bg-zinc-900 text-zinc-600"}`} type="button" aria-pressed={editorTab === "pattern"} onClick={() => selectEditorTab("pattern")}>Pattern</button>
+        <button className={`relative h-8 rounded-t-md border-0 px-[9px] text-xs ${editorTab === "mixer" ? "z-[2] bg-[#0d0d10] text-zinc-300" : "z-[1] bg-zinc-900 text-zinc-600"}`} type="button" aria-pressed={editorTab === "mixer"} onClick={() => selectEditorTab("mixer")}>Mixer</button>
         <button type="button" aria-label="Close track editor" onClick={() => setOpen(false)}
-          className="h-6 w-6 justify-self-end rounded-md border-0 bg-transparent text-[17px] leading-none text-zinc-500 hover:bg-white/[0.06] hover:text-zinc-200 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-300">×</button>
+          className="relative z-[3] h-8 w-10 rounded-t-md border-0 bg-[#0d0d10] text-[17px] leading-none text-zinc-500 hover:bg-zinc-900 hover:text-zinc-200 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-300"><span aria-hidden="true" className="block -translate-y-0.5">⌄</span></button>
       </div>
       {editorTab === "pattern" ? <PatternEditor /> : <Mixer />}
     </aside>

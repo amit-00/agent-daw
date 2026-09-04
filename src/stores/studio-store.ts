@@ -73,6 +73,7 @@ export interface StudioState extends ProjectServiceState {
   playPause(): Promise<void>;
   stopPlayback(): AudioControlResult | null;
   seekPlayback(step: number): AudioControlResult | null;
+  auditionSynthNote(patternId: string, midiNote: number): Promise<void>;
   refreshAudio(): void;
   beginPersistenceSave(): number;
   finishPersistenceSave(token: number, result: FlushResult): void;
@@ -102,7 +103,7 @@ export interface StudioState extends ProjectServiceState {
     readonly soundId: string; readonly startStep: number; readonly active: boolean;
   }[]): void;
   addSynthNote(patternId: string, midiNote: number, startStep: number, lengthSteps: number): string | null;
-  updateSynthNotes(patternId: string, updates: Extract<Operation, { type: "synth-notes.update" }>["updates"]): void;
+  updateSynthNotes(patternId: string, updates: Extract<Operation, { type: "synth-notes.update" }>["updates"]): boolean;
   duplicateSynthNotes(patternId: string, noteIds: readonly string[], offsetSteps: number, pitchOffset: number): readonly string[];
   deleteSynthNotes(patternId: string, noteIds: readonly string[]): void;
   setTrackVolume(trackId: string, volumeDb: number): void;
@@ -324,6 +325,23 @@ export function createStudioStore(
         publishAudioResult(result);
         refreshAudio();
         return result;
+      },
+      async auditionSynthNote(patternId, midiNote): Promise<void> {
+        const engine = getAudioEngine();
+        if (engine === null) return;
+        const state = get();
+        const clip = state.project.arrangement.find((candidate) =>
+          candidate.id === state.selectedClipId && candidate.patternId === patternId);
+        const track = state.project.tracks.find((candidate) => candidate.id === clip?.trackId);
+        if (track?.kind !== "synth") return;
+        try {
+          await engine.auditionSynthNote(track.id, midiNote);
+        } catch (error: unknown) {
+          console.error("Synth note audition failed", error);
+          set((state) => ({ audio: { ...state.audio, errorMessage: "Note preview failed. Try again or reload." } }));
+        } finally {
+          refreshAudio();
+        }
       },
       refreshAudio,
       beginPersistenceSave(): number {
@@ -646,11 +664,11 @@ export function createStudioStore(
           notes: [{ id, midiNote, startStep, lengthSteps }] })) return null;
         return id;
       },
-      updateSynthNotes(patternId, updates): void {
+      updateSynthNotes(patternId, updates): boolean {
         const pattern = get().project.patterns.find((item) => item.id === patternId);
         if (!pattern || pattern.kind !== "synth") {
           set({ errorMessage: "That synth pattern no longer exists. Select another pattern." });
-          return;
+          return false;
         }
         const unique = [...new Map(updates.map((update) => [update.noteId, update])).values()];
         const candidates = unique.map((update) => {
@@ -660,13 +678,14 @@ export function createStudioStore(
         for (const candidate of candidates) {
           if (!candidate) {
             set({ errorMessage: "A selected note no longer exists. Select the current notes and try again." });
-            return;
+            return false;
           }
           const problem = getSynthNoteProblem(pattern, candidate.note);
-          if (problem) { set({ errorMessage: problem }); return; }
+          if (problem) { set({ errorMessage: problem }); return false; }
         }
-        if (unique.length > 0) commit(`Edit notes in ${pattern.name}`, { type: "synth-notes.update", patternId, updates: unique });
-        else set({ errorMessage: null });
+        if (unique.length > 0) return commit(`Edit notes in ${pattern.name}`, { type: "synth-notes.update", patternId, updates: unique });
+        set({ errorMessage: null });
+        return false;
       },
       duplicateSynthNotes(patternId, noteIds, offsetSteps, pitchOffset): readonly string[] {
         const pattern = get().project.patterns.find((item) => item.id === patternId);

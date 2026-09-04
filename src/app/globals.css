@@ -30,6 +30,11 @@ input {
   -webkit-tap-highlight-color: transparent;
 }
 
+button:not(:disabled):not(.cursor-grab):not(.cursor-grabbing),
+[role="button"]:not([aria-disabled="true"]) {
+  cursor: pointer;
+}
+
 input[type="number"] {
   appearance: textfield;
   -moz-appearance: textfield;

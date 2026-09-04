@@ -201,6 +201,9 @@ describe("Studio persistence bootstrap", () => {
     await screen.findByText("Saved project");
 
     await user.click(screen.getByRole("button", { name: "New project" }));
+    expect(screen.getByRole("dialog", { name: "Start a new project" })).toHaveClass(
+      "bg-zinc-950/75", "backdrop-blur-2xl", "shadow-[0_24px_80px_rgba(0,0,0,0.5)]",
+    );
     await user.click(screen.getByRole("button", { name: "Start blank project" }));
 
     await waitFor(() => expect(screen.getByRole("button", { name: "Rename project" })).toHaveTextContent("Untitled"));
@@ -578,12 +581,12 @@ describe("Studio", () => {
     expect(screen.getByLabelText(message)).toBeVisible();
   });
 
-  it("states that saved project history remains session-only", async () => {
+  it("reports a saved local project", async () => {
     vi.stubGlobal("indexedDB", await indexedDBWithProject(DEMO_PROJECT));
 
     render(<Studio initialProject={EMPTY_PROJECT} />);
 
-    expect(await screen.findByText(/Saved locally; Activity\/history is session-only/)).toBeVisible();
+    expect(await screen.findByText(/Saved locally$/)).toBeVisible();
   });
 
   it("carries rounded playback seconds into the next minute", () => {
@@ -1240,6 +1243,9 @@ describe("Studio", () => {
     renderSession(EMPTY_PROJECT);
     await user.click(screen.getByRole("button", { name: "Add track" }));
     const selector = screen.getByRole("combobox", { name: "Instrument" });
+    expect(screen.getByRole("dialog", { name: "Add track" })).toHaveClass(
+      "[&_select]:appearance-none", "[&_select]:bg-[right_0.5rem_center]", "[&_select]:pr-8",
+    );
     await user.selectOptions(selector, "synth.pad");
     await user.selectOptions(selector, instrumentId);
     expect(screen.queryByRole("group", { name: "Track type" })).not.toBeInTheDocument();
@@ -1457,6 +1463,38 @@ describe("Studio", () => {
     expect(editor).toHaveStyle({ height: "430px" });
     fireEvent.keyDown(separator, { key: "ArrowDown" });
     expect(editor).toHaveStyle({ height: "410px" });
+  });
+
+  it("floats track-editor controls above its content", () => {
+    renderSession(DEMO_PROJECT);
+
+    const editor = screen.getByRole("complementary", { name: "Track editor" });
+    expect(editor).toHaveClass("overflow-visible");
+    expect(screen.getByRole("separator", { name: "Resize track editor" })).toHaveClass("bg-[#0d0d10]");
+    expect(screen.queryByText("Track editor")).not.toBeInTheDocument();
+    const tabs = screen.getByLabelText("Editor tabs");
+    const close = screen.getByRole("button", { name: "Close track editor" });
+    expect(tabs).toHaveClass("absolute", "-top-8", "right-0", "gap-1");
+    expect(close).toHaveClass("h-8", "w-10", "border-0");
+    expect(close).toHaveTextContent("⌄");
+    expect(close.querySelector("span")).toHaveClass("-translate-y-0.5");
+  });
+
+  it("layers the inactive editor tab behind the active pane tab", async () => {
+    const user = userEvent.setup();
+    renderSession(DEMO_PROJECT);
+
+    const pattern = screen.getByRole("button", { name: "Pattern" });
+    const mixer = screen.getByRole("button", { name: "Mixer" });
+    expect(pattern).toHaveClass("z-[2]", "h-8", "border-0", "bg-[#0d0d10]");
+    expect(pattern).not.toHaveClass("-mb-px");
+    expect(mixer).toHaveClass("z-[1]", "border-0");
+    expect(mixer).not.toHaveClass("translate-y-1");
+    expect(screen.getByRole("button", { name: "Close track editor" })).toHaveClass("rounded-t-md", "border-0");
+
+    await user.click(mixer);
+    expect(mixer).toHaveClass("z-[2]", "border-0", "bg-[#0d0d10]");
+    expect(pattern).toHaveClass("z-[1]", "border-0");
   });
 
   it("publishes history and undo/redo to the transport", async () => {

@@ -89,6 +89,7 @@ interface MixerRamp {
 }
 
 const MIXER_RAMP_SECONDS = 0.005;
+const AUDITION_SECONDS = 0.2;
 const PLAYBACK_START_LEAD_SECONDS = 0.05;
 const SCHEDULER_LOOKAHEAD_SECONDS = 0.1;
 const SCHEDULER_TICK_MILLISECONDS = 25;
@@ -193,6 +194,7 @@ export class AudioEngine {
     this.scheduledHorizonAudioTime = undefined;
     if (this.context !== undefined) {
       this.stopPendingSources(this.context.currentTime);
+      this.synth?.stopAll(this.context.currentTime);
     } else {
       this.pendingSources.clear();
       this.eventTombstones.clear();
@@ -320,6 +322,32 @@ export class AudioEngine {
       voiceCap: 64,
       stopRampSeconds: MIXER_RAMP_SECONDS,
     });
+  }
+
+  private async resumeRuntime(): Promise<Extract<PrepareResult, { readonly ok: false }> | null> {
+    if (this.status === "closed") return closedResult();
+    this.initializeRuntime();
+    const runtimeContext = this.context;
+    if (runtimeContext === undefined) throw new Error("Audio engine runtime did not initialize");
+    try {
+      await runtimeContext.resume();
+    } catch (error) {
+      if (this.disposal !== undefined) return closedResult();
+      if (runtimeContext.state === "closed") {
+        this.closeEngine(false);
+        return closedResult();
+      }
+      if (!isAutoplayPolicyError(error)) throw error;
+      this.enterBlockedState();
+      return blockedResult();
+    }
+    if (this.disposal !== undefined) return closedResult();
+    if (runtimeContext.state !== "running") {
+      return this.enterNonRunningContextState() === "closed" ? closedResult() : blockedResult();
+    }
+    if (this.status === "blocked") this.status = "stopped";
+    this.synchronizeMixer();
+    return null;
   }
 
   private scheduleRange(startStep: number, endStep: number): void {
@@ -559,37 +587,13 @@ export class AudioEngine {
       return this.preparation;
     }
 
-    this.initializeRuntime();
-    const runtimeContext = this.context;
-    const runtimeSampler = this.sampler;
-    if (runtimeContext === undefined || runtimeSampler === undefined) {
-      throw new Error("Audio engine runtime did not initialize");
-    }
-
     const pending: Promise<PrepareResult> = (async (): Promise<PrepareResult> => {
-      try {
-        await runtimeContext.resume();
-      } catch (error) {
-        if (this.disposal !== undefined) {
-          return closedResult();
-        }
-        if (runtimeContext.state === "closed") {
-          this.closeEngine(false);
-          return closedResult();
-        }
-        if (!isAutoplayPolicyError(error)) {
-          throw error;
-        }
-        this.enterBlockedState();
-        return blockedResult();
-      }
-      if (this.disposal !== undefined) {
-        return closedResult();
-      }
-      if (runtimeContext.state !== "running") {
-        return this.enterNonRunningContextState() === "closed"
-          ? closedResult()
-          : blockedResult();
+      const failure = await this.resumeRuntime();
+      if (failure !== null) return failure;
+      const runtimeContext = this.context;
+      const runtimeSampler = this.sampler;
+      if (runtimeContext === undefined || runtimeSampler === undefined) {
+        throw new Error("Audio engine runtime did not initialize");
       }
 
       const samplePreparation = await runtimeSampler.prepare();
@@ -609,10 +613,6 @@ export class AudioEngine {
           message: "Drum sample is unavailable",
           relatedId: this.unavailableSoundIds[0],
         };
-      if (this.status === "blocked") {
-        this.status = "stopped";
-      }
-      this.synchronizeMixer();
       return {
         ok: true,
         status: this.unavailableSoundIds.length === 0 ? "ready" : "degraded",
@@ -625,6 +625,38 @@ export class AudioEngine {
     });
     this.preparation = pending;
     return pending;
+  }
+
+  async auditionSynthNote(trackId: string, midiNote: number): Promise<boolean> {
+    if (!Number.isInteger(midiNote) || midiNote < 24 || midiNote > 96) {
+      throw new RangeError(`Audition MIDI note must be a whole number from 24 through 96; received ${midiNote}`);
+    }
+    const findTrack = (): Track | undefined => {
+      const track = this.project?.tracks.find((candidate) => candidate.id === trackId);
+      return track?.kind === "synth" ? track : undefined;
+    };
+    if (findTrack() === undefined) return false;
+    const failure = await this.resumeRuntime();
+    if (failure !== null) return false;
+    const track = findTrack();
+    const context = this.context;
+    const synth = this.synth;
+    const bus = track === undefined ? undefined : this.trackBuses.get(track.id);
+    if (track === undefined || context === undefined || synth === undefined || bus === undefined) return false;
+    const voice = synth.schedule({
+      key: `audition:${track.id}:${midiNote}`,
+      kind: "synth",
+      trackId: track.id,
+      instrumentId: track.instrumentId,
+      startStep: 0,
+      durationSteps: 1,
+      midiNote,
+    }, context.currentTime, AUDITION_SECONDS, bus.gain);
+    if (voice === undefined) {
+      this.lastIssue = { code: "unknown_preset", message: "Synth preset is unavailable", relatedId: track.instrumentId };
+      return false;
+    }
+    return true;
   }
 
   replaceProject(nextProject: Project): void {
@@ -730,7 +762,8 @@ export class AudioEngine {
     if (this.status === "closed") {
       return closedResult();
     }
-    if (this.status === "stopped" && this.positionStep === 0 && this.pendingSources.size === 0) {
+    if (this.status === "stopped" && this.positionStep === 0 && this.pendingSources.size === 0
+      && (this.synth?.activeVoiceCount() ?? 0) === 0) {
       return this.controlSuccess("stopped");
     }
     this.cancelPlayback();

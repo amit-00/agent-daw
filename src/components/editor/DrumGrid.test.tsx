@@ -56,6 +56,13 @@ beforeEach(() => vi.stubGlobal("PointerEvent", TestPointerEvent));
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe("DrumGrid", () => {
+  it("keeps its height fixed when the editor grows", () => {
+    const grid = mount();
+
+    expect(grid).toHaveClass("h-[164px]");
+    expect(grid).not.toHaveClass("h-full");
+  });
+
   it("toggles one real hit with click or keyboard activation", async () => {
     const user = userEvent.setup();
     mount();
