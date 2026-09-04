@@ -134,6 +134,15 @@ describe("WebMCP tool contracts", () => {
     }
   });
 
+  test("require placements when creating or duplicating patterns", () => {
+    expect(schemaOf("create_pattern")).toMatchObject({
+      required: expect.arrayContaining(["request_id", "kind", "length_bars", "placement"]),
+    });
+    expect(schemaOf("duplicate_pattern")).toMatchObject({
+      required: expect.arrayContaining(["request_id", "pattern_id", "placement"]),
+    });
+  });
+
   test("mark only inspection tools read-only and user-authored reads untrusted", () => {
     expect(TOOL_CONTRACTS.map(({ name, annotations }) => [name, annotations])).toEqual(
       expect.arrayContaining([
@@ -290,7 +299,7 @@ describe("inspection tools", () => {
           history_cursor: -1,
           history_count: 0,
           persistence: { status: "unsaved" },
-          counts: { tracks: 5, patterns: 6, events: 26, arrangement_clips: 8 },
+          counts: { tracks: 5, patterns: 5, events: 26, arrangement_clips: 8 },
         }],
       },
     });
@@ -538,7 +547,7 @@ describe("inspection tools", () => {
         { type: "pattern.duplicate", patternId: "afterglow", duplicatePatternId: "afterglow-copy",
           duplicateName: "Afterglow copy", duplicateEventIds: ["copy-1", "copy-2", "copy-3", "copy-4"] },
         { type: "pattern.update", patternId: "orbit", changes: { name: "Orbit two", lengthBars: 4 } },
-        { type: "pattern.delete", patternId: "unused-idea" },
+        { type: "pattern.delete", patternId: "orbit" },
       ],
     });
     const entryId = store.getState().history[0]!.id;
@@ -559,7 +568,7 @@ describe("inspection tools", () => {
       { type: "pattern.duplicate", pattern_id: "afterglow", duplicate_pattern_id: "afterglow-copy",
         duplicate_name: "Afterglow copy", duplicate_event_ids: ["copy-1", "copy-2", "copy-3", "copy-4"] },
       { type: "pattern.update", pattern_id: "orbit", changes: { name: "Orbit two", length_bars: 4 } },
-      { type: "pattern.delete", pattern_id: "unused-idea" },
+      { type: "pattern.delete", pattern_id: "orbit" },
     ] });
     expect(JSON.stringify(action)).not.toMatch(/masterVolumeDb|instrumentId|trackId|toIndex|lengthBars|startStep/);
   });
@@ -1058,8 +1067,8 @@ describe("pattern and arrangement mutations", () => {
   test.each([
     ["rename_pattern", { pattern_id: "orbit", name: "  Renamed phrase  " },
       { type: "pattern.update", patternId: "orbit", changes: { name: "Renamed phrase" } }],
-    ["resize_pattern", { pattern_id: "unused-idea", length_bars: 2 },
-      { type: "pattern.update", patternId: "unused-idea", changes: { lengthBars: 2 } }],
+    ["resize_pattern", { pattern_id: "afterglow", length_bars: 4 },
+      { type: "pattern.update", patternId: "afterglow", changes: { lengthBars: 4 } }],
     ["move_clip", { clip_id: "bass-a", start_bar: 9 },
       { type: "arrangement.update", clipId: "bass-a", changes: { startBar: 8 } }],
     ["change_clip_pattern", { clip_id: "bass-a", pattern_id: "afterglow" },
@@ -1081,27 +1090,31 @@ describe("pattern and arrangement mutations", () => {
     });
   });
 
-  test("create_pattern creates an empty unplaced pattern with a trimmed or kind-default name", async () => {
+  test("create_pattern creates and places an empty pattern with a trimmed or kind-default name", async () => {
     const store = createStudioStore(DEMO_PROJECT);
-    const ids = ["beat-pattern", "melody-pattern"];
+    const ids = ["beat-pattern", "beat-clip", "melody-pattern", "melody-clip"];
     const createId = vi.fn(() => ids.shift()!);
 
     const beat = await executeMutation(store, "create_pattern", {
       request_id: "beat", kind: "drum", length_bars: 2,
+      placement: { track_id: "drums", start_bar: 9 },
     }, createId);
     const melody = await executeMutation(store, "create_pattern", {
       request_id: "melody", kind: "synth", name: "  Verse lead  ", length_bars: 1,
+      placement: { track_id: "melody", start_bar: 9 },
     }, createId);
 
     expect(beat).toMatchObject({ success: true, result: {
-      pattern_id: "beat-pattern", changes: { created: { pattern_ids: ["beat-pattern"] } },
+      pattern_id: "beat-pattern", clip_id: "beat-clip", changes: { created: {
+        pattern_ids: ["beat-pattern"], arrangement_clip_ids: ["beat-clip"],
+      } },
     } });
-    expect(melody).toMatchObject({ success: true, result: { pattern_id: "melody-pattern" } });
+    expect(melody).toMatchObject({ success: true, result: { pattern_id: "melody-pattern", clip_id: "melody-clip" } });
     expect(store.getState().project.patterns.slice(-2)).toEqual([
       { id: "beat-pattern", name: "New beat", kind: "drum", lengthBars: 2, events: [] },
       { id: "melody-pattern", name: "Verse lead", kind: "synth", lengthBars: 1, events: [] },
     ]);
-    expect(store.getState().project.arrangement).toHaveLength(DEMO_PROJECT.arrangement.length);
+    expect(store.getState().project.arrangement).toHaveLength(DEMO_PROJECT.arrangement.length + 2);
     expect(store.getState().history.map(({ source, toolName, label }) => ({ source, toolName, label })))
       .toEqual([
         { source: "agent", toolName: "create_pattern", label: "Create pattern" },
@@ -1137,6 +1150,35 @@ describe("pattern and arrangement mutations", () => {
     });
   });
 
+  test.each([
+    ["create_pattern", { kind: "synth", length_bars: 1 }, "placement"],
+    ["create_pattern", { kind: "synth", length_bars: 1, placement: "bass" }, "placement"],
+    ["duplicate_pattern", { pattern_id: "orbit" }, "placement"],
+    ["duplicate_pattern", { pattern_id: "orbit", placement: "bass" }, "placement"],
+  ] as const)("%s rejects missing or malformed placement at the direct boundary", async (name, input, field) => {
+    const response = await executeMutation(createStudioStore(DEMO_PROJECT), name, {
+      request_id: `invalid-${name}-${field}`, ...input,
+    });
+
+    expect(response).toMatchObject({ success: false, error: { code: "INVALID_INPUT", field } });
+  });
+
+  test.each([
+    { type: "create_pattern", kind: "synth", length_bars: 1 },
+    { type: "create_pattern", kind: "synth", length_bars: 1, placement: "bass" },
+    { type: "duplicate_pattern", pattern_id: { id: "orbit" } },
+    { type: "duplicate_pattern", pattern_id: { id: "orbit" }, placement: "bass" },
+  ])("rejects missing or malformed placement at the batch boundary", async (change) => {
+    const response = await executeMutation(createStudioStore(DEMO_PROJECT), "apply_project_changes", {
+      request_id: "invalid-batch-placement",
+      base_revision: 0,
+      label: "Invalid placement",
+      changes: [change, { type: "set_tempo", bpm: 120 }],
+    });
+
+    expect(response).toMatchObject({ success: false, error: { code: "INVALID_INPUT", field: "placement", change_index: 0 } });
+  });
+
   test("duplicate_pattern copies every event with fresh IDs and a bounded source-name copy", async () => {
     const sourceName = "x".repeat(40);
     const store = createStudioStore({
@@ -1145,14 +1187,15 @@ describe("pattern and arrangement mutations", () => {
         ? { ...pattern, name: sourceName }
         : pattern),
     });
-    const ids = ["pattern-copy", "event-1", "event-2", "event-3", "event-4"];
+    const ids = ["pattern-copy", "event-1", "event-2", "event-3", "event-4", "copy-clip"];
     const createId = vi.fn(() => ids.shift()!);
 
     const response = await executeMutation(store, "duplicate_pattern", {
       request_id: "duplicate", pattern_id: "orbit",
+      placement: { track_id: "bass", start_bar: 9 },
     }, createId);
 
-    expect(response).toMatchObject({ success: true, result: { pattern_id: "pattern-copy" } });
+    expect(response).toMatchObject({ success: true, result: { pattern_id: "pattern-copy", clip_id: "copy-clip" } });
     expect(store.getState().project.patterns.at(-1)).toMatchObject({
       id: "pattern-copy", name: `${"x".repeat(35)} copy`,
       events: [
@@ -1161,13 +1204,14 @@ describe("pattern and arrangement mutations", () => {
     });
     expect(store.getState().history[0]).toMatchObject({
       source: "agent", toolName: "duplicate_pattern", label: "Duplicate pattern",
-      action: { kind: "operation", operation: {
-        type: "pattern.duplicate", patternId: "orbit", duplicatePatternId: "pattern-copy",
-        duplicateName: `${"x".repeat(35)} copy`,
-        duplicateEventIds: ["event-1", "event-2", "event-3", "event-4"],
-      } },
+      action: { kind: "batch", operations: [
+        { type: "pattern.duplicate", patternId: "orbit", duplicatePatternId: "pattern-copy",
+          duplicateName: `${"x".repeat(35)} copy`,
+          duplicateEventIds: ["event-1", "event-2", "event-3", "event-4"] },
+        { type: "arrangement.place", clip: { id: "copy-clip", patternId: "pattern-copy", trackId: "bass", startBar: 8, repeatCount: 1 } },
+      ] },
     });
-    expect(createId).toHaveBeenCalledTimes(5);
+    expect(createId).toHaveBeenCalledTimes(6);
   });
 
   test("delete_pattern reports dependent clip IDs unless cascading is authorized", async () => {
@@ -1282,6 +1326,18 @@ describe("pattern and arrangement mutations", () => {
     });
   });
 
+  test("make_clip_unique is a no-op for a sole placement and preserves its pattern", async () => {
+    const store = createStudioStore(DEMO_PROJECT);
+
+    const response = await executeMutation(store, "make_clip_unique", {
+      request_id: "already-unique", clip_id: "pad-a",
+    }, () => "must-not-generate");
+
+    expect(response).toMatchObject({ success: true, result: { pattern_id: "night-air", changed: false } });
+    expect(store.getState().project.arrangement.find(({ id }) => id === "pad-a")!.patternId).toBe("night-air");
+    expect(store.getState().history).toHaveLength(0);
+  });
+
   test("delete_clip removes only the clip and preserves its pattern", async () => {
     const store = createStudioStore(DEMO_PROJECT);
 
@@ -1328,7 +1384,7 @@ describe("pattern and arrangement mutations", () => {
       kind: "synth", length_bars: 2, placement: { track_id: "bass", start_bar: 255, repeat_count: 2 },
     }, code: "OUT_OF_RANGE", field: "placement.repeat_count" },
     { name: "duplicate_pattern name", tool: "duplicate_pattern", input: {
-      pattern_id: "orbit", name: "x".repeat(41),
+      pattern_id: "orbit", name: "x".repeat(41), placement: { track_id: "bass", start_bar: 9 },
     }, code: "OUT_OF_RANGE", field: "name" },
     { name: "resize_pattern derived overlap", tool: "resize_pattern", input: {
       pattern_id: "neon", length_bars: 2,
@@ -1361,14 +1417,14 @@ describe("pattern and arrangement mutations", () => {
 
   test.each([
     { name: "create_pattern generated pattern ID", tool: "create_pattern",
-      input: { kind: "drum", length_bars: 1 }, ids: ["neon"] },
+      input: { kind: "drum", length_bars: 1, placement: { track_id: "drums", start_bar: 9 } }, ids: ["neon"] },
     { name: "create_pattern generated clip ID", tool: "create_pattern",
       input: { kind: "synth", length_bars: 1,
         placement: { track_id: "bass", start_bar: 9 } }, ids: ["new-pattern", "bass-a"] },
     { name: "duplicate_pattern generated pattern ID", tool: "duplicate_pattern",
-      input: { pattern_id: "orbit" }, ids: ["neon", "event-1", "event-2", "event-3", "event-4"] },
+      input: { pattern_id: "orbit", placement: { track_id: "bass", start_bar: 9 } }, ids: ["neon", "event-1", "event-2", "event-3", "event-4"] },
     { name: "duplicate_pattern generated event IDs", tool: "duplicate_pattern",
-      input: { pattern_id: "orbit" }, ids: ["new-pattern", "same", "same", "same", "same"] },
+      input: { pattern_id: "orbit", placement: { track_id: "bass", start_bar: 9 } }, ids: ["new-pattern", "same", "same", "same", "same"] },
     { name: "place_pattern generated clip ID", tool: "place_pattern",
       input: { pattern_id: "orbit", track_id: "bass", start_bar: 9 }, ids: ["bass-a"] },
     { name: "duplicate_clip generated clip ID", tool: "duplicate_clip",
@@ -1390,8 +1446,8 @@ describe("pattern and arrangement mutations", () => {
   });
 
   test.each([
-    ["create_pattern", { kind: "drum", length_bars: 1 }],
-    ["duplicate_pattern", { pattern_id: "orbit" }],
+    ["create_pattern", { kind: "drum", length_bars: 1, placement: { track_id: "drums", start_bar: 9 } }],
+    ["duplicate_pattern", { pattern_id: "orbit", placement: { track_id: "bass", start_bar: 9 } }],
     ["make_clip_unique", { clip_id: "bass-a" }],
   ] as const)("%s omits the internal patterns capacity field", async (tool, input) => {
     const patterns = [...DEMO_PROJECT.patterns, ...Array.from({
@@ -1410,12 +1466,12 @@ describe("pattern and arrangement mutations", () => {
   });
 
   test.each([
-    ["place_pattern", { pattern_id: "unused-idea", track_id: "bass", start_bar: 1 }],
+    ["place_pattern", { pattern_id: "orbit", track_id: "bass", start_bar: 1 }],
     ["duplicate_clip", { clip_id: "capacity-clip-0" }],
   ] as const)("%s omits the internal arrangement capacity field", async (tool, input) => {
     const trackIds = ["bass", "chords"];
     const arrangement = Array.from({ length: PROJECT_CAPS.maxArrangementClips }, (_, index) => ({
-      id: `capacity-clip-${index}`, patternId: "unused-idea",
+      id: `capacity-clip-${index}`, patternId: "orbit",
       trackId: trackIds[Math.floor(index / PROJECT_CAPS.maxArrangementBars)]!,
       startBar: index % PROJECT_CAPS.maxArrangementBars, repeatCount: 1,
     }));
@@ -1429,10 +1485,10 @@ describe("pattern and arrangement mutations", () => {
   });
 
   test.each([
-    ["create_pattern", { kind: "drum", length_bars: 3 }, "INVALID_INPUT", "length_bars"],
+    ["create_pattern", { kind: "drum", length_bars: 3, placement: { track_id: "drums", start_bar: 9 } }, "INVALID_INPUT", "length_bars"],
     ["rename_pattern", { pattern_id: "missing", name: "Missing" }, "PATTERN_NOT_FOUND", "pattern_id"],
     ["resize_pattern", { pattern_id: "orbit", length_bars: 1 }, "OUT_OF_RANGE", "length_bars"],
-    ["duplicate_pattern", { pattern_id: "missing" }, "PATTERN_NOT_FOUND", "pattern_id"],
+    ["duplicate_pattern", { pattern_id: "missing", placement: { track_id: "bass", start_bar: 9 } }, "PATTERN_NOT_FOUND", "pattern_id"],
     ["delete_pattern", { pattern_id: "missing" }, "PATTERN_NOT_FOUND", "pattern_id"],
     ["place_pattern", { pattern_id: "neon", track_id: "bass", start_bar: 9 }, "KIND_MISMATCH", "track_id"],
     ["move_clip", { clip_id: "missing", start_bar: 9 }, "CLIP_NOT_FOUND", "clip_id"],
@@ -1450,11 +1506,11 @@ describe("pattern and arrangement mutations", () => {
   });
 
   test.each([
-    ["create_pattern", { kind: "drum", length_bars: 1 }, false],
+    ["create_pattern", { kind: "drum", length_bars: 1, placement: { track_id: "drums", start_bar: 9 } }, false],
     ["rename_pattern", { pattern_id: "orbit", name: "Renamed" }, false],
-    ["resize_pattern", { pattern_id: "unused-idea", length_bars: 2 }, false],
-    ["duplicate_pattern", { pattern_id: "orbit" }, false],
-    ["delete_pattern", { pattern_id: "unused-idea" }, false],
+    ["resize_pattern", { pattern_id: "afterglow", length_bars: 4 }, false],
+    ["duplicate_pattern", { pattern_id: "orbit", placement: { track_id: "bass", start_bar: 9 } }, false],
+    ["delete_pattern", { pattern_id: "night-air", delete_clips: true }, false],
     ["place_pattern", { pattern_id: "neon", track_id: "drums", start_bar: 1 }, true],
     ["move_clip", { clip_id: "bass-a", start_bar: 9 }, false],
     ["change_clip_pattern", { clip_id: "bass-a", pattern_id: "afterglow" }, false],
@@ -1980,22 +2036,22 @@ describe("apply_project_changes", () => {
     } });
   });
 
-  test("resolves a create track, pattern, notes, and placement chain in order", async () => {
+  test("resolves a create track, placed pattern, and notes chain in order", async () => {
     const store = createStudioStore(DEMO_PROJECT);
-    const ids = ["batch-track", "batch-pattern", "batch-note", "batch-clip"];
+    const ids = ["batch-track", "batch-pattern", "batch-clip", "batch-note"];
 
     const response = await apply(store, [
       { type: "create_track", ref: "track", kind: "synth", instrument_id: "synth.lead", name: " Lead " },
-      { type: "create_pattern", ref: "pattern", kind: "synth", length_bars: 1, name: " Phrase " },
+      { type: "create_pattern", ref: "pattern", kind: "synth", length_bars: 1, name: " Phrase ", placement: {
+        clip_ref: "clip", track_id: { ref: "track" }, start_bar: 9,
+      } },
       { type: "add_notes", pattern_id: { ref: "pattern" }, notes: [
         { ref: "note", midi_note: 72, start_step: 1, length_steps: 4 },
       ] },
-      { type: "place_pattern", ref: "clip", pattern_id: { ref: "pattern" },
-        track_id: { ref: "track" }, start_bar: 9 },
     ], () => ids.shift()!);
 
     expect(response).toMatchObject({ success: true, result: {
-      applied_changes: 4,
+      applied_changes: 3,
       references: { track: "batch-track", pattern: "batch-pattern", note: "batch-note", clip: "batch-clip" },
     } });
     expect(store.getState().project).toMatchObject({
@@ -2012,7 +2068,9 @@ describe("apply_project_changes", () => {
   test.each([
     ["duplicate declaration", [
       { type: "create_track", ref: "same", kind: "synth", instrument_id: "synth.pad" },
-      { type: "create_pattern", ref: "same", kind: "synth", length_bars: 1 },
+      { type: "create_pattern", ref: "same", kind: "synth", length_bars: 1, placement: {
+        track_id: { id: "bass" }, start_bar: 9,
+      } },
     ], "DUPLICATE_REFERENCE", "ref", 1],
     ["duplicate declaration after an omitted hit", [
       { type: "add_drum_hits", pattern_id: { id: "neon" }, hits: [
@@ -2080,7 +2138,7 @@ describe("apply_project_changes", () => {
   });
 
   test("maps create-pattern clip refs and make-unique pattern refs", async () => {
-    const ids = ["pattern-created", "clip-created", "pattern-unique"];
+    const ids = ["pattern-created", "clip-created"];
     const response = await apply(createStudioStore(DEMO_PROJECT), [
       { type: "create_pattern", ref: "pattern", kind: "synth", length_bars: 1, placement: {
         clip_ref: "clip", track_id: { id: "bass" }, start_bar: 9,
@@ -2090,14 +2148,16 @@ describe("apply_project_changes", () => {
     ], () => ids.shift()!);
 
     expect(response).toMatchObject({ success: true, result: { references: {
-      pattern: "pattern-created", clip: "clip-created", unique: "pattern-unique",
+      pattern: "pattern-created", clip: "clip-created", unique: "pattern-created",
     } } });
   });
 
   test("validates each change against the preceding temporary project", async () => {
-    const ids = ["new-pattern", "new-note"];
+    const ids = ["new-pattern", "new-clip", "new-note"];
     const response = await apply(createStudioStore(DEMO_PROJECT), [
-      { type: "create_pattern", ref: "pattern", kind: "synth", length_bars: 1 },
+      { type: "create_pattern", ref: "pattern", kind: "synth", length_bars: 1, placement: {
+        track_id: { id: "bass" }, start_bar: 9,
+      } },
       { type: "add_notes", pattern_id: { ref: "pattern" }, notes: [
         { ref: "note", midi_note: 60, start_step: 1, length_steps: 1 },
       ] },
@@ -2222,18 +2282,22 @@ describe("apply_project_changes", () => {
       { type: "set_track_solo", track_id: { id: "bass" }, soloed: true }],
     ["delete_track", { track_id: "drums", delete_clips: true },
       { type: "delete_track", track_id: { id: "drums" }, delete_clips: true }],
-    ["create_pattern", { kind: "synth", name: "New", length_bars: 1 },
-      { type: "create_pattern", kind: "synth", name: "New", length_bars: 1 }],
+    ["create_pattern", { kind: "synth", name: "New", length_bars: 1, placement: { track_id: "bass", start_bar: 9 } },
+      { type: "create_pattern", kind: "synth", name: "New", length_bars: 1, placement: {
+        track_id: { id: "bass" }, start_bar: 9,
+      } }],
     ["rename_pattern", { pattern_id: "orbit", name: "Renamed" },
       { type: "rename_pattern", pattern_id: { id: "orbit" }, name: "Renamed" }],
-    ["resize_pattern", { pattern_id: "unused-idea", length_bars: 2 },
-      { type: "resize_pattern", pattern_id: { id: "unused-idea" }, length_bars: 2 }],
-    ["duplicate_pattern", { pattern_id: "orbit", name: "Copy" },
-      { type: "duplicate_pattern", pattern_id: { id: "orbit" }, name: "Copy" }],
-    ["delete_pattern", { pattern_id: "unused-idea", delete_clips: false },
-      { type: "delete_pattern", pattern_id: { id: "unused-idea" }, delete_clips: false }],
-    ["place_pattern", { pattern_id: "unused-idea", track_id: "bass", start_bar: 9 },
-      { type: "place_pattern", pattern_id: { id: "unused-idea" }, track_id: { id: "bass" }, start_bar: 9 }],
+    ["resize_pattern", { pattern_id: "afterglow", length_bars: 4 },
+      { type: "resize_pattern", pattern_id: { id: "afterglow" }, length_bars: 4 }],
+    ["duplicate_pattern", { pattern_id: "orbit", name: "Copy", placement: { track_id: "bass", start_bar: 9 } },
+      { type: "duplicate_pattern", pattern_id: { id: "orbit" }, name: "Copy", placement: {
+        track_id: { id: "bass" }, start_bar: 9,
+      } }],
+    ["delete_pattern", { pattern_id: "night-air", delete_clips: true },
+      { type: "delete_pattern", pattern_id: { id: "night-air" }, delete_clips: true }],
+    ["place_pattern", { pattern_id: "orbit", track_id: "bass", start_bar: 9 },
+      { type: "place_pattern", pattern_id: { id: "orbit" }, track_id: { id: "bass" }, start_bar: 9 }],
     ["move_clip", { clip_id: "bass-b", start_bar: 9 },
       { type: "move_clip", clip_id: { id: "bass-b" }, start_bar: 9 }],
     ["change_clip_pattern", { clip_id: "bass-a", pattern_id: "afterglow" },
@@ -2259,7 +2323,7 @@ describe("apply_project_changes", () => {
   ] as const)("%s matches its direct mutation result", async (name, directInput, batchChange) => {
     const directStore = createStudioStore(DEMO_PROJECT);
     const batchStore = createStudioStore(DEMO_PROJECT);
-    const generatedIds = ["generated-1", "generated-2", "generated-3", "generated-4", "generated-5"];
+    const generatedIds = ["generated-1", "generated-2", "generated-3", "generated-4", "generated-5", "generated-6"];
     const directIds = [...generatedIds];
     const batchIds = [...generatedIds];
 

@@ -54,7 +54,7 @@ export type PublicChange =
       readonly kind: "drum" | "synth";
       readonly name?: string;
       readonly length_bars: 1 | 2 | 4;
-      readonly placement?: {
+      readonly placement: {
         readonly clip_ref?: string;
         readonly track_id: EntityReference;
         readonly start_bar: number;
@@ -63,7 +63,18 @@ export type PublicChange =
     }
   | { readonly type: "rename_pattern"; readonly pattern_id: EntityReference; readonly name: string }
   | { readonly type: "resize_pattern"; readonly pattern_id: EntityReference; readonly length_bars: 1 | 2 | 4 }
-  | { readonly type: "duplicate_pattern"; readonly pattern_id: EntityReference; readonly ref?: string; readonly name?: string }
+  | {
+      readonly type: "duplicate_pattern";
+      readonly pattern_id: EntityReference;
+      readonly ref?: string;
+      readonly name?: string;
+      readonly placement: {
+        readonly clip_ref?: string;
+        readonly track_id: EntityReference;
+        readonly start_bar: number;
+        readonly repeat_count?: number;
+      };
+    }
   | { readonly type: "delete_pattern"; readonly pattern_id: EntityReference; readonly delete_clips?: boolean }
   | {
       readonly type: "place_pattern";
@@ -273,10 +284,10 @@ const PUBLIC_CHANGE_SCHEMAS: readonly Schema[] = [
   batchChange("set_track_mute", { track_id: ENTITY_REFERENCE, muted: { type: "boolean" } }, ["track_id", "muted"]),
   batchChange("set_track_solo", { track_id: ENTITY_REFERENCE, soloed: { type: "boolean" } }, ["track_id", "soloed"]),
   batchChange("delete_track", { track_id: ENTITY_REFERENCE, delete_clips: { type: "boolean" } }, ["track_id"]),
-  batchChange("create_pattern", { ref: LOCAL_REF, kind: KIND, name: NAME_40, length_bars: LENGTH_BARS, placement: BATCH_PLACEMENT }, ["kind", "length_bars"]),
+  batchChange("create_pattern", { ref: LOCAL_REF, kind: KIND, name: NAME_40, length_bars: LENGTH_BARS, placement: BATCH_PLACEMENT }, ["kind", "length_bars", "placement"]),
   batchChange("rename_pattern", { pattern_id: ENTITY_REFERENCE, name: NAME_40 }, ["pattern_id", "name"]),
   batchChange("resize_pattern", { pattern_id: ENTITY_REFERENCE, length_bars: LENGTH_BARS }, ["pattern_id", "length_bars"]),
-  batchChange("duplicate_pattern", { pattern_id: ENTITY_REFERENCE, ref: LOCAL_REF, name: NAME_40 }, ["pattern_id"]),
+  batchChange("duplicate_pattern", { pattern_id: ENTITY_REFERENCE, ref: LOCAL_REF, name: NAME_40, placement: BATCH_PLACEMENT }, ["pattern_id", "placement"]),
   batchChange("delete_pattern", { pattern_id: ENTITY_REFERENCE, delete_clips: { type: "boolean" } }, ["pattern_id"]),
   batchChange("place_pattern", { ref: LOCAL_REF, pattern_id: ENTITY_REFERENCE, track_id: ENTITY_REFERENCE, start_bar: ONE_BASED_POSITION, repeat_count: REPEAT_COUNT }, ["pattern_id", "track_id", "start_bar"]),
   batchChange("move_clip", { clip_id: ENTITY_REFERENCE, track_id: ENTITY_REFERENCE, start_bar: ONE_BASED_POSITION }, ["clip_id"]),
@@ -336,21 +347,21 @@ export const TOOL_CONTRACTS: readonly ToolContract[] = [
   mutation("set_track_mix", "Set track mix", "Sets at least one of a track's volume or pan values." + BATCH_ADVICE, directSchema({ track_id: ID, volume_db: number(-60, 6), pan: number(-1, 1) }, ["track_id"])),
   mutation("set_track_mute", "Set track mute", "Sets a track's mute state explicitly." + BATCH_ADVICE, directSchema({ track_id: ID, muted: { type: "boolean" } }, ["track_id", "muted"])),
   mutation("set_track_solo", "Set track solo", "Sets a track's solo state explicitly." + BATCH_ADVICE, directSchema({ track_id: ID, soloed: { type: "boolean" } }, ["track_id", "soloed"])),
-  mutation("delete_track", "Delete track", "Deletes a track, preserving patterns; dependent clips are deleted only when delete_clips is true." + BATCH_ADVICE, directSchema({ track_id: ID, delete_clips: { type: "boolean" } }, ["track_id"])),
+  mutation("delete_track", "Delete track", "Deletes a track when delete_clips is true for its dependent clips; removing those clips also discards any orphaned patterns." + BATCH_ADVICE, directSchema({ track_id: ID, delete_clips: { type: "boolean" } }, ["track_id"])),
 
-  mutation("create_pattern", "Create pattern", "Creates an empty pattern and optionally places it at a one-based start bar, returning generated IDs." + BATCH_ADVICE, directSchema({ kind: KIND, name: NAME_40, length_bars: LENGTH_BARS, placement: PLACEMENT }, ["kind", "length_bars"])),
+  mutation("create_pattern", "Create pattern", "Creates and places an empty pattern at a one-based start bar, returning its pattern and clip IDs." + BATCH_ADVICE, directSchema({ kind: KIND, name: NAME_40, length_bars: LENGTH_BARS, placement: PLACEMENT }, ["kind", "length_bars", "placement"])),
   mutation("rename_pattern", "Rename pattern", "Renames one existing pattern." + BATCH_ADVICE, directSchema({ pattern_id: ID, name: NAME_40 }, ["pattern_id", "name"])),
   mutation("resize_pattern", "Resize pattern", "Changes a pattern to 1, 2, or 4 bars without truncating events or invalidating placements." + BATCH_ADVICE, directSchema({ pattern_id: ID, length_bars: LENGTH_BARS }, ["pattern_id", "length_bars"])),
-  mutation("duplicate_pattern", "Duplicate pattern", "Copies a pattern and all events with fresh IDs." + BATCH_ADVICE, directSchema({ pattern_id: ID, name: NAME_40 }, ["pattern_id"])),
+  mutation("duplicate_pattern", "Duplicate pattern", "Copies a pattern and all events with fresh IDs, then places the copy and returns both IDs." + BATCH_ADVICE, directSchema({ pattern_id: ID, name: NAME_40, placement: PLACEMENT }, ["pattern_id", "placement"])),
   mutation("delete_pattern", "Delete pattern", "Deletes a pattern; dependent clips are deleted only when delete_clips is true." + BATCH_ADVICE, directSchema({ pattern_id: ID, delete_clips: { type: "boolean" } }, ["pattern_id"])),
 
   mutation("place_pattern", "Place pattern", "Places a pattern on a compatible track at a one-based start bar and returns the clip ID." + BATCH_ADVICE, directSchema({ pattern_id: ID, track_id: ID, start_bar: ONE_BASED_POSITION, repeat_count: REPEAT_COUNT }, ["pattern_id", "track_id", "start_bar"])),
   mutation("move_clip", "Move clip", "Moves a clip to a track or one-based start bar without changing its pattern or repeats." + BATCH_ADVICE, directSchema({ clip_id: ID, track_id: ID, start_bar: ONE_BASED_POSITION }, ["clip_id"])),
-  mutation("change_clip_pattern", "Change clip pattern", "Changes a clip's pattern while preserving its track, start bar, and repeats." + BATCH_ADVICE, directSchema({ clip_id: ID, pattern_id: ID }, ["clip_id", "pattern_id"])),
+  mutation("change_clip_pattern", "Change clip pattern", "Changes a clip's pattern while preserving its track, start bar, and repeats; an orphaned previous pattern is discarded." + BATCH_ADVICE, directSchema({ clip_id: ID, pattern_id: ID }, ["clip_id", "pattern_id"])),
   mutation("set_clip_repeats", "Set clip repeats", "Sets a clip's repeat count from 1 to 64." + BATCH_ADVICE, directSchema({ clip_id: ID, repeat_count: REPEAT_COUNT }, ["clip_id", "repeat_count"])),
   mutation("duplicate_clip", "Duplicate clip", "Copies a clip with the shared pattern immediately after its source." + BATCH_ADVICE, directSchema({ clip_id: ID }, ["clip_id"])),
-  mutation("make_clip_unique", "Make clip unique", "Copies a clip's pattern and redirects only that clip to the generated pattern." + BATCH_ADVICE, directSchema({ clip_id: ID, pattern_name: NAME_40 }, ["clip_id"])),
-  mutation("delete_clip", "Delete clip", "Deletes one clip while preserving its pattern." + BATCH_ADVICE, directSchema({ clip_id: ID }, ["clip_id"])),
+  mutation("make_clip_unique", "Make clip unique", "Copies a shared clip pattern and redirects only that clip; a sole placement is unchanged." + BATCH_ADVICE, directSchema({ clip_id: ID, pattern_name: NAME_40 }, ["clip_id"])),
+  mutation("delete_clip", "Delete clip", "Deletes one clip and discards its pattern when that removal leaves it orphaned." + BATCH_ADVICE, directSchema({ clip_id: ID }, ["clip_id"])),
 
   mutation("add_drum_hits", "Add drum hits", "Adds drum hits at one-based steps and returns generated hit IDs." + BATCH_ADVICE, directSchema({ pattern_id: ID, hits: EVENT_LIST(DRUM_HIT) }, ["pattern_id", "hits"])),
   mutation("delete_drum_hits", "Delete drum hits", "Deletes identified hits from one drum pattern." + BATCH_ADVICE, directSchema({ pattern_id: ID, hit_ids: STRING_IDS }, ["pattern_id", "hit_ids"])),
