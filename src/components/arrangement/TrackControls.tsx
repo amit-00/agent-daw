@@ -47,7 +47,7 @@ export function TrackSettings({ track, onClose, onDeleted }: Readonly<{
   return (
     <EditorDialog label={`Track settings for ${track.name}`} onClose={onClose}>
       {confirmDelete ? <div className="space-y-5">
-        <p>Delete {track.name} and {clipCount} {clipCount === 1 ? "clip" : "clips"}? Patterns remain in the library. You can undo this.</p>
+        <p>Delete {track.name} and {clipCount} {clipCount === 1 ? "clip" : "clips"}? Patterns used elsewhere remain. You can undo this.</p>
         <div className="flex justify-end gap-2">
           <button type="button" onClick={() => setConfirmDelete(false)}>Keep track</button>
           <button type="button" className="text-rose-300" onClick={remove}>Confirm delete</button>

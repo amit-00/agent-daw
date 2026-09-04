@@ -86,7 +86,6 @@ it("moves across compatible tracks without copying the shared pattern", () => {
   move(414, 300);
   release(414, 300);
   expect(within(screen.getByRole("region", { name: "Glasshouse lane" })).getByRole("button", { name: "Select Low Orbit phrase" })).toHaveStyle({ left: "12.5%" });
-  expect(screen.getByRole("button", { name: "Select pattern Low Orbit phrase" })).toHaveTextContent("1 placement");
   expect(historyCount()).toBe(1);
 });
 
@@ -148,22 +147,8 @@ it("clamps a moved clip to its final valid starting bar", () => {
   expect(screen.getByRole("region", { name: "Song arrangement" })).toHaveAttribute("data-bars", "256");
 });
 
-it("drags a library pattern to the same bar mapping as empty-lane creation", () => {
-  start("Select pattern Unused idea", 80, 600);
-  move(404, 300);
-  expect(historyCount()).toBe(0);
-  release(404, 300);
-  expect(within(screen.getByRole("region", { name: "Glasshouse lane" })).getByRole("button", { name: "Edit clip Unused idea at bar 3" })).toBeVisible();
-  expect(screen.getByRole("button", { name: "Select pattern Unused idea" })).toHaveTextContent("1 placement");
-  expect(historyCount()).toBe(1);
-});
-
-it("uses the final release position after the pointer leaves the library", () => {
-  start("Select pattern Unused idea", 80, 600);
-  move(80, 500);
-  release(404, 300);
-  expect(within(screen.getByRole("region", { name: "Glasshouse lane" })).getByRole("button", { name: "Edit clip Unused idea at bar 3" })).toBeVisible();
-  expect(historyCount()).toBe(1);
+it("does not render the removed project patterns sidebar", () => {
+  expect(screen.queryByRole("complementary", { name: "Project patterns" })).not.toBeInTheDocument();
 });
 
 it("keeps keyboard focus on a clip after moving it to another track", async () => {
@@ -210,7 +195,7 @@ it("ignores a second pointer and clamps a move before the first bar", () => {
   expect(historyCount()).toBe(1);
 });
 
-it("bounds repeat resizing to 1–64 without changing pattern content", () => {
+it("clamps repeat resizing to 1–64 without changing pattern content", () => {
   start("Resize repeats for Low Orbit phrase at bar 2", 452, 200);
   move(0, 600);
   release(0, 600);
@@ -256,19 +241,6 @@ it("opens the repeat-count alternative with keyboard activation", () => {
   expect(historyCount()).toBe(0);
 });
 
-it("allows selecting an unplaced pattern after the last track is removed", () => {
-  for (const track of project.tracks) {
-    fireEvent.click(screen.getByRole("button", { name: `Edit ${track.name}` }));
-    fireEvent.click(screen.getByRole("button", { name: "Delete track" }));
-    const confirm = screen.queryByRole("button", { name: "Confirm delete" });
-    if (confirm) fireEvent.click(confirm);
-  }
-  start("Select pattern Unused idea", 80, 600);
-  release(80, 600);
-  expect(screen.getByRole("button", { name: "Select pattern Unused idea" })).toHaveAttribute("aria-pressed", "true");
-  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-  expect(historyCount()).toBe(3);
-});
 
 it("resizes by whole patterns and creates one undoable repeat change", () => {
   start("Resize repeats for Low Orbit phrase at bar 2", 452, 200);
@@ -309,23 +281,9 @@ it.each([
   expect(historyCount()).toBe(0);
 });
 
-it("refuses a library placement overlapping an existing clip", () => {
-  start("Select pattern Unused idea", 80, 600);
-  move(304, 200);
-  release(304, 200);
-  expect(screen.getByRole("alert")).toHaveTextContent(/overlap/i);
-  expect(screen.getByRole("button", { name: "Select pattern Unused idea" })).toHaveTextContent("Unplaced");
-  expect(historyCount()).toBe(0);
-});
-
-it("does not commit a stationary clip press or a cancelled library drag", () => {
+it("keeps a stationary clip press at its current placement", () => {
   start("Select Low Orbit phrase", 314, 200);
   release(314, 200);
-  start("Select pattern Unused idea", 80, 600);
-  move(404, 300);
-  expect(within(surface).getByRole("status")).toHaveTextContent(/bar 3/i);
-  fireEvent.keyDown(surface, { key: "Escape" });
-  release(404, 300);
-  expect(screen.getByRole("button", { name: "Select pattern Unused idea" })).toHaveTextContent("Unplaced");
+  expect(screen.getByRole("button", { name: "Select Low Orbit phrase" })).toHaveStyle({ left: "6.25%" });
   expect(historyCount()).toBe(0);
 });

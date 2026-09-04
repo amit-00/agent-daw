@@ -36,7 +36,10 @@ function Harness({ patternId }: Readonly<{ patternId: string }>): React.ReactEle
 }
 
 function mount(pattern: DrumPattern = beat): HTMLElement {
-  const project: Project = { ...EMPTY_PROJECT, patterns: [pattern] };
+  const project: Project = { ...EMPTY_PROJECT,
+    tracks: [{ id: "track", name: "Track", kind: "drum", instrumentId: "kit.basic", volumeDb: 0, pan: 0, muted: false, soloed: false }],
+    patterns: [pattern], arrangement: [{ id: "clip", patternId: pattern.id, trackId: "track", startBar: 0, repeatCount: 1 }],
+  };
   render(<StudioProvider initialProject={project} persistenceSession={TEST_PERSISTENCE_SESSION}><Harness patternId={pattern.id} /><Probe /></StudioProvider>);
   const grid = screen.getByRole("region", { name: `Drum grid for ${pattern.name}` });
   Object.defineProperties(grid, {

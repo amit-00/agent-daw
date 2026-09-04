@@ -40,7 +40,10 @@ function Harness({ patternId }: Readonly<{ patternId: string }>): ReactElement |
 }
 
 function mount(pattern: SynthPattern = melody): { roll: HTMLElement; cells: HTMLElement } {
-  const project: Project = { ...EMPTY_PROJECT, patterns: [pattern] };
+  const project: Project = { ...EMPTY_PROJECT,
+    tracks: [{ id: "track", name: "Track", kind: "synth", instrumentId: "synth.bass", volumeDb: 0, pan: 0, muted: false, soloed: false }],
+    patterns: [pattern], arrangement: [{ id: "clip", patternId: pattern.id, trackId: "track", startBar: 0, repeatCount: 1 }],
+  };
   render(<StudioProvider initialProject={project} persistenceSession={TEST_PERSISTENCE_SESSION}><Harness patternId={pattern.id} /><Probe /></StudioProvider>);
   const roll = screen.getByRole("region", { name: `Piano roll for ${pattern.name}` });
   const cells = roll.querySelector<HTMLElement>("[data-piano-cells]")!;
@@ -277,9 +280,9 @@ describe("PianoRoll", () => {
     expect(cells.isConnected).toBe(false);
   });
 
-  it("replaces the prototype synth view in the pattern editor", () => {
+  it("renders an empty prompt until a clip selects a pattern", () => {
     render(<StudioProvider initialProject={{ ...EMPTY_PROJECT, patterns: [melody] }} persistenceSession={TEST_PERSISTENCE_SESSION}><PatternEditor /></StudioProvider>);
-    expect(screen.getByRole("region", { name: "Piano roll for Melody" })).toBeVisible();
-    expect(screen.queryByTitle("Piano-roll editing is not connected yet")).not.toBeInTheDocument();
+    expect(screen.getByText("Select or create a clip to edit its pattern.")).toBeVisible();
+    expect(screen.queryByRole("region", { name: "Piano roll for Melody" })).not.toBeInTheDocument();
   });
 });

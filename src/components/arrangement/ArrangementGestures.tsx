@@ -32,7 +32,7 @@ interface PlacementPreview {
 }
 
 interface PlacementDrag {
-  readonly kind: "move" | "resize" | "place";
+  readonly kind: "move" | "resize";
   readonly clip: ArrangementClip;
   readonly pointerId: number;
   readonly startX: number;
@@ -51,7 +51,7 @@ interface PlacementDrag {
 export function ArrangementGestures({ children, onPreviewEndBar = () => undefined }: Readonly<{
   children: ReactNode; onPreviewEndBar?: (endBar: number | null) => void;
 }>): ReactElement {
-  const { project, updateClip, placePattern, deleteClip, selectClip, selectPattern } = useStudioStore((state) => state);
+  const { project, updateClip, deleteClip, selectClip } = useStudioStore((state) => state);
   const surface = useRef<HTMLDivElement>(null);
   const drag = useRef<PlacementDrag | null>(null);
   const [preview, setPreview] = useState<PlacementPreview | null>(null);
@@ -76,8 +76,7 @@ export function ArrangementGestures({ children, onPreviewEndBar = () => undefine
     const deltaBars = (clientX - current.startX + current.laneLeft - rect.left) / current.pixelsPerBar;
     const lastStartBar = PROJECT_CAPS.maxArrangementBars - current.lengthBars * current.clip.repeatCount;
     const clip: ArrangementClip = { ...current.clip, trackId: lane.dataset.trackId!,
-      startBar: current.kind === "place" ? Math.max(0, Math.min(lastStartBar, Math.floor((clientX - rect.left) / current.pixelsPerBar)))
-        : current.kind === "move" ? Math.max(0, Math.min(lastStartBar, current.clip.startBar + Math.round(deltaBars))) : current.clip.startBar,
+      startBar: current.kind === "move" ? Math.max(0, Math.min(lastStartBar, current.clip.startBar + Math.round(deltaBars))) : current.clip.startBar,
       repeatCount: current.kind === "resize"
         ? Math.max(1, Math.min(64, Math.round(current.clip.repeatCount + deltaBars / current.lengthBars))) : current.clip.repeatCount };
     const endBar = clip.startBar + current.lengthBars * clip.repeatCount;
@@ -133,25 +132,25 @@ export function ArrangementGestures({ children, onPreviewEndBar = () => undefine
 
   function start(event: PointerEvent<HTMLDivElement>): void {
     if (event.button !== 0 || drag.current || !(event.target instanceof Element)) return;
-    const button = event.target.closest<HTMLButtonElement>("button[data-clip-id], button[data-resize-clip-id], button[data-pattern-id]");
+    const button = event.target.closest<HTMLButtonElement>("button[data-clip-id], button[data-resize-clip-id]");
     if (!button) return;
     const scroller = surface.current!.querySelector<HTMLElement>("[data-arrangement-scroll]")!;
     const bars = Number(scroller.querySelector<HTMLElement>("[data-bars]")!.dataset.bars);
     const clipId = button.dataset.clipId ?? button.dataset.resizeClipId;
     const clip = clipId ? project.arrangement.find((item) => item.id === clipId) : undefined;
-    const pattern = project.patterns.find((item) => item.id === (clip?.patternId ?? button.dataset.patternId));
+    if (!clip) return;
+    const pattern = project.patterns.find((item) => item.id === clip.patternId);
     if (!pattern) return;
     const lane = Array.from(scroller.querySelectorAll<HTMLElement>("[data-track-id]"))
-      .find((item) => !clip || item.dataset.trackId === clip.trackId);
-    if (clip) selectClip(clip.id); else selectPattern(pattern.id);
+      .find((item) => item.dataset.trackId === clip.trackId);
+    selectClip(clip.id);
     setMessage(null);
     if (!lane) return;
     const rect = lane.getBoundingClientRect();
     event.preventDefault();
     button.focus({ preventScroll: true });
     surface.current!.setPointerCapture(event.pointerId);
-    drag.current = { kind: button.dataset.resizeClipId ? "resize" : clip ? "move" : "place",
-      clip: clip ?? { id: "", patternId: pattern.id, trackId: "", startBar: 0, repeatCount: 1 },
+    drag.current = { kind: button.dataset.resizeClipId ? "resize" : "move", clip,
       pointerId: event.pointerId, startX: event.clientX, startY: event.clientY,
       clientX: event.clientX, clientY: event.clientY, laneLeft: rect.left,
       pixelsPerBar: rect.width / bars, lengthBars: pattern.lengthBars, bars, scroller, preview: null, scrollFrame: null };
@@ -172,13 +171,13 @@ export function ArrangementGestures({ children, onPreviewEndBar = () => undefine
     const result = current.preview?.lane && !project.tracks.some((track) => track.id === current.preview!.clip.trackId)
       ? current.preview : candidateAt(current, event.clientX, event.clientY);
     cancel();
-    if (current.kind === "place" && event.clientX === current.startX && event.clientY === current.startY) return;
     if (!result.lane) { setMessage(result.problem); return; }
-    const clipId = current.kind === "place" ? placePattern(current.clip.patternId, result.clip.trackId, result.clip.startBar) : current.clip.id;
-    if (current.kind !== "place") updateClip(current.clip.id, current.kind === "resize" ? { repeatCount: result.clip.repeatCount }
+    const unchanged = current.clip.trackId === result.clip.trackId && current.clip.startBar === result.clip.startBar &&
+      current.clip.repeatCount === result.clip.repeatCount;
+    if (!unchanged) updateClip(current.clip.id, current.kind === "resize" ? { repeatCount: result.clip.repeatCount }
       : { trackId: result.clip.trackId, startBar: result.clip.startBar });
     queueMicrotask(() => Array.from(surface.current?.querySelectorAll<HTMLButtonElement>("button[data-clip-id]") ?? [])
-      .find((button) => button.dataset.clipId === clipId)?.focus({ preventScroll: true }));
+      .find((button) => button.dataset.clipId === current.clip.id)?.focus({ preventScroll: true }));
   }
 
   const pattern = project.patterns.find((item) => item.id === preview?.clip.patternId);
