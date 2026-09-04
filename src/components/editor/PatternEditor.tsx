@@ -20,7 +20,7 @@ export function PatternEditor(): ReactElement {
             <div>
               <small className="block text-[11px] font-semibold tracking-[0.12em] text-zinc-600">SELECTED TRACK</small>
               <strong className="mt-1 block text-[11px] font-semibold text-zinc-300">{track.name}</strong>
-              <em className="mt-[3px] block text-xs not-italic text-zinc-600">{pattern.name} · {pattern.lengthBars} bars · {pattern.events.length} {pattern.kind === "drum" ? "hits" : "notes"} · {uses === 0 ? "Unplaced" : `${uses} placements`}</em>
+              <em className="mt-[3px] block text-xs not-italic text-zinc-600">{pattern.name} · {pattern.lengthBars} bars · {pattern.events.length} {pattern.kind === "drum" ? "hits" : "notes"} · {uses} {uses === 1 ? "placement" : "placements"}</em>
             </div>
             <div className="flex gap-[5px]" aria-label="Fixed grid settings">
               <span className="grid h-[27px] place-items-center rounded-md border border-white/10 bg-white/[0.03] px-2.5 text-xs text-zinc-500">1 / 16</span>

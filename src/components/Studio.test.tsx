@@ -1166,6 +1166,7 @@ describe("Studio", () => {
   it("edits clip routing and repeats, duplicates sharing, and makes only one clip unique", async () => {
     const user = userEvent.setup();
     renderSession({ ...DEMO_PROJECT, arrangement: [DEMO_PROJECT.arrangement[2]!] });
+    expect(screen.getByRole("region", { name: "Pattern editor for Low Orbit phrase" })).toHaveTextContent(/1 placement(?!s)/);
     await user.click(screen.getByRole("button", { name: "Edit clip Low Orbit phrase at bar 1" }));
     await user.selectOptions(screen.getByLabelText("Destination track"), "chords");
     await user.clear(screen.getByLabelText("Starting bar"));
