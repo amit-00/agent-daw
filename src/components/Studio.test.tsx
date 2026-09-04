@@ -1179,6 +1179,7 @@ describe("Studio", () => {
     await user.click(screen.getByRole("button", { name: "Make unique" }));
     expect(screen.getByRole("button", { name: "Already unique" })).toBeDisabled();
     expect(screen.getByRole("region", { name: "Pattern editor for Low Orbit phrase copy" })).toBeVisible();
+    expect(screen.getByRole("textbox", { name: "Pattern name" })).toHaveValue("Low Orbit phrase copy");
     await user.click(screen.getByRole("button", { name: "Delete clip" }));
     expect(sessionStore!.getState().project.patterns.some((item) => item.name === "Low Orbit phrase copy")).toBe(false);
     expect(screen.getByText("Select or create a clip to edit its pattern.")).toBeVisible();

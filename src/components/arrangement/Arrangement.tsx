@@ -174,7 +174,7 @@ export function Arrangement({ previewEndBar = null }: Readonly<{ previewEndBar?:
         </div>
       </section>
       {adding && <AddTrack onClose={() => setAdding(false)} />}
-      {editingClip && editingPattern && <ClipSettings key={editingClip.id} clip={editingClip} pattern={editingPattern}
+      {editingClip && editingPattern && <ClipSettings key={editingPattern.id} clip={editingClip} pattern={editingPattern}
         onClose={closeClipSettings} />}
       {editingTrack && <TrackSettings key={editingTrack.id} track={editingTrack} onClose={() => setEditingId(null)} onDeleted={() => {
         setEditingId(null);
