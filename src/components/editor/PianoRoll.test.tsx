@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useEffect, type ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -100,28 +100,46 @@ beforeEach(() => vi.stubGlobal("PointerEvent", TestPointerEvent));
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe("PianoRoll", () => {
-  it("keeps the 73-row grid stable and replaces raw controls with a contextual musical inspector", () => {
-    const { roll, cells } = mount();
-    const inspectorSlot = roll.querySelector<HTMLElement>("[data-note-inspector]")!;
-    expect(inspectorSlot).toBeEmptyDOMElement();
+  it("keeps the 73-row grid stable without raw note controls", () => {
+    mount();
+
     expect(screen.queryByRole("spinbutton")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Duplicate selected" })).not.toBeInTheDocument();
     expect(screen.getByText("C7")).toBeVisible();
     expect(screen.getByText("C1")).toBeVisible();
+  });
 
-    selectNote(cells, "Select C4 at step 1 for 4 steps", 1);
-    const inspector = screen.getByRole("status", { name: "Selected note inspector" });
-    expect(inspector).toHaveTextContent("1 note selected");
-    expect(inspector).toHaveTextContent("Pitch C4");
-    expect(inspector).toHaveTextContent("Position Bar 1 · Beat 1 · Step 1");
-    expect(inspector).toHaveTextContent("Duration 1/4 note");
-    expect(roll.querySelector("[data-piano-cells]")).toBe(cells);
-    expect(roll.querySelector("[data-note-inspector]")).toBe(inspectorSlot);
+  it("keeps the step ruler visible while the piano roll scrolls vertically", () => {
+    const { roll } = mount();
+    const stepRuler = roll.querySelector<HTMLElement>("[data-step-ruler]");
 
-    selectNote(cells, "Select E4 at step 5 for 2 steps", 2, true);
-    expect(inspector).toHaveTextContent("2 notes selected");
-    expect(within(inspector).getAllByText("Mixed")).toHaveLength(2);
-    expect(inspector).toHaveTextContent("Bar 1 · Beat 1 · Step 1 – Bar 1 · Beat 2 · Step 1");
+    expect(stepRuler).toHaveClass("sticky", "top-0");
+  });
+
+  it("keeps scrolling pitch labels behind the ruler corner", () => {
+    const { roll } = mount();
+    const rulerCorner = roll.querySelector<HTMLElement>("[data-ruler-corner]");
+
+    expect(rulerCorner).toHaveClass("sticky", "top-0", "left-0", "z-30");
+  });
+
+  it("renders a readable piano-key pitch ruler with octave landmarks", () => {
+    const { roll } = mount();
+    const pitchRuler = roll.querySelector<HTMLElement>("[data-pitch-ruler]");
+
+    expect(pitchRuler).toHaveClass("w-12");
+    expect(screen.getByText("C4")).toHaveClass("bg-zinc-800", "text-zinc-200");
+    expect(screen.getByText("C♯4")).toHaveClass("bg-black", "text-zinc-400");
+  });
+
+  it("replaces the note inspector with note details on hover or keyboard focus", () => {
+    const { roll } = mount();
+    const note = screen.getByRole("button", { name: "Select C4 at step 1 for 4 steps" });
+    const tooltip = note.querySelector<HTMLElement>("[role='tooltip']");
+
+    expect(roll.querySelector("[data-note-inspector]")).not.toBeInTheDocument();
+    expect(tooltip).toHaveTextContent("C4 · Bar 1 · Beat 1 · Step 1 · 4 steps");
+    expect(tooltip).toHaveClass("group-hover:block", "group-focus-visible:block");
   });
 
   it("single-selects, Shift-toggles, and clears selection from an empty click", () => {

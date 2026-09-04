@@ -55,10 +55,8 @@ const noteLabel = (note: SynthNote): string =>
   `Select ${pitchName(note.midiNote)} at step ${note.startStep + 1} for ${note.lengthSteps} ${note.lengthSteps === 1 ? "step" : "steps"}`;
 const positionLabel = (step: number): string =>
   `Bar ${Math.floor(step / 16) + 1} · Beat ${Math.floor((step % 16) / 4) + 1} · Step ${(step % 4) + 1}`;
-const durationLabel = (length: number): string => ({
-  1: "1/16 note", 2: "1/8 note", 3: "3/16 note", 4: "1/4 note", 6: "Dotted 1/4",
-  8: "1/2 note", 12: "Dotted 1/2", 16: "Whole note",
-})[length] ?? `${length} steps`;
+const noteDetails = (note: SynthNote): string =>
+  `${pitchName(note.midiNote)} · ${positionLabel(note.startStep)} · ${note.lengthSteps} ${note.lengthSteps === 1 ? "step" : "steps"}`;
 
 function moveNotes(notes: readonly SynthNote[], stepDelta: number, pitchDelta: number, steps: number): {
   readonly notes: readonly SynthNote[]; readonly stepDelta: number; readonly pitchDelta: number;
@@ -94,7 +92,6 @@ export function PianoRoll({ pattern }: Readonly<{ pattern: SynthPattern }>): Rea
   const steps = pattern.lengthBars * 16;
   const currentSelectedIds = selectedIds.filter((id) => pattern.events.some((note) => note.id === id));
   const selected = pattern.events.filter((note) => currentSelectedIds.includes(note.id));
-  const inspected = preview?.notes ?? selected;
   const previewById = new Map(preview?.notes.map((note) => [note.id, note]));
   const displayed = preview?.replacesOriginals
     ? pattern.events.map((note) => previewById.get(note.id) ?? note)
@@ -281,36 +278,29 @@ export function PianoRoll({ pattern }: Readonly<{ pattern: SynthPattern }>): Rea
     }
   }
 
-  const pitches = new Set(inspected.map((note) => note.midiNote));
-  const lengths = new Set(inspected.map((note) => note.lengthSteps));
-  const starts = inspected.map((note) => note.startStep);
-  const position = starts.length === 0 ? "" : starts.every((start) => start === starts[0])
-    ? positionLabel(starts[0]!)
-    : `${positionLabel(Math.min(...starts))} – ${positionLabel(Math.max(...starts))}`;
-
   return <section aria-label={`Piano roll for ${pattern.name}`}
     className="flex h-full min-h-0 flex-col touch-none"
     onKeyDown={handleKeyboard}>
-    <div data-note-inspector className="z-20 flex h-9 min-w-max shrink-0 items-center border-b border-white/10 bg-zinc-950 px-2 text-[11px] text-zinc-500">
-      {inspected.length > 0 && <div role="status" aria-label="Selected note inspector" className="flex items-center gap-2">
-        <strong className="min-w-24 text-zinc-300">{inspected.length} {inspected.length === 1 ? "note" : "notes"} selected</strong>
-        <span className="rounded border border-white/10 bg-white/[0.03] px-2 py-1"><b className="mr-1 font-medium text-zinc-600">Pitch</b>{" "}{pitches.size === 1 ? pitchName(inspected[0]!.midiNote) : "Mixed"}</span>
-        <span className="rounded border border-white/10 bg-white/[0.03] px-2 py-1"><b className="mr-1 font-medium text-zinc-600">Position</b>{" "}{position}</span>
-        <span className="rounded border border-white/10 bg-white/[0.03] px-2 py-1"><b className="mr-1 font-medium text-zinc-600">Duration</b>{" "}{lengths.size === 1 ? durationLabel(inspected[0]!.lengthSteps) : "Mixed"}</span>
-      </div>}
-    </div>
     <div data-piano-scroll className="min-h-0 flex-1 overflow-auto">
-      <div className="grid grid-cols-[38px_1fr] grid-rows-[20px_1fr]"
-        style={{ minWidth: 38 + steps * MIN_STEP_WIDTH, height: 20 + PITCHES.length * PITCH_HEIGHT }}>
-        <div className="col-start-2 grid border-b border-white/10 bg-white/[0.025]"
+      <div className="grid grid-cols-[48px_1fr] grid-rows-[20px_1fr]"
+        style={{ minWidth: 48 + steps * MIN_STEP_WIDTH, height: 20 + PITCHES.length * PITCH_HEIGHT }}>
+        <div data-ruler-corner aria-hidden="true"
+          className="sticky top-0 left-0 z-30 col-start-1 row-start-1 border-r border-b border-white/10 bg-zinc-950" />
+        <div data-step-ruler className="sticky top-0 z-10 col-start-2 grid border-b border-white/10 bg-zinc-950"
           style={{ gridTemplateColumns: `repeat(${steps},minmax(${MIN_STEP_WIDTH}px,1fr))` }}>
           {Array.from({ length: steps }, (_, index) => <span key={index}
             className="grid place-items-center border-l border-white/[0.04] font-mono text-[11px] text-zinc-600">{index + 1}</span>)}
         </div>
-        <div className="sticky left-0 z-10 row-start-2 grid border-r border-white/10 bg-zinc-950"
+        <div data-pitch-ruler aria-hidden="true" className="sticky left-0 z-20 row-start-2 grid w-12 border-r border-white/10 bg-zinc-950"
           style={{ gridTemplateRows: `repeat(${PITCHES.length},${PITCH_HEIGHT}px)` }}>
-          {PITCHES.map((pitch) => <span key={pitch}
-            className="grid place-items-center border-b border-white/[0.045] font-mono text-[11px] text-zinc-500">{pitchName(pitch)}</span>)}
+          {PITCHES.map((pitch) => {
+            const name = NOTE_NAMES[pitch % 12]!;
+            const keyClass = name === "C" ? "border-white/20 bg-zinc-800 text-zinc-200"
+              : name.endsWith("♯") ? "border-white/[0.035] bg-black text-zinc-400"
+              : "border-white/[0.06] bg-zinc-900 text-zinc-500";
+            return <span key={pitch}
+              className={`flex items-center justify-end border-b pr-2 font-mono text-[11px] ${keyClass}`}>{pitchName(pitch)}</span>;
+          })}
         </div>
         <div ref={cells} data-piano-cells role="group" tabIndex={0} aria-label={`Note grid, ${steps} steps`}
           onPointerDown={begin} onPointerMove={move} onPointerUp={finish}
@@ -328,9 +318,12 @@ export function PianoRoll({ pattern }: Readonly<{ pattern: SynthPattern }>): Rea
             const row = 96 - note.midiNote + 1;
             const selectedNote = previewCopy || (!duplicatePreview && currentSelectedIds.includes(sourceId));
             return <button key={note.id} type="button" data-note-id={sourceId} aria-label={noteLabel(note)} aria-pressed={selectedNote}
-              className={`relative z-[1] m-[2px] cursor-grab rounded-[3px] border p-0 focus-visible:z-[3] focus-visible:outline-2 focus-visible:outline-violet-300 ${selectedNote ? "border-white/90 outline outline-1 outline-white/70" : "border-white/20"}`}
+              className={`group relative z-[1] m-[2px] cursor-grab rounded-[3px] border p-0 hover:z-20 focus-visible:z-20 focus-visible:outline-2 focus-visible:outline-violet-300 ${selectedNote ? "border-white/90 outline outline-1 outline-white/70" : "border-white/20"}`}
               style={{ gridColumn: `${note.startStep + 1} / span ${note.lengthSteps}`, gridRow: String(row),
                 background: `color-mix(in srgb, ${color} ${selectedNote ? 92 : 78}%, transparent)` }}>
+              <span role="tooltip" className="pointer-events-none absolute top-[calc(100%+4px)] left-0 hidden whitespace-nowrap rounded border border-white/15 bg-zinc-900 px-2 py-1 font-mono text-[11px] text-zinc-200 shadow-lg group-hover:block group-focus-visible:block">
+                {noteDetails(note)}
+              </span>
               <span data-resize-side="left" aria-hidden="true" className="absolute inset-y-[-1px] left-[-1px] w-[7px] cursor-ew-resize" />
               <span data-resize-side="right" aria-hidden="true" className="absolute inset-y-[-1px] right-[-1px] w-[7px] cursor-ew-resize" />
             </button>;
