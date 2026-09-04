@@ -404,6 +404,52 @@ test("load returns a valid stored project", async () => {
   assert.deepEqual(result, { status: "loaded", project, updatedAt: 123 });
 });
 
+test("load discards an orphan pattern from a schema 2 project", async () => {
+  const indexedDB = new IDBFactory();
+  const project = projectWithBasicDrums();
+  const source = {
+    ...project,
+    patterns: [
+      ...project.patterns,
+      { id: "orphan", name: "Orphan", kind: "synth", lengthBars: 1, events: [] },
+    ],
+  };
+  const record = { project: source, updatedAt: 123 };
+  await seedRawRecord(indexedDB, record);
+
+  const result = await createService(indexedDB).load();
+
+  assert.equal(result.status, "loaded");
+  if (result.status === "loaded") {
+    assert.equal(result.project.patterns.some(({ id }) => id === "orphan"), false);
+  }
+  assert.equal(source.patterns.some(({ id }) => id === "orphan"), true);
+  assert.deepEqual(await readRawRecord(indexedDB), record);
+});
+
+test("load discards an orphan pattern from a schema 1 project", async () => {
+  const indexedDB = new IDBFactory();
+  const project = legacyProject();
+  const source: ProjectV1 = {
+    ...project,
+    patterns: [
+      ...project.patterns,
+      { id: "orphan", trackId: "track", name: "Orphan", kind: "synth", lengthBars: 1, events: [] },
+    ],
+  };
+  const record = { project: source, updatedAt: 123 };
+  await seedRawRecord(indexedDB, record);
+
+  const result = await createService(indexedDB).load();
+
+  assert.equal(result.status, "loaded");
+  if (result.status === "loaded") {
+    assert.equal(result.project.patterns.some(({ id }) => id === "orphan"), false);
+  }
+  assert.equal(source.patterns.some(({ id }) => id === "orphan"), true);
+  assert.deepEqual(await readRawRecord(indexedDB), record);
+});
+
 test("load migrates schema 1 without rewriting the stored record", async () => {
   const indexedDB = new IDBFactory();
   const project = legacyProject();

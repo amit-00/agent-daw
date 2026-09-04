@@ -1,7 +1,7 @@
-import { mergeChangeSummaries, type ChangeSummary, type Operation, type Reduction } from "./commands.ts";
+import { type Operation, type Reduction } from "./commands.ts";
 import type { ArrangementClip, DrumHit, DrumPattern, Pattern, Project, SoundCatalog, SynthNote, SynthPattern, Track } from "./model.ts";
 import { PROJECT_CAPS } from "./model.ts";
-import { reduceOperation } from "./reducer.ts";
+import { finalizeProject, reduceOperation, summarizeProjectDiff } from "./reducer.ts";
 
 export type ProjectValidationCode =
   | "TRACK_NOT_FOUND"
@@ -396,11 +396,18 @@ export function validateOperations(
   soundCatalog: SoundCatalog,
 ): Reduction {
   let candidate = project;
-  const summaries: ChangeSummary[] = [];
   for (const operation of operations) {
     const reduction = validateOperation(candidate, operation, soundCatalog);
     candidate = reduction.project;
-    summaries.push(reduction.changes);
   }
-  return { project: candidate, changes: mergeChangeSummaries(summaries) };
+  const createdPatternIds = new Set(operations.flatMap((operation) =>
+    operation.type === "pattern.create" ? [operation.pattern.id]
+      : operation.type === "pattern.duplicate" ? [operation.duplicatePatternId]
+        : [],
+  ));
+  const unplaced = candidate.patterns.find((pattern) =>
+    createdPatternIds.has(pattern.id) && !candidate.arrangement.some((clip) => clip.patternId === pattern.id));
+  if (unplaced !== undefined) fail("OUT_OF_RANGE", "placement", `Pattern ${unplaced.id} requires a placement.`);
+  const finalized = finalizeProject(candidate);
+  return { project: finalized, changes: summarizeProjectDiff(project, finalized) };
 }

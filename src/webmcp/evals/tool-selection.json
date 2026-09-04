@@ -63,29 +63,29 @@
     "expectedCall": { "name": "set_track_mute", "arguments": { "request_id": "eval-mute-pad", "track_id": "pad", "muted": true } }
   },
   {
-    "id": "create-unplaced-drum-pattern",
+    "id": "create-placed-drum-pattern",
     "messages": [
-      { "role": "user", "content": "Create an unplaced one-bar drum pattern named Break Fill. Use request ID eval-create-break." }
+      { "role": "user", "content": "Create a one-bar drum pattern named Break Fill on the drum track at bar 9. Use request ID eval-create-break." }
     ],
-    "expectedCall": { "name": "create_pattern", "arguments": { "request_id": "eval-create-break", "kind": "drum", "name": "Break Fill", "length_bars": 1 } }
+    "expectedCall": { "name": "create_pattern", "arguments": { "request_id": "eval-create-break", "kind": "drum", "name": "Break Fill", "length_bars": 1, "placement": { "track_id": "drums", "start_bar": 9 } } }
   },
   {
     "id": "place-existing-pattern",
     "messages": [
-      { "role": "user", "content": "Place the existing pattern unused-idea on the melody track at bar 9 for 2 repeats. Use request ID eval-place-idea." }
+      { "role": "user", "content": "Place the existing pattern night-air on the melody track at bar 9 for 2 repeats. Use request ID eval-place-idea." }
     ],
-    "expectedCall": { "name": "place_pattern", "arguments": { "request_id": "eval-place-idea", "pattern_id": "unused-idea", "track_id": "melody", "start_bar": 9, "repeat_count": 2 } }
+    "expectedCall": { "name": "place_pattern", "arguments": { "request_id": "eval-place-idea", "pattern_id": "night-air", "track_id": "melody", "start_bar": 9, "repeat_count": 2 } }
   },
   {
     "id": "add-several-notes",
     "messages": [
-      { "role": "user", "content": "Add C4, E4, and G4 to pattern unused-idea at steps 1, 5, and 9, each four steps long. Use request ID eval-add-chord." }
+      { "role": "user", "content": "Add C4, E4, and G4 to pattern night-air at steps 1, 5, and 9, each four steps long. Use request ID eval-add-chord." }
     ],
     "expectedCall": {
       "name": "add_notes",
       "arguments": {
         "request_id": "eval-add-chord",
-        "pattern_id": "unused-idea",
+        "pattern_id": "night-air",
         "notes": [
           { "midi_note": 60, "start_step": 1, "length_steps": 4 },
           { "midi_note": 64, "start_step": 5, "length_steps": 4 },
@@ -147,7 +147,7 @@
         "label": "Create counterline",
         "changes": [
           { "type": "create_track", "ref": "counterline-track", "kind": "synth", "instrument_id": "synth.lead", "name": "Counterline" },
-          { "type": "create_pattern", "ref": "counterline-pattern", "kind": "synth", "name": "Counterline", "length_bars": 1 },
+          { "type": "create_pattern", "ref": "counterline-pattern", "kind": "synth", "name": "Counterline", "length_bars": 1, "placement": { "track_id": { "ref": "counterline-track" }, "start_bar": 9 } },
           {
             "type": "add_notes",
             "pattern_id": { "ref": "counterline-pattern" },
@@ -155,8 +155,7 @@
               { "midi_note": 72, "start_step": 1, "length_steps": 4 },
               { "midi_note": 76, "start_step": 9, "length_steps": 4 }
             ]
-          },
-          { "type": "place_pattern", "pattern_id": { "ref": "counterline-pattern" }, "track_id": { "ref": "counterline-track" }, "start_bar": 9 }
+          }
         ]
       }
     }

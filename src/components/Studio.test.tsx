@@ -639,7 +639,7 @@ describe("Studio", () => {
 
     expect(screen.getByRole("button", { name: "Play" })).toBeEnabled();
     expect(screen.getByRole("alert")).toHaveTextContent("Project arrangement is empty");
-    expect(screen.getByRole("button", { name: "Add pattern" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Add track" })).toBeEnabled();
   });
 
   it("shows blocked audio retry guidance while editing remains enabled", async () => {
@@ -654,7 +654,7 @@ describe("Studio", () => {
     await user.click(screen.getByRole("button", { name: "Play" }));
 
     expect(screen.getByRole("alert")).toHaveTextContent("Audio context is suspended; retry from a user gesture");
-    expect(screen.getByRole("button", { name: "Add pattern" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Add track" })).toBeEnabled();
   });
 
   it("reports degraded samples while playing available sounds", async () => {
@@ -1065,9 +1065,9 @@ describe("Studio", () => {
       }, { signal: new AbortController().signal });
     });
 
-    expect(screen.getByRole("button", { name: "Select pattern Bridge pattern" })).toHaveTextContent("1 placement");
     expect(within(screen.getByRole("region", { name: "Low Orbit lane" }))
       .getByRole("button", { name: "Select Bridge pattern" })).toBeVisible();
+    expect(screen.queryByRole("complementary", { name: "Project patterns" })).not.toBeInTheDocument();
   });
 
   it("preserves selection across agent edits until the selected entity is deleted", async () => {
@@ -1089,7 +1089,7 @@ describe("Studio", () => {
       );
     });
     expect(selectedClip).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByRole("button", { name: "Select pattern Unselected" })).toHaveAttribute("aria-pressed", "false");
+    expect(screen.queryByRole("complementary", { name: "Project patterns" })).not.toBeInTheDocument();
 
     await act(async () => {
       await registration.tools.get("delete_clip")!.execute(
@@ -1098,7 +1098,7 @@ describe("Studio", () => {
       );
     });
     expect(selectedClip).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Select pattern Neon beat" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText("Select or create a clip to edit its pattern.")).toBeVisible();
   });
 
   it("uses a track's assigned color for its clips and pattern notes", async () => {
@@ -1114,28 +1114,22 @@ describe("Studio", () => {
       .toHaveStyle({ background: "color-mix(in srgb, #70bd72 78%, transparent)" });
   });
 
-  it("creates an unplaced pattern, renames it, and places it using one-based bars", async () => {
+  it("removes the pattern sidebar and manages the selected clip pattern", async () => {
     const user = userEvent.setup();
     renderSession(DEMO_PROJECT);
-    await user.click(screen.getByRole("button", { name: "Add pattern" }));
-    await user.selectOptions(screen.getByLabelText("Pattern editor"), "synth");
-    await user.click(screen.getByRole("button", { name: "Create pattern" }));
-    expect(screen.getByRole("button", { name: "Select pattern New melody" })).toHaveTextContent("Unplaced");
-    await user.click(screen.getByRole("button", { name: "Edit pattern New melody" }));
-    await user.clear(screen.getByLabelText("Pattern name"));
-    await user.type(screen.getByLabelText("Pattern name"), "New phrase");
-    await user.click(screen.getByRole("button", { name: "Rename pattern" }));
-    await user.selectOptions(screen.getByLabelText("Pattern length"), "2");
-    await user.selectOptions(screen.getByLabelText("Destination track"), "bass");
-    expect(screen.queryByRole("option", { name: "Neon Kit" })).not.toBeInTheDocument();
-    await user.clear(screen.getByLabelText("Starting bar"));
-    await user.type(screen.getByLabelText("Starting bar"), "9");
-    await user.click(screen.getByRole("button", { name: "Place pattern" }));
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    expect(within(screen.getByRole("region", { name: "Low Orbit lane" })).getByRole("button", { name: "Select New phrase" })).toBeVisible();
-    expect(screen.getByRole("button", { name: "Select pattern New phrase" })).toHaveTextContent("1 placement");
+    expect(screen.queryByRole("complementary", { name: "Project patterns" })).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Pattern editor for Neon beat" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Edit clip Neon beat at bar 1" }));
+    expect(screen.getByRole("textbox", { name: "Pattern name" })).toHaveValue("Neon beat");
+    expect(screen.getByRole("combobox", { name: "Pattern length" })).toHaveValue("1");
+    expect(screen.getByRole("button", { name: "Delete pattern" })).toBeEnabled();
+    await user.selectOptions(screen.getByRole("combobox", { name: "Duplicate destination track" }), "drums");
+    await user.clear(screen.getByRole("spinbutton", { name: "Duplicate starting bar" }));
+    await user.type(screen.getByRole("spinbutton", { name: "Duplicate starting bar" }), "9");
+    await user.click(screen.getByRole("button", { name: "Duplicate pattern" }));
+    expect(screen.getByRole("button", { name: "Edit clip Neon beat copy at bar 9" })).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Undo" }));
-    expect(screen.getByRole("button", { name: "Select pattern New phrase" })).toHaveTextContent("Unplaced");
+    expect(screen.queryByRole("button", { name: "Edit clip Neon beat copy at bar 9" })).not.toBeInTheDocument();
   });
 
   it("offers compatible destinations despite unrelated invalid track metadata", async () => {
@@ -1146,13 +1140,13 @@ describe("Studio", () => {
       tracks: DEMO_PROJECT.tracks.map((track) => track.id === "bass"
         ? { ...track, name: invalidName, volumeDb: 7 }
         : track),
-      arrangement: [],
+      arrangement: [DEMO_PROJECT.arrangement[2]!],
     }} />);
 
-    await user.click(await screen.findByRole("button", { name: "Edit pattern Unused idea" }));
+    await user.click(await screen.findByRole("button", { name: "Edit clip Low Orbit phrase at bar 1" }));
 
-    expect(screen.getByRole("option", { name: invalidName })).toBeInTheDocument();
-    expect(screen.queryByRole("option", { name: "Neon Kit" })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("option", { name: invalidName })).toHaveLength(2);
+    expect(screen.queryAllByRole("option", { name: "Neon Kit" })).toHaveLength(0);
   });
 
   it("creates and places from an empty lane in one edit and offers numeric creation", async () => {
@@ -1163,7 +1157,7 @@ describe("Studio", () => {
     fireEvent.doubleClick(lane, { clientX: 240 });
     expect(within(lane).getByRole("button", { name: "Edit clip New melody at bar 3" })).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Undo" }));
-    expect(screen.queryByRole("button", { name: "Select pattern New melody" })).not.toBeInTheDocument();
+    expect(screen.getByText("Select or create a clip to edit its pattern.")).toBeVisible();
     expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
     await user.click(screen.getByRole("button", { name: "Edit Low Orbit" }));
     await user.clear(screen.getByLabelText("New pattern starting bar"));
@@ -1175,6 +1169,7 @@ describe("Studio", () => {
   it("edits clip routing and repeats, duplicates sharing, and makes only one clip unique", async () => {
     const user = userEvent.setup();
     renderSession({ ...DEMO_PROJECT, arrangement: [DEMO_PROJECT.arrangement[2]!] });
+    expect(screen.getByRole("region", { name: "Pattern editor for Low Orbit phrase" })).toHaveTextContent(/1 placement(?!s)/);
     await user.click(screen.getByRole("button", { name: "Edit clip Low Orbit phrase at bar 1" }));
     await user.selectOptions(screen.getByLabelText("Destination track"), "chords");
     await user.clear(screen.getByLabelText("Starting bar"));
@@ -1184,27 +1179,30 @@ describe("Studio", () => {
     await user.click(screen.getByRole("button", { name: "Apply placement" }));
     expect(within(screen.getByRole("region", { name: "Glasshouse lane" })).getByRole("button", { name: "Select Low Orbit phrase" })).toHaveTextContent("×3");
     await user.click(screen.getByRole("button", { name: "Duplicate clip" }));
-    expect(screen.getByRole("button", { name: "Select pattern Low Orbit phrase" })).toHaveTextContent("2 placements");
     await user.click(screen.getByRole("button", { name: "Edit clip Low Orbit phrase at bar 9" }));
     await user.click(screen.getByRole("button", { name: "Make unique" }));
-    expect(screen.getByRole("button", { name: "Select pattern Low Orbit phrase copy" })).toHaveTextContent("1 placement");
+    expect(screen.getByRole("button", { name: "Already unique" })).toBeDisabled();
+    expect(screen.getByRole("region", { name: "Pattern editor for Low Orbit phrase copy" })).toBeVisible();
+    expect(screen.getByRole("textbox", { name: "Pattern name" })).toHaveValue("Low Orbit phrase copy");
     await user.click(screen.getByRole("button", { name: "Delete clip" }));
-    expect(screen.getByRole("button", { name: "Select pattern Low Orbit phrase copy" })).toHaveTextContent("Unplaced");
+    expect(sessionStore!.getState().project.patterns.some((item) => item.name === "Low Orbit phrase copy")).toBe(false);
+    expect(screen.getByText("Select or create a clip to edit its pattern.")).toBeVisible();
     expect(screen.getByRole("region", { name: "Glasshouse lane" })).toHaveFocus();
   });
 
   it("confirms all pattern placements before deletion and can cancel or undo", async () => {
     const user = userEvent.setup();
     renderSession(DEMO_PROJECT);
-    await user.click(screen.getByRole("button", { name: "Edit pattern Neon beat" }));
+    const lane = screen.getByRole("region", { name: "Neon Kit lane" });
+    await user.click(screen.getByRole("button", { name: "Edit clip Neon beat at bar 1" }));
     await user.click(screen.getByRole("button", { name: "Delete pattern" }));
     expect(screen.getByRole("dialog")).toHaveTextContent("2 placements");
     await user.click(screen.getByRole("button", { name: "Keep pattern" }));
     expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
     await user.click(screen.getByRole("button", { name: "Delete pattern" }));
     await user.click(screen.getByRole("button", { name: "Confirm delete" }));
-    expect(screen.queryByRole("button", { name: "Select pattern Neon beat" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Add pattern" })).toHaveFocus();
+    expect(within(lane).queryByRole("button", { name: "Select Neon beat" })).not.toBeInTheDocument();
+    expect(lane).toHaveFocus();
     await user.click(screen.getByRole("button", { name: "Undo" }));
     expect(screen.getAllByRole("button", { name: "Select Neon beat" })).toHaveLength(2);
   });
@@ -1289,33 +1287,30 @@ describe("Studio", () => {
     await user.click(screen.getByRole("button", { name: "Edit Neon Kit" }));
     await user.click(screen.getByRole("button", { name: "Delete track" }));
     expect(screen.getByRole("dialog")).toHaveTextContent("2 clips");
-    expect(screen.getByRole("dialog")).toHaveTextContent("Patterns remain");
+    expect(screen.getByRole("dialog")).toHaveTextContent("Patterns used elsewhere remain");
     await user.click(screen.getByRole("button", { name: "Keep track" }));
     expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
     await user.click(screen.getByRole("button", { name: "Delete track" }));
     await user.click(screen.getByRole("button", { name: "Confirm delete" }));
     expect(screen.queryByRole("region", { name: "Neon Kit lane" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Select pattern Neon beat" })).toHaveTextContent("Unplaced");
+    expect(sessionStore!.getState().project.patterns.some((pattern) => pattern.id === "neon")).toBe(false);
     expect(screen.getByRole("button", { name: "Add track" })).toHaveFocus();
     await user.click(screen.getByRole("button", { name: "Undo" }));
     expect(screen.getByRole("region", { name: "Neon Kit lane" })).toBeVisible();
   });
 
-  it("selects shared clips and unplaced patterns using project content", async () => {
+  it("selects shared clips using arrangement content", async () => {
     const user = userEvent.setup();
     renderSession(DEMO_PROJECT);
     await user.click(within(screen.getByRole("region", { name: "Glasshouse lane" })).getAllByRole("button", { name: "Select Glasshouse" })[1]!);
     expect(screen.getByRole("region", { name: "Pattern editor for Glasshouse" })).toHaveTextContent("2 placements");
     expect(within(screen.getByRole("region", { name: "Pattern editor for Glasshouse" })).getByText("C4")).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "Select pattern Unused idea" }));
-    expect(screen.getByRole("region", { name: "Pattern editor for Unused idea" })).toHaveTextContent("Unplaced");
-    expect(screen.getByRole("region", { name: "Pattern editor for Unused idea" })).not.toHaveTextContent("SELECTED TRACK");
   });
 
   it("renders empty sessions without assuming a track or pattern", () => {
     renderSession(EMPTY_PROJECT);
     expect(screen.queryByText("Add a track to start arranging.")).not.toBeInTheDocument();
-    expect(screen.getByText("Select a pattern to view its notes or hits.")).toBeVisible();
+    expect(screen.getByText("Select or create a clip to edit its pattern.")).toBeVisible();
   });
 
   it("renders exact project mixer values in project track order with compact control labels", async () => {

@@ -42,12 +42,12 @@ describe("studio session", () => {
     const bassId = store.getState().createTrack("synth", "synth.bass")!;
     const padId = store.getState().createTrack("synth", "synth.pad")!;
     const drumsId = store.getState().createTrack("drum", "kit.basic")!;
-    const phraseId = store.getState().createPattern("synth")!;
+    const bassClipId = store.getState().createPatternAt(bassId, 0)!;
+    const phraseId = store.getState().project.arrangement.find((clip) => clip.id === bassClipId)!.patternId;
     const beatId = store.getState().createPatternAt(drumsId, 0)!;
 
     store.getState().addSynthNote(phraseId, 60, 0, 4);
     store.getState().setDrumCells(beatId, [{ soundId: "kick", startStep: 0, active: true }]);
-    const bassClipId = store.getState().placePattern(phraseId, bassId, 0)!;
     const padClipId = store.getState().placePattern(phraseId, padId, 0)!;
     store.getState().makeClipUnique(padClipId);
     const uniquePatternId = store.getState().selectedPatternId!;
@@ -113,7 +113,9 @@ describe("studio session", () => {
 
   it("allows chords but rejects a note extending past its pattern", () => {
     const store = createTestStore(EMPTY_PROJECT);
-    const patternId = store.getState().createPattern("synth")!;
+    const trackId = store.getState().createTrack("synth", "synth.lead")!;
+    const clipId = store.getState().createPatternAt(trackId, 0)!;
+    const patternId = store.getState().project.arrangement.find((clip) => clip.id === clipId)!.patternId;
     store.getState().addSynthNote(patternId, 60, 0, 4);
     store.getState().addSynthNote(patternId, 64, 0, 4);
     store.getState().addSynthNote(patternId, 67, 0, 4);
@@ -125,9 +127,12 @@ describe("studio session", () => {
   });
 
   it("accepts the synth-note boundaries and rejects invalid note values", () => {
-    const store = createTestStore({ ...EMPTY_PROJECT, patterns: [
+    const store = createTestStore({ ...EMPTY_PROJECT, tracks: [DEMO_PROJECT.tracks[3]!, DEMO_PROJECT.tracks[0]!], patterns: [
       { id: "melody", name: "Melody", kind: "synth", lengthBars: 1, events: [] },
       { id: "beat", name: "Beat", kind: "drum", lengthBars: 1, events: [] },
+    ], arrangement: [
+      { id: "melody-clip", trackId: "melody", patternId: "melody", startBar: 0, repeatCount: 1 },
+      { id: "beat-clip", trackId: "drums", patternId: "beat", startBar: 0, repeatCount: 1 },
     ] });
     expect(store.getState().addSynthNote("melody", 24, 0, 1)).toBeTruthy();
     expect(store.getState().addSynthNote("melody", 96, 15, 1)).toBeTruthy();
@@ -147,9 +152,9 @@ describe("studio session", () => {
       { id: "a", midiNote: 60, startStep: 0, lengthSteps: 4 },
       { id: "b", midiNote: 64, startStep: 4, lengthSteps: 4 },
     ];
-    const store = createTestStore({ ...EMPTY_PROJECT, patterns: [
+    const store = createTestStore({ ...EMPTY_PROJECT, tracks: [DEMO_PROJECT.tracks[3]!], patterns: [
       { id: "melody", name: "Melody", kind: "synth", lengthBars: 1, events: original },
-    ] });
+    ], arrangement: [{ id: "melody-clip", trackId: "melody", patternId: "melody", startBar: 0, repeatCount: 1 }] });
     store.getState().updateSynthNotes("melody", [
       { noteId: "a", changes: { midiNote: 61, startStep: 2 } },
       { noteId: "b", changes: { startStep: 6, lengthSteps: 2 } },
@@ -176,9 +181,9 @@ describe("studio session", () => {
       { id: "a", midiNote: 60, startStep: 0, lengthSteps: 4 },
       { id: "b", midiNote: 64, startStep: 4, lengthSteps: 4 },
     ];
-    const store = createTestStore({ ...EMPTY_PROJECT, patterns: [
+    const store = createTestStore({ ...EMPTY_PROJECT, tracks: [DEMO_PROJECT.tracks[3]!], patterns: [
       { id: "melody", name: "Melody", kind: "synth", lengthBars: 1, events: notes },
-    ] });
+    ], arrangement: [{ id: "melody-clip", trackId: "melody", patternId: "melody", startBar: 0, repeatCount: 1 }] });
     const duplicateIds = store.getState().duplicateSynthNotes("melody", ["a", "a", "b"], 1, 2);
     const events = store.getState().project.patterns[0]?.events ?? [];
     expect(events).toHaveLength(4);
@@ -196,10 +201,10 @@ describe("studio session", () => {
     expect(store.getState().project.patterns[0]?.events).toEqual(notes);
     expect(store.getState().history).toHaveLength(before);
 
-    const fullStore = createTestStore({ ...EMPTY_PROJECT, patterns: [
+    const fullStore = createTestStore({ ...EMPTY_PROJECT, tracks: [DEMO_PROJECT.tracks[3]!], patterns: [
       { id: "full", name: "Full", kind: "synth", lengthBars: 1,
         events: Array.from({ length: 512 }, (_, index) => ({ id: `note-${index}`, midiNote: 60, startStep: 0, lengthSteps: 1 })) },
-    ] });
+    ], arrangement: [{ id: "full-clip", trackId: "melody", patternId: "full", startBar: 0, repeatCount: 1 }] });
     expect(fullStore.getState().addSynthNote("full", 64, 1, 1)).toBeNull();
     expect(fullStore.getState().duplicateSynthNotes("full", ["note-0"], 1, 0)).toEqual([]);
     expect(fullStore.getState().project.patterns[0]?.events).toHaveLength(512);
@@ -224,13 +229,16 @@ describe("studio session", () => {
 
   it("commits a drum paint stroke once and retains edits across selection", () => {
     const store = createTestStore(EMPTY_PROJECT);
-    const patternId = store.getState().createPattern("drum")!;
+    const trackId = store.getState().createTrack("drum", "kit.basic")!;
+    const clipId = store.getState().createPatternAt(trackId, 0)!;
+    const patternId = store.getState().project.arrangement.find((clip) => clip.id === clipId)!.patternId;
     const before = store.getState().history.length;
     store.getState().setDrumCells(patternId, [
       { soundId: "kick", startStep: 0, active: true },
       { soundId: "kick", startStep: 4, active: true },
     ]);
-    const otherId = store.getState().createPattern("drum")!;
+    const otherClipId = store.getState().createPatternAt(trackId, 1)!;
+    const otherId = store.getState().project.arrangement.find((clip) => clip.id === otherClipId)!.patternId;
     store.getState().selectPattern(otherId);
     store.getState().selectPattern(patternId);
     expect(store.getState().project.patterns.find((pattern) => pattern.id === patternId)?.events).toHaveLength(2);
@@ -242,7 +250,9 @@ describe("studio session", () => {
 
   it("adds and erases drum cells atomically without toggling repeated cells", () => {
     const store = createTestStore(EMPTY_PROJECT);
-    const patternId = store.getState().createPattern("drum")!;
+    const trackId = store.getState().createTrack("drum", "kit.basic")!;
+    const clipId = store.getState().createPatternAt(trackId, 0)!;
+    const patternId = store.getState().project.arrangement.find((clip) => clip.id === clipId)!.patternId;
     store.getState().setDrumCells(patternId, [
       { soundId: "kick", startStep: 0, active: true },
       { soundId: "kick", startStep: 0, active: true },
@@ -267,9 +277,12 @@ describe("studio session", () => {
   });
 
   it("accepts the final drum step and rejects invalid cells without history", () => {
-    const project = { ...EMPTY_PROJECT, patterns: [
+    const project = { ...EMPTY_PROJECT, tracks: [DEMO_PROJECT.tracks[0]!, DEMO_PROJECT.tracks[3]!], patterns: [
       { id: "long-beat", name: "Long beat", kind: "drum" as const, lengthBars: 4 as const, events: [] },
       { id: "unused-synth", name: "Melody", kind: "synth" as const, lengthBars: 1 as const, events: [] },
+    ], arrangement: [
+      { id: "long-beat-clip", trackId: "drums", patternId: "long-beat", startBar: 0, repeatCount: 1 },
+      { id: "unused-synth-clip", trackId: "melody", patternId: "unused-synth", startBar: 0, repeatCount: 1 },
     ] };
     const store = createTestStore(project);
     store.getState().setDrumCells("long-beat", [{ soundId: "kick", startStep: 63, active: true }]);
@@ -299,9 +312,9 @@ describe("studio session", () => {
 
   it("enforces the drum-event cap while still allowing erasure", () => {
     const events = Array.from({ length: 512 }, (_, index) => ({ id: `hit-${index}`, soundId: "kick", startStep: index % 16 }));
-    const store = createTestStore({ ...EMPTY_PROJECT, patterns: [
+    const store = createTestStore({ ...EMPTY_PROJECT, tracks: [DEMO_PROJECT.tracks[0]!], patterns: [
       { id: "full-beat", name: "Full beat", kind: "drum", lengthBars: 1, events },
-    ] });
+    ], arrangement: [{ id: "full-beat-clip", trackId: "drums", patternId: "full-beat", startBar: 0, repeatCount: 1 }] });
     store.getState().setDrumCells("full-beat", [{ soundId: "snare", startStep: 0, active: true }]);
     expect(store.getState().history).toHaveLength(0);
     expect(store.getState().errorMessage).toMatch(/512/);
@@ -358,25 +371,42 @@ describe("studio session", () => {
     expect(store.getState().project.arrangement.every((clip) => clip.patternId === originalPatternId)).toBe(true);
   });
 
-  it("duplicates a pattern as unplaced content with fresh event IDs", () => {
+  it("duplicates a pattern only with its first placement and fresh event IDs", () => {
     const store = createTestStore(DEMO_PROJECT);
-    for (const patternId of ["neon", "glasshouse"]) {
-      const id = store.getState().duplicatePattern(patternId);
-      const copy = store.getState().project.patterns.find((pattern) => pattern.id === id)!;
-      const original = DEMO_PROJECT.patterns.find((pattern) => pattern.id === patternId)!;
-      expect(copy.events).toEqual(original.events.map((event) => ({ ...event, id: expect.any(String) })));
-      expect(copy.events.every((event) => !original.events.some((source) => source.id === event.id))).toBe(true);
-      expect(new Set(copy.events.map((event) => event.id)).size).toBe(copy.events.length);
-      expect(store.getState().project.arrangement).toEqual(DEMO_PROJECT.arrangement);
-      expect(store.getState().selectedClipId).toBeNull();
-    }
+    const clipId = store.getState().duplicatePatternAt("orbit", "bass", 8);
+    const clip = store.getState().project.arrangement.find((item) => item.id === clipId)!;
+    const copy = store.getState().project.patterns.find((pattern) => pattern.id === clip.patternId)!;
+    const original = DEMO_PROJECT.patterns.find((pattern) => pattern.id === "orbit")!;
+
+    expect(clip).toMatchObject({ trackId: "bass", startBar: 8, repeatCount: 1 });
+    expect(copy.events).toEqual(original.events.map((event) => ({ ...event, id: expect.any(String) })));
+    expect(copy.events.every((event) => !original.events.some((source) => source.id === event.id))).toBe(true);
+    expect(new Set(copy.events.map((event) => event.id)).size).toBe(copy.events.length);
+    expect(store.getState()).toMatchObject({ selectedClipId: clipId, selectedPatternId: copy.id, selectedTrackId: "bass" });
+    expect(store.getState().history.at(-1)?.action.kind).toBe("batch");
   });
 
-  it("creates standalone patterns and shares renamed content across tracks", () => {
+  it("makes a sole placement unique without allocating IDs or history", () => {
+    const project: Project = {
+      ...DEMO_PROJECT,
+      patterns: DEMO_PROJECT.patterns.filter((pattern) => pattern.id === "afterglow"),
+      arrangement: DEMO_PROJECT.arrangement.filter((clip) => clip.id === "melody-a"),
+    };
+    const randomUUID = vi.spyOn(crypto, "randomUUID");
+    const store = createTestStore(project);
+    randomUUID.mockClear();
+
+    store.getState().makeClipUnique("melody-a");
+
+    expect(randomUUID).not.toHaveBeenCalled();
+    expect(store.getState()).toMatchObject({ revision: 0, history: [] });
+  });
+
+  it("creates placed patterns and shares renamed content across tracks", () => {
     const store = createTestStore(DEMO_PROJECT);
-    const id = store.getState().createPattern("synth")!;
+    const first = store.getState().createPatternAt("bass", 8)!;
+    const id = store.getState().project.arrangement.find((clip) => clip.id === first)!.patternId;
     expect(store.getState().project.patterns.at(-1)).toMatchObject({ id, kind: "synth", lengthBars: 1, events: [] });
-    const first = store.getState().placePattern(id, "bass", 8)!;
     const second = store.getState().placePattern(id, "chords", 8)!;
     store.getState().renamePattern(id, "  Shared idea  ");
     store.getState().setPatternLength(id, 2);
@@ -410,7 +440,7 @@ describe("studio session", () => {
     store.getState().createPatternAt("gone", 0);
     store.getState().renamePattern("gone", "Missing");
     store.getState().setPatternLength("gone", 1);
-    store.getState().duplicatePattern("gone");
+    store.getState().duplicatePatternAt("gone", "bass", 8);
     store.getState().deletePattern("gone");
     store.getState().duplicateClip("gone");
     store.getState().updateClip("gone", { startBar: 1 });
@@ -424,9 +454,8 @@ describe("studio session", () => {
   it("enforces pattern and clip caps before atomic creation or copying", () => {
     const patterns = Array.from({ length: 128 }, (_, index) => ({ ...DEMO_PROJECT.patterns[0]!, id: `p-${index}` }));
     const store = createTestStore({ ...DEMO_PROJECT, patterns: [...DEMO_PROJECT.patterns, ...patterns].slice(0, 128) });
-    expect(store.getState().createPattern("synth")).toBeNull();
     expect(store.getState().createPatternAt("bass", 8)).toBeNull();
-    expect(store.getState().duplicatePattern("neon")).toBeNull();
+    expect(store.getState().duplicatePatternAt("neon", "drums", 8)).toBeNull();
     store.getState().makeClipUnique("drums-a");
     expect(store.getState().history).toHaveLength(0);
     expect(store.getState().project.patterns).toHaveLength(128);
@@ -435,6 +464,7 @@ describe("studio session", () => {
     })) });
     expect(full.getState().placePattern("neon", "drums", 8)).toBeNull();
     expect(full.getState().createPatternAt("drums", 8)).toBeNull();
+    expect(full.getState().duplicatePatternAt("neon", "drums", 8)).toBeNull();
     expect(full.getState().duplicateClip("clip-0")).toBeNull();
     expect(full.getState().project.patterns).toHaveLength(DEMO_PROJECT.patterns.length);
     expect(full.getState().history).toHaveLength(0);
@@ -454,6 +484,27 @@ describe("studio session", () => {
     expect(store.getState().project.arrangement.some((clip) => clip.id === "drums-a")).toBe(false);
     expect(store.getState().history).toHaveLength(1);
     expect(store.getState().errorMessage).toBeNull();
+  });
+
+  it("removes the last clip's pattern and restores both with undo", () => {
+    const store = createTestStore({
+      ...DEMO_PROJECT,
+      patterns: DEMO_PROJECT.patterns.filter((pattern) => pattern.id === "afterglow"),
+      arrangement: DEMO_PROJECT.arrangement.filter((clip) => clip.id === "melody-a"),
+    });
+    store.getState().selectClip("melody-a");
+
+    store.getState().deleteClip("melody-a");
+
+    expect(store.getState()).toMatchObject({
+      selectedClipId: null, selectedPatternId: null, selectedTrackId: "melody",
+    });
+    expect(store.getState().project).toMatchObject({ patterns: [], arrangement: [] });
+    store.getState().undo();
+    expect(store.getState().project).toMatchObject({
+      patterns: [expect.objectContaining({ id: "afterglow" })],
+      arrangement: [expect.objectContaining({ id: "melody-a" })],
+    });
   });
 
   it("creates catalog tracks with fresh IDs and undoable defaults", () => {
@@ -522,7 +573,7 @@ describe("studio session", () => {
     expect(store.getState().history).toHaveLength(2);
   });
 
-  it("reorders once, refuses invalid targets, and deletes clips but retains patterns", () => {
+  it("reorders once and finalizes track-owned patterns through undoable deletion", () => {
     const store = createTestStore(DEMO_PROJECT);
     store.getState().reorderTrack("drums", 4);
     expect(store.getState().project.tracks.at(-1)?.id).toBe("drums");
@@ -531,12 +582,15 @@ describe("studio session", () => {
     store.getState().reorderTrack("gone", 0);
     store.getState().deleteTrack("gone");
     expect(store.getState().history).toHaveLength(1);
+    store.getState().selectClip("drums-a");
     store.getState().deleteTrack("drums");
     expect(store.getState().project.arrangement.some((clip) => clip.trackId === "drums")).toBe(false);
-    expect(store.getState().project.patterns).toEqual(DEMO_PROJECT.patterns);
+    expect(store.getState().project.patterns.some((pattern) => pattern.id === "neon")).toBe(false);
+    expect(store.getState()).toMatchObject({ selectedClipId: null, selectedPatternId: null, selectedTrackId: null });
     expect(store.getState().history).toHaveLength(2);
     store.getState().undo();
     expect(store.getState().project.arrangement).toEqual(DEMO_PROJECT.arrangement);
+    expect(store.getState().project.patterns).toEqual(DEMO_PROJECT.patterns);
     store.getState().undo();
     expect(store.getState().project).toEqual(DEMO_PROJECT);
   });
@@ -557,15 +611,15 @@ describe("studio session", () => {
     expect(first.getState().project.name).toBe("Changed");
   });
 
-  it("selects clips with their routing but library patterns without invented track context", () => {
+  it("selects clips with their routing and patterns without invented track context", () => {
     const store = createTestStore(DEMO_PROJECT);
     store.getState().selectClip("chords-b");
     expect(store.getState()).toMatchObject({
       selectedClipId: "chords-b", selectedPatternId: "glasshouse", selectedTrackId: "chords",
     });
-    store.getState().selectPattern("unused-idea");
+    store.getState().selectPattern("afterglow");
     expect(store.getState()).toMatchObject({
-      selectedPatternId: "unused-idea", selectedClipId: null, selectedTrackId: null,
+      selectedPatternId: "afterglow", selectedClipId: null, selectedTrackId: null,
     });
     store.getState().selectTrack("bass");
     expect(store.getState()).toMatchObject({
@@ -589,13 +643,8 @@ describe("studio session", () => {
       operation: { type: "track.delete", trackId: "bass" },
     });
     expect(store.getState()).toMatchObject({
-      selectedTrackId: null, selectedClipId: null, selectedPatternId: "orbit",
+      selectedTrackId: null, selectedClipId: null, selectedPatternId: null,
     });
-    store.getState().dispatch({
-      id: "delete-pattern", source: "manual", label: "Delete phrase", kind: "operation",
-      operation: { type: "pattern.delete", patternId: "orbit" },
-    });
-    expect(store.getState().selectedPatternId).toBeNull();
   });
 
   it("handles empty sessions and stale selection requests without history", () => {
@@ -620,10 +669,10 @@ describe("studio session", () => {
     });
     const entryId = store.getState().history[0]!.id;
     store.getState().dispatch({
-      id: "idea", source: "manual", label: "Create idea", kind: "operation",
-      operation: { type: "pattern.create", pattern: {
-        id: "new-idea", name: "New idea", kind: "synth", lengthBars: 1, events: [],
-      } },
+      id: "idea", source: "manual", label: "Create idea", kind: "batch", operations: [
+        { type: "pattern.create", pattern: { id: "new-idea", name: "New idea", kind: "synth", lengthBars: 1, events: [] } },
+        { type: "arrangement.place", clip: { id: "new-idea-clip", patternId: "new-idea", trackId: "melody", startBar: 8, repeatCount: 1 } },
+      ],
     });
     store.getState().selectPattern("new-idea");
     store.getState().restore(entryId);

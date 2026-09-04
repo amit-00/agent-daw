@@ -7,12 +7,11 @@ import {
   type HistoryControlCommand,
   type HistoryControlResult,
   type HistoryEntry,
-  mergeChangeSummaries,
   type Operation,
   type RestoreCommand,
 } from "./commands.ts";
 import { PROJECT_CAPS, type Project } from "./model.ts";
-import { reduceOperation, summarizeProjectDiff } from "./reducer.ts";
+import { reduceOperations, summarizeProjectDiff } from "./reducer.ts";
 
 export interface ProjectServiceState {
   readonly project: Project;
@@ -81,19 +80,12 @@ export class ProjectService {
     }
 
     const operations = command.kind === "operation" ? [command.operation] : command.operations;
-    let nextProject = this.project;
-    const changeSummaries: ChangeSummary[] = [];
-    const historyOperations: Operation[] = [];
-    for (const operation of operations) {
-      const historyOperation = cloneJson(operation);
-      const reduction = reduceOperation(nextProject, historyOperation);
-      nextProject = reduction.project;
-      changeSummaries.push(reduction.changes);
-      historyOperations.push(historyOperation);
-    }
+    const historyOperations = operations.map((operation) => cloneJson(operation));
+    const reduction = reduceOperations(this.project, historyOperations);
+    const nextProject = reduction.project;
 
     const changed = JSON.stringify(nextProject) !== JSON.stringify(this.project);
-    const changes = changed ? mergeChangeSummaries(changeSummaries) : emptyChangeSummary();
+    const changes = changed ? reduction.changes : emptyChangeSummary();
     const historyEntry = changed
       ? this.commit(
         command.id,

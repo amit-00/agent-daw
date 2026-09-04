@@ -18,6 +18,7 @@ import {
   type PatternLengthBars,
   type Project,
   type ProjectServiceState,
+  reduceOperation,
   type RestoreCommand,
   type SynthNote,
   type SynthPattern,
@@ -88,12 +89,11 @@ export interface StudioState extends ProjectServiceState {
   setTrackPreset(trackId: string, instrumentId: string): void;
   reorderTrack(trackId: string, toIndex: number): void;
   deleteTrack(trackId: string): void;
-  createPattern(kind: TrackKind): string | null;
   createPatternAt(trackId: string, startBar: number): string | null;
   placePattern(patternId: string, trackId: string, startBar: number): string | null;
   renamePattern(patternId: string, name: string): void;
   setPatternLength(patternId: string, lengthBars: PatternLengthBars): void;
-  duplicatePattern(patternId: string): string | null;
+  duplicatePatternAt(patternId: string, trackId: string, startBar: number): string | null;
   deletePattern(patternId: string): void;
   updateClip(clipId: string, changes: Extract<Operation, { type: "arrangement.update" }>["changes"]): void;
   duplicateClip(clipId: string): string | null;
@@ -480,17 +480,6 @@ export function createStudioStore(
         }
         commit(`Delete ${track.name}`, { type: "track.delete", trackId });
       },
-      createPattern(kind): string | null {
-        if (get().project.patterns.length >= PROJECT_CAPS.maxPatterns) {
-          set({ errorMessage: `A project supports ${PROJECT_CAPS.maxPatterns} patterns. Delete one before creating another.` });
-          return null;
-        }
-        const id = crypto.randomUUID();
-        const name = kind === "drum" ? "New beat" : "New melody";
-        if (!commit(`Create ${name}`, { type: "pattern.create", pattern: { id, name, kind, lengthBars: 1, events: [] } })) return null;
-        get().selectPattern(id);
-        return id;
-      },
       createPatternAt(trackId, startBar): string | null {
         const { project } = get();
         const track = project.tracks.find((item) => item.id === trackId);
@@ -544,18 +533,22 @@ export function createStudioStore(
         const pattern = project.patterns.find((item) => item.id === patternId)!;
         commit(`Set ${pattern.name} to ${lengthBars} bars`, { type: "pattern.update", patternId, changes: { lengthBars } });
       },
-      duplicatePattern(patternId): string | null {
+      duplicatePatternAt(patternId, trackId, startBar): string | null {
         const { project } = get();
         const pattern = project.patterns.find((item) => item.id === patternId);
         if (!pattern) { set({ errorMessage: "That pattern no longer exists. Select another pattern." }); return null; }
-        if (project.patterns.length >= PROJECT_CAPS.maxPatterns) {
-          set({ errorMessage: `A project supports ${PROJECT_CAPS.maxPatterns} patterns. Delete one before duplicating.` });
+        if (project.patterns.length >= PROJECT_CAPS.maxPatterns || project.arrangement.length >= PROJECT_CAPS.maxArrangementClips) {
+          set({ errorMessage: `Duplicating needs a free pattern and clip slot (${PROJECT_CAPS.maxPatterns} patterns / ${PROJECT_CAPS.maxArrangementClips} clips maximum). Delete an unused item first.` });
           return null;
         }
-        const id = crypto.randomUUID();
-        if (!commit(`Duplicate ${pattern.name}`, duplicatePatternOperation(pattern, id))) return null;
-        get().selectPattern(id);
-        return id;
+        const duplicatePatternId = crypto.randomUUID();
+        const duplicate = duplicatePatternOperation(pattern, duplicatePatternId);
+        const clip = { id: crypto.randomUUID(), patternId: duplicatePatternId, trackId, startBar, repeatCount: 1 };
+        const problem = getPlacementProblem(reduceOperation(project, duplicate).project, clip);
+        if (problem) { set({ errorMessage: problem }); return null; }
+        if (!commitBatch(`Duplicate ${pattern.name}`, [duplicate, { type: "arrangement.place", clip }])) return null;
+        get().selectClip(clip.id);
+        return clip.id;
       },
       deletePattern(patternId): void {
         const pattern = get().project.patterns.find((item) => item.id === patternId);
@@ -598,6 +591,7 @@ export function createStudioStore(
         const { project } = get();
         const clip = project.arrangement.find((item) => item.id === clipId);
         if (!clip) { set({ errorMessage: "That clip no longer exists. Select another clip." }); return; }
+        if (project.arrangement.filter((item) => item.patternId === clip.patternId).length === 1) return;
         if (project.patterns.length >= PROJECT_CAPS.maxPatterns) {
           set({ errorMessage: `Making a clip unique needs a free pattern slot (${PROJECT_CAPS.maxPatterns} maximum). Delete an unused pattern first.` });
           return;

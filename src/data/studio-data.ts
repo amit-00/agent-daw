@@ -66,7 +66,6 @@ export const DEMO_PROJECT: Project = {
       { id: "pad-1", midiNote: 48, startStep: 0, lengthSteps: 64 },
       { id: "pad-2", midiNote: 55, startStep: 0, lengthSteps: 64 },
     ] },
-    { id: "unused-idea", name: "Unused idea", kind: "synth", lengthBars: 1, events: [] },
   ],
   arrangement: [
     { id: "drums-a", trackId: "drums", patternId: "neon", startBar: 0, repeatCount: 4 },

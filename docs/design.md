@@ -5,7 +5,7 @@
 ### 1.1 Outcomes
 
 1. A beginner can start a blank desktop-browser project and create an instrumental song without importing audio.
-2. A user can program reusable drum and melodic patterns, arrange them, mix the tracks, play the result, and export WAV.
+2. A user can program arrangement-owned reusable drum and melodic patterns, mix the tracks, play the result, and export WAV.
 3. An external agent can inspect and edit the same project through WebMCP, from full-song composition down to exact notes and drum hits.
 4. Manual and agent edits pass through one command service after input-boundary validation and are attributed in chronological history.
 5. The user can undo, redo, or restore an earlier version without erasing history.
@@ -26,7 +26,7 @@ The MVP succeeds when a user or agent can start empty, create drum, bass, chord,
 - Blank and bundled demo projects.
 - Drum tracks using a bundled kit with stable sound identifiers.
 - Synth tracks using one polyphonic Web Audio engine with curated bass, chord, lead, and pad presets.
-- Reusable 1-, 2-, or 4-bar patterns in 4/4 with sixteenth-note quantization.
+- Reusable 1-, 2-, or 4-bar patterns in 4/4 with sixteenth-note quantization; every pattern has at least one arrangement clip.
 - Drum step grid with named sound rows.
 - Melodic piano roll with pitch, note start, note length, and chords.
 - Arrangement clips that reference patterns and can be placed, repeated, moved, duplicated, shortened, and deleted on a bar grid.
@@ -78,7 +78,7 @@ Stretch work starts only after every MVP acceptance path passes:
 | Command | Validated project mutation from the UI or WebMCP. |
 | Compensating edit | New action reversing part of an earlier action without rewriting history. |
 | Drum hit | Trigger for a named drum sound on one sixteenth-note step. |
-| Pattern | Reusable 1-, 2-, or 4-bar collection of drum hits or synth notes. |
+| Pattern | Reusable 1-, 2-, or 4-bar collection of drum hits or synth notes, always placed by at least one arrangement clip. |
 | Piano roll | Grid whose horizontal axis is time and vertical axis is pitch. |
 | Preset | Curated fixed configuration of the built-in synth. |
 | Restore | Replace current state with an earlier snapshot and record it as a new action. |
@@ -269,7 +269,7 @@ All IDs are UUID strings. Ordering is explicit so UI and agent results stay stab
 | `bpm` | number | 40–240. |
 | `masterVolumeDb` | number | -60 to 0 dB. |
 | `tracks` | Track[] | Ordered; maximum 16. |
-| `patterns` | Pattern[] | Maximum 128. |
+| `patterns` | Pattern[] | Maximum 128; every pattern has at least one arrangement clip. |
 | `arrangement` | ArrangementClip[] | Maximum 512. |
 
 ### 7.2 Track
@@ -330,11 +330,12 @@ The MVP opens the most recently edited project. Downloadable project files are s
 
 1. Start blank or load the demo.
 2. Create a drum or synth track and select a preset.
-3. Create a 1-, 2-, or 4-bar pattern.
+3. Create a 1-, 2-, or 4-bar pattern directly in the arranger with its first clip; duplicate patterns the same way.
 4. Toggle drum hits or add, move, resize, and delete synth notes.
-5. Place and repeat the pattern in the arranger.
-6. Commit each completed gesture as one manual history entry.
-7. Reschedule playback from updated state.
+5. Repeat shared patterns in the arranger, or make one clip unique before changing its pattern.
+6. Removing a pattern's last clip removes that pattern; shared patterns remain while another clip still places them.
+7. Commit each completed gesture as one manual history entry.
+8. Reschedule playback from updated state.
 
 Invalid gestures snap back and explain why. Pointer movement commits only on release so history stays readable.
 
@@ -405,11 +406,11 @@ Every mutation accepts a call ID for idempotency and returns a history entry ID 
 |---|---|
 | Project | `set_project_details` |
 | Tracks | `create_track`, `update_track`, `delete_track` |
-| Patterns | `create_pattern`, `duplicate_pattern`, `update_pattern`, `delete_pattern` |
+| Patterns | `create_pattern`, `duplicate_pattern` (both require a placement), `update_pattern`, `delete_pattern` |
 | Notes | `add_notes`, `update_notes`, `delete_notes` |
 | Arrangement | `place_pattern`, `update_arrangement_clip`, `delete_arrangement_clip` |
 
-Deletion rejects when dependencies remain unless the same batch removes them first. Direct calls create one agent history entry each.
+Deleting a pattern requires `delete_clips` when it has dependent clips. Removing a pattern's last clip removes the pattern; shared patterns remain while another clip still places them. Direct calls create one agent history entry each.
 
 ### 10.3 Batch mutation
 

@@ -52,6 +52,12 @@ export function summarizeProjectDiff(before: Project, after: Project): ChangeSum
   };
 }
 
+export function finalizeProject(project: Project): Project {
+  const placedPatternIds = new Set(project.arrangement.map((clip) => clip.patternId));
+  const patterns = project.patterns.filter((pattern) => placedPatternIds.has(pattern.id));
+  return patterns.length === project.patterns.length ? project : { ...project, patterns };
+}
+
 export function reduceOperation(project: Project, operation: Operation): Reduction {
   switch (operation.type) {
     case "project.update":
@@ -80,4 +86,11 @@ export function reduceOperation(project: Project, operation: Operation): Reducti
       return reduceSynthNoteOperation(project, operation);
   }
   return unsupportedOperation(operation);
+}
+
+export function reduceOperations(project: Project, operations: readonly Operation[]): Reduction {
+  let candidate = project;
+  for (const operation of operations) candidate = reduceOperation(candidate, operation).project;
+  const finalized = finalizeProject(candidate);
+  return { project: finalized, changes: summarizeProjectDiff(project, finalized) };
 }

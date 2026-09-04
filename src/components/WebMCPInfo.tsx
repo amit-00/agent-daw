@@ -16,7 +16,7 @@ const TOOL_GROUPS: readonly ToolGroup[] = [
   { label: "Inspect", tools: "get_project · get_sound_catalog · get_history", description: "Read the current song, available sounds, and edit history." },
   { label: "Transport", tools: "play · pause · stop · seek · export_wav", description: "Control playback or render the current project." },
   { label: "Project & tracks", tools: "rename_project · create_track · set_track_mix", description: "Shape the song, track order, instruments, and mix." },
-  { label: "Patterns & clips", tools: "create_pattern · place_pattern · move_clip", description: "Build and arrange reusable musical patterns." },
+  { label: "Patterns & clips", tools: "create_pattern · duplicate_pattern · move_clip", description: "Create or duplicate reusable patterns with a required placement, then arrange their clips." },
   { label: "Notes & drums", tools: "add_notes · edit_notes · add_drum_hits", description: "Write and revise synth notes or drum hits." },
   { label: "History & batches", tools: "undo · redo · restore_history · apply_project_changes", description: "Recover edits or commit coordinated changes atomically." },
 ];

@@ -41,8 +41,13 @@ function Harness({ patternId }: Readonly<{ patternId: string }>): ReactElement |
 }
 
 function mount(pattern: SynthPattern = melody): { roll: HTMLElement; cells: HTMLElement } {
-  const project: Project = { ...EMPTY_PROJECT, patterns: [pattern] };
-  return mountProject(project, pattern);
+  const project: Project = { ...EMPTY_PROJECT,
+    tracks: [{ id: "track", name: "Track", kind: "synth", instrumentId: "synth.bass", volumeDb: 0, pan: 0, muted: false, soloed: false }],
+    patterns: [pattern], arrangement: [{ id: "clip", patternId: pattern.id, trackId: "track", startBar: 0, repeatCount: 1 }],
+  };
+  const mounted = mountProject(project, pattern);
+  act(() => state.selectTrack("track"));
+  return mounted;
 }
 
 function mountProject(project: Project, pattern: SynthPattern): { roll: HTMLElement; cells: HTMLElement } {
@@ -378,18 +383,34 @@ describe("PianoRoll", () => {
     expect(cells.isConnected).toBe(false);
   });
 
-  it("replaces the prototype synth view in the pattern editor", () => {
-    render(<StudioProvider initialProject={{ ...EMPTY_PROJECT, patterns: [melody] }} persistenceSession={TEST_PERSISTENCE_SESSION}><PatternEditor /></StudioProvider>);
-    expect(screen.getByRole("region", { name: "Piano roll for Melody" })).toBeVisible();
-    expect(screen.queryByTitle("Piano-roll editing is not connected yet")).not.toBeInTheDocument();
+  it("renders an empty prompt until a clip selects a pattern", () => {
+    const project: Project = {
+      ...EMPTY_PROJECT,
+      tracks: [{ id: "track", name: "Lead", kind: "synth", instrumentId: "synth.lead",
+        volumeDb: 0, pan: 0, muted: false, soloed: false }],
+      patterns: [melody],
+      arrangement: [{ id: "clip", patternId: melody.id, trackId: "track", startBar: 0, repeatCount: 1 }],
+    };
+    render(<StudioProvider initialProject={project} persistenceSession={TEST_PERSISTENCE_SESSION}><PatternEditor /><Probe /></StudioProvider>);
+    act(() => state.selectTrack("track"));
+    expect(screen.getByText("Select or create a clip to edit its pattern.")).toBeVisible();
+    expect(screen.queryByRole("region", { name: "Piano roll for Melody" })).not.toBeInTheDocument();
   });
 
-  it("shows selected-pattern details in one compact header row", () => {
-    render(<StudioProvider initialProject={{ ...EMPTY_PROJECT, patterns: [melody] }} persistenceSession={TEST_PERSISTENCE_SESSION}><PatternEditor /></StudioProvider>);
+  it("shows selected-clip details in one compact header row", () => {
+    const project: Project = {
+      ...EMPTY_PROJECT,
+      tracks: [{ id: "track", name: "Lead", kind: "synth", instrumentId: "synth.lead",
+        volumeDb: 0, pan: 0, muted: false, soloed: false }],
+      patterns: [melody],
+      arrangement: [{ id: "clip", patternId: melody.id, trackId: "track", startBar: 0, repeatCount: 1 }],
+    };
+    render(<StudioProvider initialProject={project} persistenceSession={TEST_PERSISTENCE_SESSION}><PatternEditor /><Probe /></StudioProvider>);
+    act(() => state.selectClip("clip"));
 
     const header = screen.getByLabelText("Fixed grid settings").parentElement!;
     expect(header).toHaveClass("h-8");
     expect(header).not.toHaveClass("min-h-11");
-    expect(header).toHaveTextContent("SELECTED PATTERN · Melody · 1 bar · 2 notes · Unplaced");
+    expect(header).toHaveTextContent("SELECTED TRACK · Lead · Melody · 1 bar · 2 notes · 1 placement");
   });
 });
