@@ -1350,18 +1350,24 @@ describe("pattern and arrangement mutations", () => {
     expect(store.getState().history).toHaveLength(0);
   });
 
-  test("make_clip_unique replays a sole-placement no-op with its existing pattern ID", async () => {
+  test("make_clip_unique replays a sole-placement no-op without retry payload or live clip state", async () => {
     const store = createStudioStore(DEMO_PROJECT);
     const input = { request_id: "already-unique-retry", clip_id: "pad-a" };
 
     const first = await executeMutation(store, "make_clip_unique", input, () => "must-not-generate");
-    const replayed = await executeMutation(store, "make_clip_unique", input, () => "must-not-generate");
+    const removed = await executeMutation(store, "delete_clip", { request_id: "remove-pad", clip_id: "pad-a" });
+    const historyLength = store.getState().history.length;
+    const replayed = await executeMutation(store, "make_clip_unique", {
+      request_id: "already-unique-retry",
+    }, () => "must-not-generate");
 
     expect(first).toMatchObject({ success: true, result: { pattern_id: "night-air", changed: false } });
+    expect(removed).toMatchObject({ success: true });
+    expect(store.getState().project.arrangement.find(({ id }) => id === "pad-a")).toBeUndefined();
     expect(replayed).toMatchObject({ success: true, result: {
       pattern_id: "night-air", changed: false, deduplicated: true,
     } });
-    expect(store.getState().history).toHaveLength(0);
+    expect(store.getState().history).toHaveLength(historyLength);
   });
 
   test("delete_clip removes only the clip and preserves its pattern", async () => {
