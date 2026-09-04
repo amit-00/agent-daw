@@ -71,6 +71,28 @@ test("snapshot reports post-fader levels for every track and the master", async 
   assert.equal(snapshot.trackLevels["00000000-0000-4000-8000-000000000003"], 0);
 });
 
+test("stop cancels a fixed-duration synth audition", async () => {
+  const context = new FakeAudioContext();
+  const timers = new FakeTimers();
+  const engine = new AudioEngine({
+    createContext: () => context.asAudioContext(),
+    loadArrayBuffer: async () => new ArrayBuffer(8),
+    setInterval: (callback, milliseconds) => timers.setInterval(callback, milliseconds),
+    clearInterval: (handle) => timers.clearInterval(handle),
+  });
+  const project = audioProject();
+  engine.replaceProject(project);
+
+  assert.equal(await engine.auditionSynthNote(project.tracks[1]!.id, 60), true);
+  assert.equal(engine.getSnapshot().activeVoices, 1);
+  assert.deepEqual(context.oscillators[0]?.stopTimes, [0.32]);
+
+  engine.stop();
+
+  assert.equal(engine.getSnapshot().activeVoices, 0);
+  assert.deepEqual(context.oscillators[0]?.stopTimes, [0.005]);
+});
+
 test("disposing one engine leaves another engine's runtime independent", async () => {
   const timers = new FakeTimers();
   const instances = [0, 1].map(() => {
