@@ -932,7 +932,8 @@ describe("project and track mutations", () => {
     expect(deleted).toMatchObject({ success: true, result: {
       changed: true, project_revision: 1,
       changes: { created: {}, updated: {}, deleted: {
-        track_ids: ["drums"], arrangement_clip_ids: ["drums-a", "drums-b"],
+        track_ids: ["drums"], pattern_ids: ["neon"],
+        arrangement_clip_ids: ["drums-a", "drums-b"],
       } },
     } });
     expect(blockedStore.getState().history[0]).toMatchObject({
@@ -1214,6 +1215,17 @@ describe("pattern and arrangement mutations", () => {
     expect(createId).toHaveBeenCalledTimes(6);
   });
 
+  test("duplicate_pattern validates nested placement fields", async () => {
+    const response = await executeMutation(createStudioStore(DEMO_PROJECT), "duplicate_pattern", {
+      request_id: "invalid-duplicate-placement", pattern_id: "orbit",
+      placement: { track_id: "bass" },
+    });
+
+    expect(response).toMatchObject({ success: false, error: {
+      code: "INVALID_INPUT", field: "placement.start_bar",
+    } });
+  });
+
   test("delete_pattern reports dependent clip IDs unless cascading is authorized", async () => {
     const store = createStudioStore(DEMO_PROJECT);
 
@@ -1338,6 +1350,20 @@ describe("pattern and arrangement mutations", () => {
     expect(store.getState().history).toHaveLength(0);
   });
 
+  test("make_clip_unique replays a sole-placement no-op with its existing pattern ID", async () => {
+    const store = createStudioStore(DEMO_PROJECT);
+    const input = { request_id: "already-unique-retry", clip_id: "pad-a" };
+
+    const first = await executeMutation(store, "make_clip_unique", input, () => "must-not-generate");
+    const replayed = await executeMutation(store, "make_clip_unique", input, () => "must-not-generate");
+
+    expect(first).toMatchObject({ success: true, result: { pattern_id: "night-air", changed: false } });
+    expect(replayed).toMatchObject({ success: true, result: {
+      pattern_id: "night-air", changed: false, deduplicated: true,
+    } });
+    expect(store.getState().history).toHaveLength(0);
+  });
+
   test("delete_clip removes only the clip and preserves its pattern", async () => {
     const store = createStudioStore(DEMO_PROJECT);
 
@@ -1354,6 +1380,19 @@ describe("pattern and arrangement mutations", () => {
       source: "agent", toolName: "delete_clip", label: "Delete clip",
       action: { kind: "operation", operation: { type: "arrangement.delete", clipId: "bass-a" } },
     });
+  });
+
+  test("delete_clip reports the orphan pattern removed with a final placement", async () => {
+    const store = createStudioStore(DEMO_PROJECT);
+
+    const response = await executeMutation(store, "delete_clip", {
+      request_id: "delete-final", clip_id: "pad-a",
+    });
+
+    expect(response).toMatchObject({ success: true, result: { changes: { deleted: {
+      arrangement_clip_ids: ["pad-a"], pattern_ids: ["night-air"],
+    } } } });
+    expect(store.getState().project.patterns.some(({ id }) => id === "night-air")).toBe(false);
   });
 
   test.each([
@@ -2063,6 +2102,20 @@ describe("apply_project_changes", () => {
         id: "batch-clip", patternId: "batch-pattern", trackId: "batch-track", startBar: 8, repeatCount: 1,
       })]),
     });
+  });
+
+  test("duplicates a pattern into a referenced placed clip in a batch", async () => {
+    const ids = ["batch-copy", "copy-1", "copy-2", "copy-3", "copy-4", "batch-copy-clip"];
+    const response = await apply(createStudioStore(DEMO_PROJECT), [
+      { type: "duplicate_pattern", pattern_id: { id: "orbit" }, ref: "copy", placement: {
+        clip_ref: "copy_clip", track_id: { id: "bass" }, start_bar: 9,
+      } },
+      { type: "rename_pattern", pattern_id: { ref: "copy" }, name: "Copied orbit" },
+    ], () => ids.shift()!);
+
+    expect(response).toMatchObject({ success: true, result: { references: {
+      copy: "batch-copy", copy_clip: "batch-copy-clip",
+    } } });
   });
 
   test.each([

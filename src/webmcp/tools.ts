@@ -1415,7 +1415,10 @@ const defineMutationTool = <T>(
   store: Pick<StoreApi<StudioState>, "getState">,
   parse: (input: Readonly<Record<string, unknown>>) => T,
   run: (input: T, signal: AbortSignal) => unknown | Promise<unknown>,
-  extras: (result: DispatchResult) => Readonly<Record<string, unknown>> = () => ({}),
+  extras: (
+    result: DispatchResult,
+    input?: Readonly<Record<string, unknown>>,
+  ) => Readonly<Record<string, unknown>> = () => ({}),
 ): WebMCPTool => {
   const schemaProperties = expectObject(toolContract.inputSchema.properties, "inputSchema.properties");
   const allowedKeys = Object.keys(schemaProperties);
@@ -1425,7 +1428,7 @@ const defineMutationTool = <T>(
       const object = expectObject(input, "$");
       const requestId = expectString(object.request_id, "request_id", 1, 128);
       const replayed = store.getState().replayDispatch(`webmcp:${toolContract.name}:${requestId}`);
-      if (replayed !== null) return mutationResult(store.getState(), replayed, extras(replayed));
+      if (replayed !== null) return mutationResult(store.getState(), replayed, extras(replayed, object));
       expectAllowedKeys(object, allowedKeys, "$");
       return run(parse(object), signal);
     }),
@@ -1905,7 +1908,12 @@ export function createWebMCPTools(
             pattern_name: input.name }, createId);
         }, (result) => ({ pattern_id: result.changes.created.patternIds[0] ?? existingPatternId }));
       },
-      (result) => ({ pattern_id: result.changes.created.patternIds[0] }),
+      (result, input) => ({
+        pattern_id: result.changes.created.patternIds[0]
+          ?? (typeof input?.clip_id === "string"
+            ? store.getState().project.arrangement.find(({ id }) => id === input.clip_id)?.patternId
+            : undefined),
+      }),
     ),
     defineMutationTool(
       contract("delete_clip"),
