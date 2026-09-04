@@ -5,7 +5,7 @@ AgentDAW is a desktop-first pattern workstation that runs entirely in the browse
 ## Features
 
 - Create, rename, reorder, configure, mute, solo, and delete tracks.
-- Program drums in a step grid and notes or chords in a piano roll.
+- Program drums in a step grid and notes or chords in a scrollable 73-key piano roll with sticky timing and pitch rulers plus hover or keyboard-focus note details.
 - Create reusable patterns directly in the arrangement: creating or duplicating one requires its first clip. Repeat shared clips, move them between compatible tracks, or make one placement unique.
 - Removing a pattern's last clip removes the pattern; shared patterns remain while another clip still places them.
 - Play the arrangement through native Web Audio with per-track and master level meters.

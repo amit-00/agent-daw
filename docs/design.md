@@ -28,7 +28,7 @@ The MVP succeeds when a user or agent can start empty, create drum, bass, chord,
 - Synth tracks using one polyphonic Web Audio engine with curated bass, chord, lead, and pad presets.
 - Reusable 1-, 2-, or 4-bar patterns in 4/4 with sixteenth-note quantization; every pattern has at least one arrangement clip.
 - Drum step grid with named sound rows.
-- Melodic piano roll with pitch, note start, note length, and chords.
+- Melodic piano roll with pitch, note start, note length, chords, sticky timing and pitch rulers, and hover or keyboard-focus note details.
 - Arrangement clips that reference patterns and can be placed, repeated, moved, duplicated, shortened, and deleted on a bar grid.
 - Playback, seek, BPM, track names, preset selection, track volume, pan, mute, solo, and master volume.
 - Browser-local autosave and full-arrangement WAV export.
@@ -331,7 +331,7 @@ The MVP opens the most recently edited project. Downloadable project files are s
 1. Start blank or load the demo.
 2. Create a drum or synth track and select a preset.
 3. Create a 1-, 2-, or 4-bar pattern directly in the arranger with its first clip; duplicate patterns the same way.
-4. Toggle drum hits or add, move, resize, and delete synth notes.
+4. Toggle drum hits or add, move, resize, and delete synth notes. The 73-key piano roll keeps its step ruler visible during vertical scrolling, keeps pitch labels visible during horizontal scrolling, and shows note details on hover or keyboard focus.
 5. Repeat shared patterns in the arranger, or make one clip unique before changing its pattern.
 6. Removing a pattern's last clip removes that pattern; shared patterns remain while another clip still places them.
 7. Commit each completed gesture as one manual history entry.
